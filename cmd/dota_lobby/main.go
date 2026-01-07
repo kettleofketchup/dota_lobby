@@ -53,7 +53,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		if err := apiServer.Start(); err != nil && err != nil {
+		if err := apiServer.Start(); err != nil {
 			log.Fatalf("Failed to start API server: %v", err)
 		}
 	}()
