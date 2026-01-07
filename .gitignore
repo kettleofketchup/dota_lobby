@@ -30,7 +30,6 @@ go.work.sum
 # Config files (use .example files as templates)
 config.yaml
 secrets.yaml
-config/
 bin/
 
 # Editor/IDE
