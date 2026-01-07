@@ -27,6 +27,12 @@ go.work.sum
 # env file
 .env
 
+# Config files (use .example files as templates)
+config.yaml
+secrets.yaml
+config/
+bin/
+
 # Editor/IDE
 # .idea/
 # .vscode/
