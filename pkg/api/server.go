@@ -69,7 +69,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding health response: %v", err)
+	}
 }
 
 // handleBots returns the status of all bots
@@ -86,7 +88,9 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding bots response: %v", err)
+	}
 }
 
 // LobbyCreateRequest represents a request to create a lobby
@@ -136,7 +140,9 @@ func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding lobby create response: %v", err)
+	}
 }
 
 // LobbyInfoRequest represents a request to get lobby information
@@ -177,5 +183,7 @@ func (s *Server) handleLobbyInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding lobby info response: %v", err)
+	}
 }

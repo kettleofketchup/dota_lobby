@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -74,18 +73,4 @@ func main() {
 	}
 
 	log.Println("Shutdown complete")
-}
-
-func printUsage() {
-	fmt.Println("Dota Lobby Manager")
-	fmt.Println("\nUsage:")
-	fmt.Println("  dota_lobby")
-	fmt.Println("\nConfiguration:")
-	fmt.Println("  The application requires two configuration files:")
-	fmt.Println("  - config.yaml: General application settings")
-	fmt.Println("  - secrets.yaml: Bot credentials (keep this file secure)")
-	fmt.Println("\nConfiguration files should be placed in:")
-	fmt.Println("  - Current directory")
-	fmt.Println("  - ./config/")
-	fmt.Println("  - $HOME/.config/dota_lobby/")
 }
