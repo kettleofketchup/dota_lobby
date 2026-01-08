@@ -1,0 +1,72 @@
+site_name: Dota Lobby Manager
+site_description: Documentation for Dota Lobby Manager - Create and manage Dota 2 lobbies
+site_url: https://kettleofketchup.github.io/dota_lobby
+
+repo_name: kettleofketchup/dota_lobby
+repo_url: https://github.com/kettleofketchup/dota_lobby
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quick-start.md
+  - Configuration:
+      - Bot Setup: configuration/bot-setup.md
+      - Viper Integration: configuration/viper.md
+      - Environment Variables: configuration/environment.md
+  - Deployment:
+      - Docker: deployment/docker.md
+      - Docker Compose: deployment/docker-compose.md
+  - API Reference:
+      - Overview: api/overview.md
+      - Examples: api/examples.md
