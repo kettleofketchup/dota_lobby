@@ -1,0 +1,50 @@
+services:
+  dota_lobby:
+    image: kettleofketchup/dota_lobby:latest
+    container_name: dota_lobby
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Server Configuration
+      - DOTA_LOBBY_SERVER_HOST=0.0.0.0
+      - DOTA_LOBBY_SERVER_PORT=8080
+      
+      # Steam Configuration
+      # Set your Steam API key here or in .env file
+      - DOTA_LOBBY_STEAM_API_KEY=${STEAM_API_KEY}
+      
+      # Bot Configuration
+      # Bot 1
+      - DOTA_LOBBY_BOTS_0_NAME=bot1
+      - DOTA_LOBBY_BOTS_0_USERNAME=${BOT1_USERNAME}
+      - DOTA_LOBBY_BOTS_0_PASSWORD=${BOT1_PASSWORD}
+      - DOTA_LOBBY_BOTS_0_ENABLED=true
+      
+      # Bot 2 (optional)
+      - DOTA_LOBBY_BOTS_1_NAME=bot2
+      - DOTA_LOBBY_BOTS_1_USERNAME=${BOT2_USERNAME}
+      - DOTA_LOBBY_BOTS_1_PASSWORD=${BOT2_PASSWORD}
+      - DOTA_LOBBY_BOTS_1_ENABLED=false
+    
+    volumes:
+      # Optional: Mount custom configuration file
+      # - ./config.yaml:/app/config.yaml:ro
+      
+      # Optional: Mount data directory for persistence
+      - dota_lobby_data:/app/data
+    
+    # Optional: Override command
+    # command: ["--config", "/app/config.yaml"]
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "test -f /app/dota_lobby"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  dota_lobby_data:
+    driver: local

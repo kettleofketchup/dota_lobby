@@ -1,0 +1,22 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+steam:
+  # Steam API Key - should be set via environment variable DOTA_LOBBY_STEAM_API_KEY
+  api_key: ""
+
+bots:
+  - name: "bot1"
+    # Bot credentials should be set via environment variables:
+    # DOTA_LOBBY_BOTS_0_USERNAME and DOTA_LOBBY_BOTS_0_PASSWORD
+    username: ""
+    password: ""
+    enabled: true
+
+  - name: "bot2"
+    # Bot credentials should be set via environment variables:
+    # DOTA_LOBBY_BOTS_1_USERNAME and DOTA_LOBBY_BOTS_1_PASSWORD
+    username: ""
+    password: ""
+    enabled: false
