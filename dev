@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+JUST_VERSION="1.36.0"
+
+# Detect OS and architecture
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64) ARCH="x86_64" ;;
+    aarch64|arm64) ARCH="aarch64" ;;
+    *) echo "Unsupported architecture: $ARCH" && exit 1 ;;
+esac
+
+# Install just if not present or outdated
+install_just() {
+    echo "Installing just v${JUST_VERSION}..."
+    case "$OS" in
+        darwin)
+            if command -v brew &>/dev/null; then
+                brew install just
+            else
+                curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin
+            fi
+            ;;
+        linux)
+            curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin
+            ;;
+        *)
+            echo "Unsupported OS: $OS" && exit 1
+            ;;
+    esac
+}
+
+if ! command -v just &>/dev/null; then
+    install_just
+fi
+
+# Run dev setup
+just dev "$@"
