@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 )
+
+const bearerPrefix = "Bearer "
 
 // Server represents the HTTP API server
 type Server struct {
@@ -81,13 +84,13 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if apiKey == "" {
 			// Also check Authorization header with Bearer token
 			authHeader := r.Header.Get("Authorization")
-			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-				apiKey = authHeader[7:]
+			if len(authHeader) > len(bearerPrefix) && authHeader[:len(bearerPrefix)] == bearerPrefix {
+				apiKey = authHeader[len(bearerPrefix):]
 			}
 		}
 
-		// Validate API key
-		if apiKey != s.apiKey {
+		// Validate API key using constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.apiKey)) != 1 {
 			http.Error(w, "Unauthorized: Invalid or missing API key", http.StatusUnauthorized)
 			return
 		}
