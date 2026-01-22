@@ -70,6 +70,8 @@ Contains non-sensitive application settings:
 - `server.port`: Server port (default: 8080)
 - `server.api_key`: Optional API key for authentication (recommended for production)
 
+**Note:** All sensitive fields (API keys, passwords) use a `Secret` type that prevents accidental logging or exposure. They will appear as `***REDACTED***` in logs and JSON output.
+
 ### secrets.yaml (Bot Credentials)
 Contains sensitive Steam bot credentials. **Keep this file secure and never commit it to version control.**
 

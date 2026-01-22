@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
+	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
 
 const bearerPrefix = "Bearer "
@@ -18,11 +19,11 @@ const bearerPrefix = "Bearer "
 type Server struct {
 	botManager *bot.Manager
 	server     *http.Server
-	apiKey     string
+	apiKey     config.Secret
 }
 
 // NewServer creates a new API server
-func NewServer(host string, port int, apiKey string, botManager *bot.Manager) *Server {
+func NewServer(host string, port int, apiKey config.Secret, botManager *bot.Manager) *Server {
 	return &Server{
 		botManager: botManager,
 		apiKey:     apiKey,
@@ -50,7 +51,7 @@ func (s *Server) Start() error {
 	s.server.Handler = mux
 
 	log.Printf("Starting API server on %s", s.server.Addr)
-	if s.apiKey != "" {
+	if s.apiKey.Value() != "" {
 		log.Println("API key authentication enabled")
 	} else {
 		log.Println("WARNING: API key authentication disabled - all endpoints are public")
@@ -74,7 +75,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// If no API key is configured, allow all requests
-		if s.apiKey == "" {
+		if s.apiKey.Value() == "" {
 			next(w, r)
 			return
 		}
@@ -90,7 +91,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Validate API key using constant-time comparison to prevent timing attacks
-		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.apiKey)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.apiKey.Value())) != 1 {
 			http.Error(w, "Unauthorized: Invalid or missing API key", http.StatusUnauthorized)
 			return
 		}

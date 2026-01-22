@@ -80,7 +80,7 @@ func (m *Manager) connectBot(bot *Bot, cfg config.BotConfig) {
 			log.Printf("[%s] Connected to Steam", bot.Username)
 			bot.steamClient.Auth.LogOn(&steam.LogOnDetails{
 				Username: cfg.Username,
-				Password: cfg.Password,
+				Password: cfg.Password.Value(),
 			})
 
 		case *steam.LoggedOnEvent:

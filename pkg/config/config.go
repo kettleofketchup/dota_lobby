@@ -6,6 +6,27 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Secret wraps a string to prevent accidental logging of sensitive data
+type Secret string
+
+// String implements the Stringer interface to prevent accidental logging
+func (s Secret) String() string {
+	if s == "" {
+		return ""
+	}
+	return "***REDACTED***"
+}
+
+// Value returns the actual secret value
+func (s Secret) Value() string {
+	return string(s)
+}
+
+// MarshalJSON prevents the secret from being marshaled to JSON
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return []byte(`"***REDACTED***"`), nil
+}
+
 // Config holds the application configuration
 type Config struct {
 	Server  ServerConfig
@@ -16,7 +37,7 @@ type Config struct {
 type ServerConfig struct {
 	Host   string `mapstructure:"host"`
 	Port   int    `mapstructure:"port"`
-	APIKey string `mapstructure:"api_key"` // Optional: API key for authentication
+	APIKey Secret `mapstructure:"api_key"` // Optional: API key for authentication
 }
 
 // SecretsConfig holds sensitive configuration (Steam credentials)
@@ -27,8 +48,8 @@ type SecretsConfig struct {
 // BotConfig holds configuration for a single Steam bot
 type BotConfig struct {
 	Username   string
-	Password   string
-	SentryHash string // Optional: for Steam Guard
+	Password   Secret
+	SentryHash Secret // Optional: for Steam Guard
 }
 
 // LoadConfig loads configuration from config files
