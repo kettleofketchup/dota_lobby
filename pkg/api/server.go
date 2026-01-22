@@ -120,6 +120,23 @@ func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate lobby name
+	if req.LobbyName == "" {
+		http.Error(w, "lobby_name is required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.LobbyName) > 100 {
+		http.Error(w, "lobby_name must be 100 characters or less", http.StatusBadRequest)
+		return
+	}
+
+	// Validate password if provided
+	if len(req.Password) > 50 {
+		http.Error(w, "password must be 50 characters or less", http.StatusBadRequest)
+		return
+	}
+
 	// Get an available bot
 	availableBot, err := s.botManager.GetAvailableBot()
 	if err != nil {
@@ -127,8 +144,8 @@ func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get Dota client
-	dotaClient, err := availableBot.GetDotaClient()
+	// Verify bot has Dota client ready
+	_, err = availableBot.GetDotaClient()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Bot not ready: %v", err), http.StatusServiceUnavailable)
 		return

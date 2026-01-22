@@ -51,7 +51,7 @@ format: deps
 	@echo "Formatting code..."
 	$(GOCMD) fmt ./...
 
-lint: format
+lint: deps
 	@echo "Linting..."
 	golangci-lint run
 

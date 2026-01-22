@@ -50,9 +50,14 @@ func LoadConfig() (*Config, error) {
 		// Config file not found; use defaults
 	}
 
-	config := &Config{}
+	config := &Config{
+		Server: ServerConfig{
+			Host: viper.GetString("server.host"),
+			Port: viper.GetInt("server.port"),
+		},
+	}
 
-	// Unmarshal server config
+	// Unmarshal server config (will override defaults if present)
 	if err := viper.UnmarshalKey("server", &config.Server); err != nil {
 		return nil, fmt.Errorf("unable to decode server config: %w", err)
 	}
@@ -66,10 +71,12 @@ func LoadConfig() (*Config, error) {
 	secretsViper.AddConfigPath("$HOME/.config/dota_lobby")
 
 	if err := secretsViper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			// Secrets file not found; log warning and continue without bots
+			fmt.Println("WARNING: secrets.yaml not found - no bots will be configured")
+		} else {
 			return nil, fmt.Errorf("error reading secrets file: %w", err)
 		}
-		// Secrets file not found; continue without bots
 	} else {
 		if err := secretsViper.UnmarshalKey("secrets", &config.Secrets); err != nil {
 			return nil, fmt.Errorf("unable to decode secrets config: %w", err)
