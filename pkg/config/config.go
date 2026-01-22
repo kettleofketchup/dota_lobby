@@ -50,6 +50,7 @@ func LoadConfig() (*Config, error) {
 		// Config file not found; use defaults
 	}
 
+	// Initialize config with defaults from viper
 	config := &Config{
 		Server: ServerConfig{
 			Host: viper.GetString("server.host"),
@@ -57,7 +58,7 @@ func LoadConfig() (*Config, error) {
 		},
 	}
 
-	// Unmarshal server config (will override defaults if present)
+	// Override with config file values if present
 	if err := viper.UnmarshalKey("server", &config.Server); err != nil {
 		return nil, fmt.Errorf("unable to decode server config: %w", err)
 	}

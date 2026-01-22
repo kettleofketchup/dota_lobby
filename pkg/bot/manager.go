@@ -25,10 +25,11 @@ type Bot struct {
 
 // Manager manages multiple Steam bots
 type Manager struct {
-	bots   map[string]*Bot
-	mu     sync.RWMutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	bots     map[string]*Bot
+	mu       sync.RWMutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	reconnWg sync.WaitGroup // Track reconnection goroutines
 }
 
 // NewManager creates a new bot manager
@@ -104,7 +105,9 @@ func (m *Manager) connectBot(bot *Bot, cfg config.BotConfig) {
 			bot.mu.Unlock()
 
 			// Retry connection after delay without blocking the event loop
+			m.reconnWg.Add(1)
 			go func() {
+				defer m.reconnWg.Done()
 				timer := time.NewTimer(30 * time.Second)
 				defer timer.Stop()
 
@@ -124,7 +127,9 @@ func (m *Manager) connectBot(bot *Bot, cfg config.BotConfig) {
 			bot.mu.Unlock()
 
 			// Reconnect after delay without blocking the event loop
+			m.reconnWg.Add(1)
 			go func() {
+				defer m.reconnWg.Done()
 				timer := time.NewTimer(5 * time.Second)
 				defer timer.Stop()
 
@@ -210,6 +215,9 @@ func (b *Bot) IsConnected() bool {
 // Shutdown gracefully shuts down the manager and all bots
 func (m *Manager) Shutdown() {
 	m.cancel()
+
+	// Wait for all reconnection goroutines to finish
+	m.reconnWg.Wait()
 
 	m.mu.Lock()
 	botsToShutdown := make(map[string]*Bot, len(m.bots))
