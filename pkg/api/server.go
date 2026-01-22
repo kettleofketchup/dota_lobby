@@ -137,11 +137,10 @@ func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
 	// TODO: Implement actual lobby creation using dotaClient
 	// This is a placeholder response
 	response := map[string]interface{}{
-		"status":      "success",
-		"message":     "Lobby creation initiated",
-		"lobby_name":  req.LobbyName,
-		"bot_used":    availableBot.Username,
-		"dota_client": dotaClient != nil,
+		"status":     "success",
+		"message":    "Lobby creation initiated",
+		"lobby_name": req.LobbyName,
+		"bot_used":   availableBot.Username,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
