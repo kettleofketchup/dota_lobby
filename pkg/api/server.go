@@ -47,7 +47,13 @@ func (s *Server) Start() error {
 	s.server.Handler = mux
 
 	log.Printf("Starting API server on %s", s.server.Addr)
-	return s.server.ListenAndServe()
+	err := s.server.ListenAndServe()
+	if err != nil && err != http.ErrServerClosed {
+		return err
+	}
+
+	log.Println("API server stopped")
+	return nil
 }
 
 // Shutdown gracefully shuts down the server
