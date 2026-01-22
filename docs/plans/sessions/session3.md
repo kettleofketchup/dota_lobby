@@ -107,8 +107,8 @@ The skill triggers when working with:
 
 ### Repo State
 - Repo is clean, in sync with origin/main
-- Skill not committed to repo (lives in dotfiles for global use)
-- Untracked files in repo: `.claude/`, `docs/`, `just/`, `justfile`, `dev`, `go-dota2-steam.zip`
+- Skill lives in dotfiles (`~/.claude/skills/golang-viper/`) for global use across projects
+- Session docs committed and pushed to origin/main
 
 ### Next Steps (if continuing)
 - Test skill by working on config code in this project
