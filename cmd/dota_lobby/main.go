@@ -48,7 +48,7 @@ func main() {
 	}
 
 	// Create and start API server
-	apiServer := api.NewServer(cfg.Server.Host, cfg.Server.Port, botManager)
+	apiServer := api.NewServer(cfg.Server.Host, cfg.Server.Port, cfg.Server.APIKey, botManager)
 
 	// Start server in a goroutine
 	go func() {

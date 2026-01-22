@@ -15,12 +15,14 @@ import (
 type Server struct {
 	botManager *bot.Manager
 	server     *http.Server
+	apiKey     string
 }
 
 // NewServer creates a new API server
-func NewServer(host string, port int, botManager *bot.Manager) *Server {
+func NewServer(host string, port int, apiKey string, botManager *bot.Manager) *Server {
 	return &Server{
 		botManager: botManager,
+		apiKey:     apiKey,
 		server: &http.Server{
 			Addr:         fmt.Sprintf("%s:%d", host, port),
 			ReadTimeout:  15 * time.Second,
@@ -34,19 +36,22 @@ func NewServer(host string, port int, botManager *bot.Manager) *Server {
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
-	// Health check endpoint
+	// Health check endpoint (no auth required)
 	mux.HandleFunc("/health", s.handleHealth)
 
-	// Bot status endpoint
-	mux.HandleFunc("/bots", s.handleBots)
-
-	// Lobby management endpoints
-	mux.HandleFunc("/lobby/create", s.handleCreateLobby)
-	mux.HandleFunc("/lobby/info", s.handleLobbyInfo)
+	// Protected endpoints with authentication
+	mux.HandleFunc("/bots", s.authMiddleware(s.handleBots))
+	mux.HandleFunc("/lobby/create", s.authMiddleware(s.handleCreateLobby))
+	mux.HandleFunc("/lobby/info", s.authMiddleware(s.handleLobbyInfo))
 
 	s.server.Handler = mux
 
 	log.Printf("Starting API server on %s", s.server.Addr)
+	if s.apiKey != "" {
+		log.Println("API key authentication enabled")
+	} else {
+		log.Println("WARNING: API key authentication disabled - all endpoints are public")
+	}
 	err := s.server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
 		return err
@@ -60,6 +65,36 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Println("Shutting down API server...")
 	return s.server.Shutdown(ctx)
+}
+
+// authMiddleware provides API key authentication for protected endpoints
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// If no API key is configured, allow all requests
+		if s.apiKey == "" {
+			next(w, r)
+			return
+		}
+
+		// Check for API key in X-API-Key header
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey == "" {
+			// Also check Authorization header with Bearer token
+			authHeader := r.Header.Get("Authorization")
+			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+				apiKey = authHeader[7:]
+			}
+		}
+
+		// Validate API key
+		if apiKey != s.apiKey {
+			http.Error(w, "Unauthorized: Invalid or missing API key", http.StatusUnauthorized)
+			return
+		}
+
+		// API key is valid, proceed to handler
+		next(w, r)
+	}
 }
 
 // handleHealth returns the health status of the service

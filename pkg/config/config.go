@@ -14,8 +14,9 @@ type Config struct {
 
 // ServerConfig holds server-related configuration
 type ServerConfig struct {
-	Host string
-	Port int
+	Host   string `mapstructure:"host"`
+	Port   int    `mapstructure:"port"`
+	APIKey string `mapstructure:"api_key"` // Optional: API key for authentication
 }
 
 // SecretsConfig holds sensitive configuration (Steam credentials)
