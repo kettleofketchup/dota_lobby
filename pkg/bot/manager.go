@@ -103,9 +103,19 @@ func (m *Manager) connectBot(bot *Bot, cfg config.BotConfig) {
 			bot.connected = false
 			bot.mu.Unlock()
 
-			// Retry connection after delay
-			time.Sleep(30 * time.Second)
-			bot.steamClient.Connect()
+			// Retry connection after delay without blocking the event loop
+			go func() {
+				timer := time.NewTimer(30 * time.Second)
+				defer timer.Stop()
+
+				select {
+				case <-m.ctx.Done():
+					return
+				case <-timer.C:
+				}
+
+				bot.steamClient.Connect()
+			}()
 
 		case *steam.DisconnectedEvent:
 			log.Printf("[%s] Disconnected from Steam", bot.Username)
@@ -113,10 +123,19 @@ func (m *Manager) connectBot(bot *Bot, cfg config.BotConfig) {
 			bot.connected = false
 			bot.mu.Unlock()
 
-			// Reconnect after delay
-			time.Sleep(5 * time.Second)
-			bot.steamClient.Connect()
+			// Reconnect after delay without blocking the event loop
+			go func() {
+				timer := time.NewTimer(5 * time.Second)
+				defer timer.Stop()
 
+				select {
+				case <-m.ctx.Done():
+					return
+				case <-timer.C:
+				}
+
+				bot.steamClient.Connect()
+			}()
 		case *steam.LoggedOffEvent:
 			log.Printf("[%s] Logged off: %v", bot.Username, e.Result)
 		}
