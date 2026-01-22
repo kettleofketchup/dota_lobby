@@ -1,0 +1,110 @@
+package config
+
+import (
+	"fmt"
+
+	"github.com/spf13/viper"
+)
+
+// Secret wraps a string to prevent accidental logging of sensitive data
+type Secret string
+
+// String implements the Stringer interface to prevent accidental logging
+func (s Secret) String() string {
+	if s == "" {
+		return ""
+	}
+	return "***REDACTED***"
+}
+
+// Value returns the actual secret value
+func (s Secret) Value() string {
+	return string(s)
+}
+
+// MarshalJSON prevents the secret from being marshaled to JSON
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return []byte(`"***REDACTED***"`), nil
+}
+
+// Config holds the application configuration
+type Config struct {
+	Server  ServerConfig
+	Secrets SecretsConfig
+}
+
+// ServerConfig holds server-related configuration
+type ServerConfig struct {
+	Host   string `mapstructure:"host"`
+	Port   int    `mapstructure:"port"`
+	APIKey Secret `mapstructure:"api_key"` // Optional: API key for authentication
+}
+
+// SecretsConfig holds sensitive configuration (Steam credentials)
+type SecretsConfig struct {
+	Bots []BotConfig
+}
+
+// BotConfig holds configuration for a single Steam bot
+type BotConfig struct {
+	Username   string
+	Password   Secret
+	SentryHash Secret // Optional: for Steam Guard
+}
+
+// LoadConfig loads configuration from config files
+func LoadConfig() (*Config, error) {
+	// Load main config (non-sensitive settings)
+	viper.SetConfigName("config")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(".")
+	viper.AddConfigPath("./config")
+	viper.AddConfigPath("$HOME/.config/dota_lobby")
+
+	// Set defaults
+	viper.SetDefault("server.host", "0.0.0.0")
+	viper.SetDefault("server.port", 8080)
+
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("error reading config file: %w", err)
+		}
+		// Config file not found; use defaults
+	}
+
+	// Initialize config with defaults from viper
+	config := &Config{
+		Server: ServerConfig{
+			Host: viper.GetString("server.host"),
+			Port: viper.GetInt("server.port"),
+		},
+	}
+
+	// Override with config file values if present
+	if err := viper.UnmarshalKey("server", &config.Server); err != nil {
+		return nil, fmt.Errorf("unable to decode server config: %w", err)
+	}
+
+	// Load secrets config separately
+	secretsViper := viper.New()
+	secretsViper.SetConfigName("secrets")
+	secretsViper.SetConfigType("yaml")
+	secretsViper.AddConfigPath(".")
+	secretsViper.AddConfigPath("./config")
+	secretsViper.AddConfigPath("$HOME/.config/dota_lobby")
+
+	if err := secretsViper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			// Secrets file not found; log warning and continue without bots
+			fmt.Println("WARNING: secrets.yaml not found - no bots will be configured")
+		} else {
+			return nil, fmt.Errorf("error reading secrets file: %w", err)
+		}
+	} else {
+		if err := secretsViper.UnmarshalKey("secrets", &config.Secrets); err != nil {
+			return nil, fmt.Errorf("unable to decode secrets config: %w", err)
+		}
+	}
+
+	return config, nil
+}
