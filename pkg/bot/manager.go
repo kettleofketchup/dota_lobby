@@ -193,9 +193,13 @@ func (m *Manager) Shutdown() {
 	m.cancel()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	botsToShutdown := make(map[string]*Bot, len(m.bots))
 	for username, bot := range m.bots {
+		botsToShutdown[username] = bot
+	}
+	m.mu.Unlock()
+
+	for username, bot := range botsToShutdown {
 		log.Printf("Shutting down bot: %s", username)
 		bot.steamClient.Disconnect()
 	}
