@@ -113,8 +113,8 @@ Request body (JSON):
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
-| `lobby_name` | string | Yes | At most 100 characters |
-| `password` | string | No | At most 50 characters |
+| `lobby_name` | string | Yes | At most 100 bytes (100 characters if ASCII only) |
+| `password` | string | No | At most 50 bytes (50 characters if ASCII only) |
 | `server_region` | string | No | Accepted and ignored |
 | `game_mode` | string | No | Accepted and ignored |
 

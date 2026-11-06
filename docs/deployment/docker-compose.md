@@ -325,8 +325,9 @@ docker compose up -d
 - `docker compose pull` and `docker compose up -d` with an **unchanged** `DOTA_LOBBY_TAG`
   change nothing: a pinned full-version tag never moves. Changing the variable is what
   upgrades.
-- Your `config/` directory is untouched by the checkout: it is ignored by git. So is
-  `compose.override.yaml` if you created one, since it is not part of the repository.
+- The checkout leaves your `config/` files alone: git ignores them. It also leaves
+  `compose.override.yaml` alone if you created one: the file is not part of the repository
+  (git lists it as untracked), so no release overwrites it.
 - Check the release notes for config changes, and compare `config.yaml.example` and
   `secrets.yaml.example` with your files.
 
