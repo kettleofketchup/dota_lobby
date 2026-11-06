@@ -35,3 +35,6 @@ bin/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Probe tokens, captures and reports
+probe-state/
