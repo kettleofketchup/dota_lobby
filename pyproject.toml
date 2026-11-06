@@ -1,0 +1,9 @@
+[project]
+name = "dota-lobby-docs"
+version = "0"
+description = "Documentation toolchain for dota_lobby"
+requires-python = ">=3.11"
+dependencies = ["mkdocs-material==9.8.0"]
+
+[tool.uv]
+package = false
