@@ -1,26 +1,29 @@
 # Local sops + age encryption for bot credentials.
-# The age key, .sops.yaml and every encrypted file are git-ignored.
+# The key lives in the main sops key file (~/.config/sops/age/keys.txt) under
+# a "dota_lobby" label; .sops.yaml and every encrypted file are git-ignored.
 
 set quiet
 set working-directory := ".."
 
-export SOPS_AGE_KEY_FILE := justfile_directory() / ".sops" / "age.key"
-
+KEYS := env_var_or_default("SOPS_AGE_KEY_FILE", env_var_or_default("XDG_CONFIG_HOME", env_var("HOME") / ".config") / "sops" / "age" / "keys.txt")
+LABEL := "# dota_lobby bot credentials key"
 BOTS_DIR := "secrets/bots"
 
-# Create the repo-local age key and .sops.yaml (once per machine)
+# Add a labelled dota_lobby key to the main sops key file if missing, and write .sops.yaml
 [group('secrets')]
 init:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ -f "$SOPS_AGE_KEY_FILE" ]]; then
-        echo "age key already exists: $SOPS_AGE_KEY_FILE"
-    else
-        mkdir -p .sops && chmod 700 .sops
-        (umask 077 && age-keygen -o "$SOPS_AGE_KEY_FILE" 2>/dev/null)
-        echo "created $SOPS_AGE_KEY_FILE (back it up somewhere safe; losing it loses the secrets)"
+    keys="{{KEYS}}"
+    if ! grep -qF "{{LABEL}}" "$keys" 2>/dev/null; then
+        mkdir -p "$(dirname "$keys")"
+        [[ -f "$keys" ]] && cp -p "$keys" "$keys.bak-$(date +%Y%m%d%H%M%S)"
+        new=$(umask 077 && age-keygen 2>/dev/null)
+        (umask 077 && printf '\n%s (generated %s)\n%s\n' "{{LABEL}}" "$(date +%F)" "$new" >> "$keys")
+        echo "added a dota_lobby key to $keys (back that file up; losing it loses the secrets)"
     fi
-    recipient=$(age-keygen -y "$SOPS_AGE_KEY_FILE")
+    recipient=$(grep -A2 -F "{{LABEL}}" "$keys" | sed -n 's/^# public key: //p' | head -1)
+    [[ -n "$recipient" ]] || { echo "no public key under the dota_lobby label in $keys"; exit 1; }
     printf 'creation_rules:\n  - path_regex: ^secrets/.*\\.sops\\.ya?ml$\n    age: %s\n' "$recipient" > .sops.yaml
     mkdir -p {{BOTS_DIR}} && chmod 700 secrets {{BOTS_DIR}}
     echo "wrote .sops.yaml for $recipient"

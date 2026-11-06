@@ -15,7 +15,7 @@ go test ./...
 
 ## Credentials
 
-Use the just recipes. They keep credentials in local sops files encrypted with a repo-local age key, all
+Use the just recipes. They keep credentials in local sops files encrypted with the dota_lobby key from the main sops key file, all
 git-ignored (see the plan's "Secrets" section):
 
 ```bash

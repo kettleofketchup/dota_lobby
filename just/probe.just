@@ -4,7 +4,6 @@
 set quiet
 set working-directory := ".."
 
-export SOPS_AGE_KEY_FILE := justfile_directory() / ".sops" / "age.key"
 
 BOTS_DIR := "secrets/bots"
 
