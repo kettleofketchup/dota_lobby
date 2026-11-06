@@ -1,223 +1,76 @@
 # dota_lobby
 
-A Dota 2 lobby management service that provides an API endpoint for curating Dota 2 lobbies for league play. This service manages multiple Steam bot accounts to create and manage game lobbies.
+A Go service for running Dota 2 lobbies for league play. It logs a set of Steam bot accounts
+on to Steam and exposes a small REST API, so a league site or tool can check the bots and,
+eventually, ask one of them to host a lobby. Settings live in `config.yaml` and bot
+credentials in `secrets.yaml`.
 
-## Features
+> **Status: early version.** Bots log on to Steam, but no lobby is created yet:
+> `/lobby/create` and `/lobby/info` are placeholders. Steam login is reported to fail with the
+> pinned go-steam library (unverified by this project), and Steam Guard is not supported.
+> Read [Known limitations](https://kettleofketchup.github.io/dota_lobby/known-limitations/)
+> before you use real accounts.
 
-- **Multi-Bot Management**: Support for multiple Steam bot accounts
-- **REST API**: HTTP API for lobby creation and management
-- **Configuration Management**: Separate configs for application settings and sensitive credentials using Viper
-- **GitHub Automations**: Integrated CI/CD with golangci-lint and automated binary releases
-- **Go-Dota2 Integration**: Uses the [go-dota2](https://github.com/paralin/go-dota2) API for bot operations
+**Documentation:** <https://kettleofketchup.github.io/dota_lobby/>
 
-## Quick Start
+## Quick start (Docker Compose)
 
-### Prerequisites
+You need Docker with the Compose plugin and one Steam bot account with Steam Guard turned off.
+The full walkthrough, with expected log output, is the
+[Quick start](https://kettleofketchup.github.io/dota_lobby/getting-started/quick-start/) page.
 
-- Go 1.24 or higher
-- Steam accounts for bots
-- Make (optional, for using Makefile commands)
+The example uses release `v1.2.3`; replace it with the release you want. Git tags start with
+a `v` (`v1.2.3`), image tags do not (`1.2.3`): `DOTA_LOBBY_TAG=v1.2.3` fails with
+`manifest unknown`.
 
-### Installation
-
-1. Clone the repository:
 ```bash
-git clone https://github.com/kettleofketchup/dota_lobby.git
+git clone --branch v1.2.3 --depth 1 https://github.com/kettleofketchup/dota_lobby.git
 cd dota_lobby
+export DOTA_LOBBY_TAG=1.2.3
+
+mkdir config && chmod 755 config
+cp config.yaml.example config/config.yaml
+cp secrets.yaml.example config/secrets.yaml
 ```
 
-2. Build the binary:
+Edit `config/secrets.yaml` (your bot's username and password) and `config/config.yaml` (set
+`api_key` to a long random value, for example `openssl rand -hex 32`). Then apply the
+[file permission recipe](https://kettleofketchup.github.io/dota_lobby/deployment/docker-compose/#file-permissions)
+for your container runtime; the container runs as UID 65532 and must be able to read
+`config/`.
+
+```bash
+docker compose up -d
+docker compose logs -f
+curl -fsS -H 'X-API-Key: <your api_key>' http://127.0.0.1:8080/bots
+```
+
+`{"bots":{"my_league_bot":true}}` means the bot is logged on to Steam. At the first
+`Failed to log on:` line, run `docker compose stop`: failed logins are retried about every
+5 seconds, forever. See
+[Troubleshooting](https://kettleofketchup.github.io/dota_lobby/operations/troubleshooting/).
+
+Before the first release there is no published image; build one locally as described in
+[Docker](https://kettleofketchup.github.io/dota_lobby/deployment/docker/#build-the-image-locally)
+and use `DOTA_LOBBY_TAG=local`.
+
+## Build from source
+
+Requires Go (see `go.mod` for the version).
+
 ```bash
 make build
-```
-
-3. Create configuration files:
-```bash
-cp config.yaml.example config.yaml
-cp secrets.yaml.example secrets.yaml
-```
-
-4. Edit `secrets.yaml` with your Steam bot credentials:
-```yaml
-secrets:
-  bots:
-    - username: "your_steam_username"
-      password: "your_steam_password"
-      sentry_hash: ""  # Optional
-```
-
-5. (Optional) Customize `config.yaml`:
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 8080
-  # Optional: Enable API key authentication (recommended for production)
-  api_key: "your-secret-api-key-here"
-```
-
-6. Run the service:
-```bash
 ./bin/dota_lobby
 ```
 
-## Configuration
-
-The service uses two configuration files:
-
-### config.yaml (Application Settings)
-Contains non-sensitive application settings:
-- `server.host`: Server bind address (default: "0.0.0.0")
-- `server.port`: Server port (default: 8080)
-- `server.api_key`: Optional API key for authentication (recommended for production)
-
-**Note:** All sensitive fields (API keys, passwords) use a `Secret` type that prevents accidental logging or exposure. They will appear as `***REDACTED***` in logs and JSON output.
-
-### secrets.yaml (Bot Credentials)
-Contains sensitive Steam bot credentials. **Keep this file secure and never commit it to version control.**
-
-Configuration files are loaded from:
-1. Current directory
-2. `./config/` directory
-3. `$HOME/.config/dota_lobby/` directory
-
-## Authentication
-
-The API supports optional API key authentication to restrict access to protected endpoints.
-
-**When enabled** (by setting `server.api_key` in config.yaml):
-- Protected endpoints require authentication
-- API key can be provided via:
-  - `X-API-Key` header: `X-API-Key: your-api-key`
-  - `Authorization` header: `Authorization: Bearer your-api-key`
-- Health endpoint (`/health`) remains public
-
-**When disabled** (no `api_key` configured):
-- All endpoints are public
-- A warning is logged on startup
-
-**Protected endpoints:**
-- `GET /bots` - Bot status
-- `POST /lobby/create` - Create lobby
-- `GET|POST /lobby/info` - Lobby information
-
-**Example authenticated request:**
-```bash
-# Using X-API-Key header
-curl -H "X-API-Key: your-secret-key" http://localhost:8080/bots
-
-# Using Authorization Bearer
-curl -H "Authorization: Bearer your-secret-key" http://localhost:8080/bots
-```
-
-## API Endpoints
-
-### Health Check
-```
-GET /health
-```
-Returns the service health status. **No authentication required.**
-
-### Bot Status
-```
-GET /bots
-```
-Returns the list of configured bots and their connection status. **Requires authentication if API key is configured.**
-
-### Create Lobby
-```
-POST /lobby/create
-Content-Type: application/json
-X-API-Key: your-api-key  # If authentication is enabled
-
-{
-  "lobby_name": "My League Lobby",
-  "password": "optional_password",
-  "server_region": "USE",
-  "game_mode": "AP"
-}
-```
-Creates a new Dota 2 lobby using an available bot. **Requires authentication if API key is configured.**
-
-### Lobby Info
-```
-GET /lobby/info?lobby_id=12345
-X-API-Key: your-api-key  # If authentication is enabled
-```
-or
-```
-POST /lobby/info
-Content-Type: application/json
-X-API-Key: your-api-key  # If authentication is enabled
-
-{
-  "lobby_id": "12345"
-}
-```
-Retrieves information about a specific lobby. **Requires authentication if API key is configured.**
+The binary looks for `config.yaml` and `secrets.yaml` in `.`, `./config` and
+`$HOME/.config/dota_lobby`. See
+[Building from source](https://kettleofketchup.github.io/dota_lobby/deployment/from-source/).
 
 ## Development
 
-### Building
-```bash
-make build
-```
-
-### Running
-```bash
-make run
-```
-
-### Testing
-```bash
-make test
-```
-
-### Linting
-```bash
-make lint
-```
-
-### Cleaning
-```bash
-make clean
-```
-
-## GitHub Workflows
-
-### Linting
-Automatically runs `golangci-lint` on every push to main and on pull requests.
-
-### Release
-Creates a GitHub release with the compiled binary when a version tag (e.g., `v1.0.0`) is pushed:
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## Architecture
-
-```
-dota_lobby/
-├── cmd/dota_lobby/      # Main application entry point
-├── pkg/
-│   ├── api/             # HTTP API server
-│   ├── bot/             # Bot manager and Steam client handling
-│   └── config/          # Configuration loading with Viper
-├── .github/workflows/   # CI/CD workflows
-├── config.yaml.example  # Example configuration
-└── secrets.yaml.example # Example secrets configuration
-```
-
-## Security Notes
-
-- Never commit `secrets.yaml` to version control
-- **Enable API key authentication** in production by setting `server.api_key` in config.yaml
-- Use strong, randomly generated API keys (e.g., 32+ characters)
-- Use strong passwords for bot accounts
-- Consider enabling Steam Guard for additional security
-- Run the service behind a reverse proxy with HTTPS in production
-- Rotate API keys periodically
-- Monitor access logs for unauthorized attempts
+Build, test, lint, docs preview and the release process are described on the
+[Development](https://kettleofketchup.github.io/dota_lobby/development/) page.
 
 ## License
 
@@ -228,4 +81,3 @@ See LICENSE file for details.
 - [go-dota2](https://github.com/paralin/go-dota2) - Dota 2 client implementation
 - [go-steam](https://github.com/paralin/go-steam) - Steam client implementation
 - [Viper](https://github.com/spf13/viper) - Configuration management
-
