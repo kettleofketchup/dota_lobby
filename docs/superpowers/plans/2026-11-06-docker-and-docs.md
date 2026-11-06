@@ -12,9 +12,16 @@
 
 ## Global Constraints
 
-- Work only in the worktree `/home/kettle/git_repos/dota_lobby/.claude/worktrees/docker-and-docs` (branch `worktree-docker-and-docs`). It is your session's working directory: run every command from there **without** a `cd <dir> &&` prefix (a hook blocks chained `cd`). Never touch `/home/kettle/git_repos/dota_lobby` (main checkout) and never copy its `docs/research/` notes.
-- Go commands always use: `export GOROOT=$HOME/.local/share/mise/installs/go/1.27.1 PATH=$HOME/.local/share/mise/installs/go/1.27.1/bin:$PATH` first (the mise `go` shim is broken). If any command (e.g. `go mod tidy` inside `make build` / `just go::build`) modifies `go.mod` or `go.sum`, run `git restore go.mod go.sum` and report it; never commit those changes.
-- `actionlint` binary: `$HOME/.local/share/mise/installs/actionlint/1.7.12/actionlint` (the shim has no version set).
+- Work only in the worktree `/home/kettle/git_repos/dota_lobby/.claude/worktrees/docker-and-docs` (branch `worktree-docker-and-docs`). It is your session's working directory: run every command from there **without** a `cd <dir> &&` prefix (a hook blocks chained `cd`). **One exception:** the subdirectory just checks (Task 4 Steps 1 and 4, Task 5 Step 7, Task 14 Step 6) must really change directory, so they are written as `( cd docs && ... ) # allow-cd`; the trailing `# allow-cd` is the hook's opt-out and is allowed only for those checks. `env -C docs ...` and `just -d docs ...` are **not** valid substitutes: they keep the caller's `PWD` environment variable, and `PWD` is exactly what the `just/go.just` bug reads, so the check would pass even without the fix. Never touch `/home/kettle/git_repos/dota_lobby` (main checkout) and never copy its `docs/research/` notes.
+- **Go env (`<GOENV>`).** The mise `go` shim is broken, the harness refuses `export` with `$HOME`/`$PATH` values, and shell state does not persist between Bash calls. So every command that runs `go`, `make`, `golangci-lint` or a `just go::*` recipe is prefixed inline, with literal paths, by:
+  `GOROOT=/home/kettle/.local/share/mise/installs/go/1.27.1 PATH=/home/kettle/.local/share/mise/installs/go/1.27.1/bin:/home/kettle/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64:/home/kettle/.local/share/zinit/polaris/bin:/home/kettle/.local/bin:/usr/local/bin:/usr/bin:/bin`
+  Below this is written `<GOENV> <cmd>`; substitute the literal text. No `export`, no `$HOME`, no `$PATH`. If any command (e.g. `go mod tidy` inside `make build` / `just go::build`) modifies `go.mod` or `go.sum`, run `git restore go.mod go.sum` and report it; never commit those changes.
+- `golangci-lint` binary: `/home/kettle/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64/golangci-lint` (v2.15.0; `<GOENV>` puts its directory first). The zinit `golangci-lint` (v2.11.4, built with go1.26) that is otherwise first on PATH panics under Go 1.27 with `file requires newer Go version go1.27`; that is a tooling failure, not a lint finding, and never a reason to touch `.go` files.
+- `actionlint` binary: `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint` (the shim has no version set).
+- **Docs check (`<DOCSCHECK>`).** Every docs build check in this plan is this command, run without a pipe so its exit status is visible:
+  `NO_MKDOCS_2_WARNING=1 uv run --locked mkdocs build --strict > /tmp/dota_lobby_mkdocs.log 2>&1; echo "exit=$?"; grep -E '^WARNING|does not contain an anchor|is not found among documentation files' /tmp/dota_lobby_mkdocs.log; tail -2 /tmp/dota_lobby_mkdocs.log`
+  Expected: `exit=0`, the grep prints nothing, the tail ends with `Documentation built in`. `NO_MKDOCS_2_WARNING=1` silences Material 9.8.0's end-of-life banner, which otherwise always contains the word "warning". Broken links and anchors fail the build because `mkdocs.yml` sets `validation:` (Task 5 Step 3); MkDocs 1.6 otherwise reports a missing anchor only at INFO and `--strict` would pass.
+- **Exact strings from dependencies.** EResult names are printed by `EResult.String()`, which uses the `EResult_name` map, not the Go constant name. Where two constants share a value, the map has one name. Cross-check any `EResult_...` string you quote with `grep -n '"EResult_<Name>"' /home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go`. Value 85 (mobile authenticator) prints as `EResult_AccountLogonDeniedNeedTwoFactorCode`.
 - `docker` on this host is **rootless Podman 6.1.4** (`docker compose` runs the docker-compose plugin against Podman). Never claim a build/smoke result you did not run; if something cannot run, write "not run: <reason>" in your report.
 - No behavioural Go changes. `git diff main --stat -- '*.go'` must stay empty.
 - Never commit `config.yaml`, `secrets.yaml`, anything under `config/`, `bin/`, `site/`, `.venv/` or a `dota_lobby` binary. Never push.
@@ -30,10 +37,11 @@
 ## Review Focus
 
 1. A `secrets.yaml` sitting at the repo root or in `config/` while someone runs `docker build .` must never reach the build context or an image layer. Pinned by Task 2 Step 4 (context check build that fails if it sees one).
-2. A `config/` directory that the container user cannot traverse (mode 700, or SELinux without `:Z`) silently yields defaults, API key auth off and no bots. Pinned by Task 3 Step 6 (negative check) and the troubleshooting greps in Task 9.
+2. A `config/` directory that the container user cannot traverse (mode 700, or SELinux without `:Z`) silently yields defaults, API key auth off and no bots; files in a traversable directory that 65532 cannot read give a fatal `error reading config file: ... permission denied` (config.yaml is read first) and a restart loop. Pinned by Task 3 Steps 6 and 7 (negative checks) and the troubleshooting greps in Task 9.
 3. `DOTA_LOBBY_TAG=v1.2.3` (leading `v`) gives `manifest unknown`. Pinned by Task 3 Step 3 (`compose config` resolves the tag literally) and the quick-start/docker-run greps in Tasks 6 and 8; Task 12 pins that CI's image version has no `v`.
-4. Running just recipes from a subdirectory (`cd docs && just go::build`). Pinned by Task 4 Step 4 and Task 5 Step 7.
+4. Running just recipes from a subdirectory (`cd docs && just go::build`). Pinned by Task 4 Step 1 (fails before the fix) and Step 4, and Task 5 Step 7, all with a real `cd` in a subshell (Global Constraints).
 5. Leaving the placeholder bot (or a second placeholder) in `secrets.yaml` makes a fake logon retry every 5s forever. Pinned by Task 1 Step 3 (exactly one active entry, the commented one does not match `your_steam`) and the quick-start `grep -n your_steam` check in Task 6.
+6. Operators must be able to edit `config/` again after the permission recipe (wrong password, adding a bot, changing `api_key`). Pinned by the "Editing later" lines in Task 8 Step 1 and the grep in Task 8 Step 4.
 
 ---
 
@@ -290,8 +298,8 @@ Record in the report: "rootless Podman recipe, variant `podman unshare chown`". 
 
 - [ ] **Step 5: Smoke test**
 
-Run: `DOTA_LOBBY_TAG=local docker compose up -d` then `curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/health`
-Expected: 200 with JSON `{"status":"healthy","time":"..."}`.
+Run: `DOTA_LOBBY_TAG=local docker compose up -d` then `curl -fsS --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:8080/health; echo "curl exit=$?"`
+Expected: 200 with JSON `{"status":"healthy","time":"..."}`, `curl exit=0`. `--retry-all-errors` is required: rootless Podman's port forwarder (and docker-proxy) accepts the connection before the app listens and then resets it (curl exit 52/56), which `--retry-connrefused` does not retry. If curl still fails, run `docker compose logs` before debugging.
 
 Run: `docker compose logs`
 Expected: contains `Dota Lobby Manager v0.0.0-test (commit: unknown, built: unknown)` (exactly one `v`), `Server configuration: 0.0.0.0:8080`, `WARNING: No bots configured in secrets.yaml`, `Starting API server on 0.0.0.0:8080`, `API key authentication enabled`; does **not** contain `secrets.yaml not found`, and no read-only filesystem errors.
@@ -302,12 +310,19 @@ Expected: `401`, then `{"bots":{}}` twice.
 Run: `time docker compose stop && docker compose logs | tail -4 && docker compose down`
 Expected: `stop` completes well under 30s; the tail shows `Shutting down gracefully...` and `Shutdown complete`; `down` removes the container.
 
-- [ ] **Step 6: Negative check** (Review Focus 2)
+- [ ] **Step 6: Negative check, untraversable directory** (Review Focus 2)
 
-Run: `chmod 700 config && DOTA_LOBBY_TAG=local docker compose up -d && curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/health && docker compose logs`
-Expected: logs contain `WARNING: secrets.yaml not found - no bots will be configured` and `WARNING: API key authentication disabled - all endpoints are public` (the silent fallback). Then `docker compose down && chmod 755 config`.
+Run: `chmod 700 config; DOTA_LOBBY_TAG=local docker compose up -d; curl -fsS --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:8080/health; echo "curl exit=$?"; docker compose logs`
+Expected: the logs contain `WARNING: secrets.yaml not found - no bots will be configured` and `WARNING: API key authentication disabled - all endpoints are public` (the silent fallback). The `;` separators make sure `docker compose logs` runs even if curl fails. Then `docker compose down; chmod 755 config`.
 
-- [ ] **Step 7: Clean up and commit**
+- [ ] **Step 7: Negative check, unreadable files** (Review Focus 2)
+
+Hand the files back to your host user (container root under rootless Podman), still at 0600, so 65532 cannot read them but can traverse the directory:
+
+Run: `podman unshare chown 0:0 config/config.yaml config/secrets.yaml; ls -ln config; DOTA_LOBBY_TAG=local docker compose up -d`, then in a **separate** Bash call (foreground `sleep` is blocked; the gap between calls is enough): `docker compose ps; docker compose logs`
+Expected: files owned by your UID; the logs contain `Failed to load configuration: error reading config file:` and `permission denied` (config.yaml is read before secrets.yaml, so this is the line users see first; paste the full observed line into your report, Tasks 7 to 9 quote it); `docker compose ps` shows the container restarting or exited. Then `docker compose down`.
+
+- [ ] **Step 8: Clean up and commit**
 
 Run: `rm -rf config || podman unshare rm -rf config` and `git status --short`
 Expected: only `?? compose.yaml`.
@@ -329,8 +344,11 @@ git commit -m "Add single-machine compose.yaml"
 
 - [ ] **Step 1: Show the bug**
 
-Run (Go env from Global Constraints exported): `just --justfile justfile go::test 2>&1 | tail -3`
+Run: `<GOENV> just --justfile justfile go::test 2>&1 | tail -3`
 Expected: `go: warning: "./..." matched no packages` or similar, proving recipes run in `just/`.
+
+Run (subdirectory, real `cd`, see Global Constraints): `( cd docs && <GOENV> just go::build ); echo "exit=$?"; ls bin/dota_lobby docs/bin 2>&1 # allow-cd`
+Expected: the unfixed recipe either fails (non-zero exit) or writes to `docs/bin`; in both cases `bin/dota_lobby` does not exist at the repo root. This proves the Step 4 check can fail. Then `rm -rf bin docs/bin`.
 
 - [ ] **Step 2: Edit `just/go.just`** (spec §5.10)
 
@@ -340,13 +358,13 @@ Expected: `go: warning: "./..." matched no packages` or similar, proving recipes
 
 - [ ] **Step 3: Verify from root**
 
-Run: `just go::build && ls -l bin/dota_lobby && just go::test 2>&1 | grep -c 'no packages'`
+Run: `<GOENV> just go::build && ls -l bin/dota_lobby && <GOENV> just go::test 2>&1 | grep -c 'no packages'`
 Expected: binary exists; count `0` (output lists `?` lines for the packages with no test files). Then `git status --short go.mod go.sum` must be empty (else `git restore go.mod go.sum`).
 
 - [ ] **Step 4: Verify from a subdirectory** (Review Focus 4)
 
-Run: `rm -rf bin && (cd docs && just go::build) && ls -l bin/dota_lobby && ls docs/bin 2>&1`
-Expected: `bin/dota_lobby` at the repo root; `docs/bin` does not exist. Then `rm -rf bin`.
+Run: `rm -rf bin docs/bin; ( cd docs && <GOENV> just go::build ); echo "exit=$?"; ls -l bin/dota_lobby; ls docs/bin 2>&1 # allow-cd`
+Expected: `exit=0`; `bin/dota_lobby` at the repo root; `docs/bin` does not exist. Do not substitute `env -C` or `just -d` (Global Constraints). Then `rm -rf bin`.
 
 - [ ] **Step 5: Commit**
 
@@ -365,7 +383,7 @@ git commit -m "Run go just recipes from the repo root"
 - Modify: `just/docs.just`
 
 **Interfaces:**
-- Produces: the full `nav:` (later tasks only replace stub bodies, never edit `nav:`); stub marker text `This page is being written.` that Task 14 greps for; `uv run --locked mkdocs build --strict` as the docs check every later docs task runs.
+- Produces: the full `nav:` (later tasks only replace stub bodies, never edit `nav:`); stub marker text `This page is being written.` that Task 14 greps for; `<DOCSCHECK>` (Global Constraints; wraps `uv run --locked mkdocs build --strict`) as the docs check every later docs task runs; the `validation:` block that makes broken links and anchors fail it.
 
 - [ ] **Step 1: `pyproject.toml`** (spec §5.10), then run `uv lock`
 
@@ -404,6 +422,13 @@ exclude_docs: |
   plans/
   superpowers/
   research/
+
+# Make broken links and anchors warnings, so --strict fails on them.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
 
 theme:
   name: material
@@ -466,7 +491,7 @@ nav:
 
 - [ ] **Step 4: Stubs and `docs/index.md`**
 
-Each stub file is exactly two lines: `# <nav title>` then a blank line then `This page is being written.`
+Each stub file is exactly `# <nav title>`, a blank line, then `This page is being written.` Two stubs also carry the headings other pages link to before Task 8 fills them in (with `anchors: warn` a missing anchor fails the strict build): `docs/deployment/docker-compose.md` ends with a blank line and `## File permissions`, and `docs/deployment/docker.md` ends with a blank line and `## Build the image locally`.
 
 `docs/index.md` (full page, spec §5.6 row `index.md`): H1 `Dota Lobby`; one paragraph on what it is (a Go service that logs Steam bot accounts in and exposes a small HTTP API, meant for league lobby hosting); a `!!! warning "Project status"` admonition stating both facts: Steam login with the pinned go-steam library is **reported to fail** with current Steam (not verified by this project), and lobby creation is **not implemented yet** (`POST /lobby/create` is a placeholder); use throwaway accounts, start with one bot, link `known-limitations.md`. Then a mermaid `flowchart LR` with nodes Client → HTTP API → Bot manager → Steam CM, and Bot manager -.->|not yet| Dota 2 GC. Then "Quick links" to quick start, configuration reference, API, troubleshooting, known limitations (relative `.md` links).
 
@@ -476,13 +501,15 @@ Same four recipes and comments; each command line prefixed with `cd "{{justfile_
 
 - [ ] **Step 6: Strict build**
 
-Run: `uv run --locked mkdocs build --strict 2>&1 | tail -5; ls site; ls site | grep -cE '^(plans|superpowers|research)$'`
-Expected: build ends with `Documentation built in`, no `WARNING`; `site/` has `getting-started configuration deployment api operations development known-limitations index.html ...`; count `0`.
+Run: `<DOCSCHECK>` (Global Constraints), then `ls site; ls site | grep -cE '^(plans|superpowers|research)$'`
+Expected: `<DOCSCHECK>` as defined (`exit=0`, no warning or anchor lines, `Documentation built in`); `site/` has `getting-started configuration deployment api operations development known-limitations index.html ...`; count `0`.
+
+Prove the anchor validation works: append `[x](deployment/docker.md#no-such-anchor)` to `docs/index.md`, run `<DOCSCHECK>`, expect a non-zero exit and a `does not contain an anchor` line; then remove the line again (`git diff docs/index.md` shows nothing beyond your Step 4 content) and re-run `<DOCSCHECK>` to `exit=0`.
 
 - [ ] **Step 7: just recipes, root and subdirectory** (Review Focus 4)
 
-Run: `rm -rf site && (cd docs && just docs::build-local) && ls site/index.html && ls docs/site 2>&1`
-Expected: `site/index.html` at the repo root; `docs/site` absent.
+Run: `rm -rf site docs/site; ( cd docs && just docs::build-local ); echo "exit=$?"; ls site/index.html; ls docs/site 2>&1 # allow-cd`
+Expected: `exit=0`; `site/index.html` at the repo root; `docs/site` absent. Real `cd` only; not `env -C` / `just -d` (Global Constraints).
 
 Run (only if `docker info` works): `rm -rf site && just docs::build && ls site/index.html`
 Expected: file exists. Otherwise "not run: <reason>". Then `rm -rf site` and `git status --short` shows no `site/` or `.venv/`.
@@ -498,7 +525,7 @@ git commit -m "Add MkDocs Material site skeleton and fix docs just recipes"
 
 **Docs content tasks (6 to 10) share these rules.** Replace the stub body of each listed page; do not touch `nav:`. Use `!!! warning` / `!!! danger` / `!!! note` admonitions for warnings, `=== "Tab"` content tabs for alternatives, fenced code with language tags. Plain prose, no overclaiming. Cross-link with relative `.md` links. Each task ends with:
 
-- `uv run --locked mkdocs build --strict` → no `WARNING`, ends with `Documentation built in`;
+- `<DOCSCHECK>` → `exit=0`, no warning/anchor lines, ends with `Documentation built in` (broken links and anchors fail it);
 - `grep -rn 'This page is being written' <your pages>` → no output;
 - the anti-goal grep: `grep -rnE 'internal/|--config|/etc/dota_lobby|STEAM_API_KEY|\.env\b' <your pages>` → no output, except `.env` hits that are explicitly telling the reader **not** to use a `.env` file (check each hit by eye), and `grep -rnoE 'DOTA_LOBBY_[A-Z]+' <your pages> | grep -vE 'DOTA_LOBBY_(TAG|UID|GID)$'` → no output;
 - `rm -rf site`, then commit only your pages.
@@ -531,7 +558,7 @@ curl -fsS -H 'X-API-Key: <your api_key>' http://127.0.0.1:8080/bots
 docker compose stop
 ```
 
-Required content: step 0 (pick a release on the GitHub Releases page or via `git ls-remote`); `!!! note` that the image tag has no leading `v` and `DOTA_LOBBY_TAG=v1.2.3` gives `manifest unknown`; `DOTA_LOBBY_TAG` is a Compose variable, not an app setting; before the first release, clone `main` and build locally (link); edit the one bot entry and set `api_key`; `grep -n your_steam` must print nothing, and why (a leftover placeholder retries a fake logon every 5s forever and invites `EResult_RateLimitExceeded`); "apply the permission recipe for your runtime" linking `../deployment/docker-compose.md#file-permissions` and stating recipes must not be combined; a sample startup log block built from the real lines (timestamped `log` lines, `Added bot: <username>`, `[<username>] Connected to Steam`, `[<username>] Logged on to Steam`); the startup check (`API key authentication enabled` present, `WARNING: secrets.yaml not found` absent; either message while the files exist means a directory permission or SELinux mount problem); what success looks like (`{"bots":{"<username>":true}}`, which means logged on to Steam only, not GC/ready to host) and failure (`[<username>] Failed to log on: EResult_...` → troubleshooting); `!!! danger` that failed logins retry about every 5s per bot forever, run `docker compose stop` at the first `Failed to log on:` line; `!!! note` on pull failure: `manifest unknown` → check for the `v`; still failing or `unauthorized` → no public image yet, build locally.
+Required content: step 0 (pick a release on the GitHub Releases page or via `git ls-remote`); `!!! note` that the image tag has no leading `v` and `DOTA_LOBBY_TAG=v1.2.3` gives `manifest unknown`; `DOTA_LOBBY_TAG` is a Compose variable, not an app setting; before the first release, clone `main` and build locally (link); edit the one bot entry and set `api_key`; `grep -n your_steam` must print nothing, and why (a leftover placeholder retries a fake logon every 5s forever and invites `EResult_RateLimitExceeded`); "apply the permission recipe for your runtime" linking `../deployment/docker-compose.md#file-permissions` and stating recipes must not be combined (this step comes **after** editing both files and the `grep -n your_steam` check, as listed above); a sentence right after it that some recipes make the files unwritable by you, and that the same section's "Editing later" line for your runtime says how to change them later (fix a password, add a bot, change `api_key`), followed by `docker compose restart`; a sample startup log block built from the real lines (timestamped `log` lines, `Added bot: <username>`, `[<username>] Connected to Steam`, `[<username>] Logged on to Steam`); the startup check (`API key authentication enabled` present, `WARNING: secrets.yaml not found` absent; either message while the files exist means a directory permission or SELinux mount problem); what success looks like (`{"bots":{"<username>":true}}`, which means logged on to Steam only, not GC/ready to host) and failure (`[<username>] Failed to log on: EResult_...` → troubleshooting); `!!! danger` that failed logins retry about every 5s per bot forever, run `docker compose stop` at the first `Failed to log on:` line; `!!! note` on pull failure: `manifest unknown` → check for the `v`; still failing or `unauthorized` → no public image yet, build locally.
 
 - [ ] **Step 3: Verify** (shared rules above, plus)
 
@@ -550,14 +577,14 @@ git commit -m "Write prerequisites and quick start docs"
 **Files:**
 - Modify: `docs/configuration/index.md`, `docs/configuration/bot-accounts.md`
 
-- [ ] **Step 1: `configuration/index.md`** — per spec §5.6 row and §3. A table with columns Key | File | Type | Default | Required for: `server.host` (config.yaml, string, `0.0.0.0`, no), `server.port` (config.yaml, int, `8080`, no), `server.api_key` (config.yaml, string, unset = auth off, no but strongly recommended), `secrets.bots[].username` (secrets.yaml, string, none, **yes for every entry**), `secrets.bots[].password` (secrets.yaml, string, none, **yes for every entry**). State: search order `.`, `./config`, `$HOME/.config/dota_lobby` (first two relative to the working directory); container path `/app/config/` only, must be traversable (755); files only (no env vars, no flags); read once at startup, restart to apply (`docker compose restart`); missing `config.yaml` → defaults; missing `secrets.yaml` → warning, no bots; malformed YAML is fatal; an unreadable directory looks like missing files (silent fallback) while an unreadable file in a traversable directory gives `Failed to load configuration: error reading secrets file: ... permission denied`; empty/misspelled `username`/`password` crashes the process; `host` must be `0.0.0.0` in containers; leave `port` at 8080 in containers and remap the host side (`127.0.0.1:9000:8080`), else the container side must match; `sentry_hash` is not supported (ignored). `api_key` and `password` are redacted (`***REDACTED***`) if ever logged. Include the two example files' YAML as shown in Task 1.
+- [ ] **Step 1: `configuration/index.md`** — per spec §5.6 row and §3. A table with columns Key | File | Type | Default | Required for: `server.host` (config.yaml, string, `0.0.0.0`, no), `server.port` (config.yaml, int, `8080`, no), `server.api_key` (config.yaml, string, unset = auth off, no but strongly recommended), `secrets.bots[].username` (secrets.yaml, string, none, **yes for every entry**), `secrets.bots[].password` (secrets.yaml, string, none, **yes for every entry**). State: search order `.`, `./config`, `$HOME/.config/dota_lobby` (first two relative to the working directory); container path `/app/config/` only, must be traversable (755); files only (no env vars, no flags); read once at startup, restart to apply (`docker compose restart`); if the permission recipe made the files unwritable by you, edit them as described under "Editing later" for your runtime (link `../deployment/docker-compose.md#file-permissions`); missing `config.yaml` → defaults; missing `secrets.yaml` → warning, no bots; malformed YAML is fatal; an unreadable directory looks like missing files (silent fallback) while an unreadable file in a traversable directory is fatal: `config.yaml` is read first, so the usual line is `Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied` (quote the exact line observed in Task 3 Step 7), and only when config.yaml is readable but secrets.yaml is not does it say `Failed to load configuration: error reading secrets file: ... permission denied`; the container then restarts in a loop; empty/misspelled `username`/`password` crashes the process; `host` must be `0.0.0.0` in containers; leave `port` at 8080 in containers and remap the host side (`127.0.0.1:9000:8080`), else the container side must match; `sentry_hash` is not supported (ignored). `api_key` and `password` are redacted (`***REDACTED***`) if ever logged. Include the two example files' YAML as shown in Task 1.
 
-- [ ] **Step 2: `configuration/bot-accounts.md`** — per spec §5.6 row: same opening login-risk warning as prerequisites; account setup in depth; Steam Guard (email codes → `EResult_AccountLogonDenied`, mobile authenticator → `EResult_AccountLoginDeniedNeedTwoFactor`; both break login; turn it off); rate limits and lockout risk with the real cadence (retry about every 5s per bot, forever, timers can pile up; `EResult_RateLimitExceeded`); start with one bot, add more only after it shows `Logged on to Steam`; the one-instance rule (two instances or a desktop login kick each other off forever: `Logged off: EResult_LoggedInElsewhere` / `EResult_LogonSessionReplaced`); weekly Steam maintenance (a bot whose reconnect dial fails stays down silently until restart).
+- [ ] **Step 2: `configuration/bot-accounts.md`** — per spec §5.6 row: same opening login-risk warning as prerequisites; account setup in depth; Steam Guard (email codes → `EResult_AccountLogonDenied`, mobile authenticator → `EResult_AccountLogonDeniedNeedTwoFactorCode`, which is what go-steam's `EResult.String()` prints for value 85 (do not mention the Go constant alias with "Login" and no "Code"; it never appears in logs); both break login; turn it off); rate limits and lockout risk with the real cadence (retry about every 5s per bot, forever, timers can pile up; `EResult_RateLimitExceeded`); start with one bot, add more only after it shows `Logged on to Steam`; the one-instance rule (two instances or a desktop login kick each other off forever: `Logged off: EResult_LoggedInElsewhere` / `EResult_LogonSessionReplaced`); weekly Steam maintenance (a bot whose reconnect dial fails stays down silently until restart).
 
 - [ ] **Step 3: Verify** (shared rules, plus)
 
-Run: `grep -c 'sentry_hash' docs/configuration/index.md; grep -c '/app/config' docs/configuration/index.md; grep -c 'EResult_AccountLoginDeniedNeedTwoFactor' docs/configuration/bot-accounts.md`
-Expected: each `>= 1`.
+Run: `grep -c 'sentry_hash' docs/configuration/index.md; grep -c '/app/config' docs/configuration/index.md; grep -c 'error reading config file' docs/configuration/index.md; grep -c 'EResult_AccountLogonDeniedNeedTwoFactorCode' docs/configuration/bot-accounts.md; grep -n '"EResult_AccountLogonDeniedNeedTwoFactorCode"' /home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go`
+Expected: the first four `>= 1`; the last prints the `85:` entry of `EResult_name` (cross-check against the pinned go-steam). Also `grep -c 'AccountLoginDeniedNeedTwoFactor' docs/configuration/bot-accounts.md` → `0`.
 
 - [ ] **Step 4: Commit**
 
@@ -577,10 +604,11 @@ git commit -m "Write configuration reference and bot account docs"
 - [ ] **Step 1: `docker-compose.md`** — include `compose.yaml` verbatim (copy from the file) and explain each line; pinning `DOTA_LOBBY_TAG` to a full version (`1.2.3`), moving tags `latest` and `1.2`; using a local build (`docker build -t ghcr.io/kettleofketchup/dota_lobby:local .` then `DOTA_LOBBY_TAG=local docker compose up -d`); upgrade flow (`docker compose pull` then `docker compose up -d`); logs (`docker compose logs -f`, rotation 10m x 3); why there is no healthcheck (spec §5.5: `/health` is always healthy, distroless has no shell/HTTP client, `restart: unless-stopped` covers process death; external `curl -fsS http://127.0.0.1:8080/health`; readiness = `GET /bots` all `true` plus logs, and `true` means logged on to Steam, not GC); changing the port (host side only); exposing beyond localhost (`8080:8080` only with `server.api_key` set and a TLS reverse proxy; include one short Caddy example `league.example.com { reverse_proxy 127.0.0.1:8080 }`); hardening already in place (read-only rootfs, all capabilities dropped, no-new-privileges, non-root 65532); the one-instance rule as a `!!! danger`.
 
   `## File permissions` section, per spec §5.4 exactly: config dir 755 first in every recipe; a `!!! warning` that the tabs are alternatives that must not be combined, naming the two mistakes (host `chown 65532` with a rootless runtime; the `DOTA_LOBBY_UID` override on rootless Docker); tabs:
-  - `=== "Rootful Docker"`: `sudo chown 65532:65532 config/secrets.yaml config/config.yaml && sudo chmod 600 config/*.yaml`, **or** files at 0600 owned by you plus `export DOTA_LOBBY_UID=$(id -u) DOTA_LOBBY_GID=$(id -g)` and the optional Compose line `user: "${DOTA_LOBBY_UID:?}:${DOTA_LOBBY_GID:?}"` (explain why not `${UID}`/`${GID}`; these are Compose variables; no `.env` file).
-  - `=== "Rootless Podman"`: `podman unshare chown 65532:65532 config/*.yaml` (files 0600), **or** files at 0600 owned by you plus `userns_mode: "keep-id:uid=65532,gid=65532"` (plain `keep-id` is not enough). Mark the `podman unshare chown` variant as the one tested by this project.
-  - `=== "Rootless Docker (untested)"`: `docker run --rm -v "$PWD/config:/c" busybox chown 65532:65532 /c/config.yaml /c/secrets.yaml` (files 0600 first), **or** `user: "0:0"` (container root = your unprivileged user; hardening still applies); never the rootful `DOTA_LOBBY_UID` override (it fails with `Failed to load configuration: ... permission denied`).
-  - `=== "Docker Desktop (unverified)"`: no `chown` needed (a `sudo chown 65532` locks you out), keep files owned by you, `chmod 600` on macOS; Windows users use WSL2 with the Linux tabs.
+  - `=== "Rootful Docker"`: `sudo chown 65532:65532 config/secrets.yaml config/config.yaml && sudo chmod 600 config/*.yaml`, **or** files at 0600 owned by you plus `export DOTA_LOBBY_UID=$(id -u) DOTA_LOBBY_GID=$(id -g)` and the optional Compose line `user: "${DOTA_LOBBY_UID:?}:${DOTA_LOBBY_GID:?}"` (explain why not `${UID}`/`${GID}`; these are Compose variables; no `.env` file). **Editing later:** after the `sudo chown` variant use `sudo -e config/secrets.yaml` (ownership and mode are kept); the `user:` variant keeps the files owned by you, so edit them normally. Then `docker compose restart`.
+  - `=== "Rootless Podman"`: `podman unshare chown 65532:65532 config/*.yaml` (files 0600), **or** files at 0600 owned by you plus `userns_mode: "keep-id:uid=65532,gid=65532"` (plain `keep-id` is not enough). Mark the `podman unshare chown` variant as the one tested by this project. **Editing later:** after the `podman unshare chown` variant edit inside the user namespace, e.g. `podman unshare vi config/secrets.yaml` (any editor; ownership is kept); the `keep-id` variant keeps the files owned by you. Then `docker compose restart` (or `podman compose restart`).
+  - `=== "Rootless Docker (untested)"`: `docker run --rm -v "$PWD/config:/c" busybox chown 65532:65532 /c/config.yaml /c/secrets.yaml` (files 0600 first), **or** `user: "0:0"` (container root = your unprivileged user; hardening still applies); never the rootful `DOTA_LOBBY_UID` override (it fails with `Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied`, because config.yaml is read first). **Editing later:** after the busybox chown, hand the files back with `docker run --rm -v "$PWD/config:/c" busybox chown 0:0 /c/config.yaml /c/secrets.yaml` (container root is your host user), edit, then run the `chown 65532:65532` command again; the `user: "0:0"` variant keeps the files owned by you. Then `docker compose restart`.
+  - `=== "Docker Desktop (unverified)"`: no `chown` needed (a `sudo chown 65532` locks you out), keep files owned by you, `chmod 600` on macOS; Windows users use WSL2 with the Linux tabs. **Editing later:** the files stay owned by you; edit them, then `docker compose restart`.
+  - Never fall back to `chmod 644` to make editing easier (see below).
   - SELinux hosts: mount with `./config:/app/config:ro,Z`.
   - `chmod 644` only mentioned as "not recommended: makes Steam passwords readable by every local user".
 
@@ -603,8 +631,8 @@ docker run -d --name dota_lobby --restart unless-stopped --stop-timeout 30 \
 Run: `grep -c 'ghcr.io/kettleofketchup/dota_lobby:1.2.3' docs/deployment/docker.md; grep -c '^## File permissions' docs/deployment/docker-compose.md; grep -c '^## Build the image locally' docs/deployment/docker.md; grep -c 'keep-id:uid=65532,gid=65532' docs/deployment/docker-compose.md; grep -ciE 'untested|unverified' docs/deployment/docker-compose.md; grep -c ':v1' docs/deployment/*.md`
 Expected: `>= 1` for each except the last, which reports `0` for every file.
 
-Run: `uv run --locked mkdocs build --strict 2>&1 | grep -iE 'anchor|WARNING' ; grep -o 'id="file-permissions"' site/deployment/docker-compose/index.html; grep -o 'id="build-the-image-locally"' site/deployment/docker/index.html`
-Expected: no warnings; both ids found.
+Run: `<DOCSCHECK>`, then `grep -o 'id="file-permissions"' site/deployment/docker-compose/index.html; grep -o 'id="build-the-image-locally"' site/deployment/docker/index.html; grep -c 'Editing later' docs/deployment/docker-compose.md; grep -c 'sudo -e' docs/deployment/docker-compose.md; grep -c 'podman unshare' docs/deployment/docker-compose.md`
+Expected: `<DOCSCHECK>` passes as defined; both ids found; `Editing later` count `>= 4` (one per tab); the other two `>= 1`.
 
 - [ ] **Step 5: Commit**
 
@@ -625,7 +653,7 @@ git commit -m "Write Docker Compose, docker run and from-source deployment docs"
   - `GET /lobby/info?lobby_id=...` or `POST /lobby/info` with `{"lobby_id":"..."}` → `200 {"status":"success","lobby_id":"...","message":"Lobby info retrieval not yet fully implemented"}`; `400 lobby_id is required`. `!!! warning "Placeholder"`: echoes the ID.
   - curl example per endpoint against `http://127.0.0.1:8080`. No TLS.
 
-- [ ] **Step 2: `operations/troubleshooting.md`** — a table Log line / symptom | Meaning | Fix, with **every row listed in spec §5.6 row `operations/troubleshooting.md`**, quoting the lines exactly (`[username]` prefix, full `EResult_` names). Above the table, a short "first checks" list: `docker compose ps`, `docker compose logs`, the startup check. Below it, a `!!! note` that `/health` is always healthy and is not a readiness signal.
+- [ ] **Step 2: `operations/troubleshooting.md`** — a table Log line / symptom | Meaning | Fix, with **every row listed in spec §5.6 row `operations/troubleshooting.md`**, quoting the lines exactly (`[username]` prefix, full `EResult_` names as printed by `EResult.String()`; the mobile-authenticator row is `[user] Failed to log on: EResult_AccountLogonDeniedNeedTwoFactorCode`). The permission row quotes both variants: `Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied` (exact line from Task 3 Step 7; this is the one users usually see, because config.yaml is read first) and `Failed to load configuration: error reading secrets file: ... permission denied` (config.yaml readable, secrets.yaml not); both mean the directory is traversable but 65532 cannot read the file, so apply the runtime recipe; the container restarts in a loop. Above the table, a short "first checks" list: `docker compose ps`, `docker compose logs`, the startup check. Below it, a `!!! note` that `/health` is always healthy and is not a readiness signal.
 
 - [ ] **Step 3: `known-limitations.md`** — the 13 numbered items of spec §5.8 in that order, then `## Roadmap` with the 8 bullets of §5.8 and "no dates promised". Item 5 says "reported, not verified by this project".
 
@@ -636,9 +664,9 @@ for s in 'WARNING: secrets.yaml not found - no bots will be configured' \
   'WARNING: API key authentication disabled - all endpoints are public' \
   'WARNING: No bots configured in secrets.yaml' \
   'Failed to log on: EResult_InvalidPassword' 'EResult_AccountLogonDenied' \
-  'EResult_AccountLoginDeniedNeedTwoFactor' 'EResult_RateLimitExceeded' \
+  'Failed to log on: EResult_AccountLogonDeniedNeedTwoFactorCode' 'EResult_RateLimitExceeded' \
   'EResult_LoggedInElsewhere' 'EResult_LogonSessionReplaced' \
-  'error reading secrets file' 'Username must be set!' 'Password or LoginKey must be set!' \
+  'error reading config file' 'error reading secrets file' 'Username must be set!' 'Password or LoginKey must be set!' \
   'manifest unknown' 'unauthorized' ':Z' 'Connected to Steam'; do
   printf '%s: ' "$s"; grep -cF -- "$s" docs/operations/troubleshooting.md; done
 grep -cE '^1[0-3]\. |^[1-9]\. ' docs/known-limitations.md
@@ -648,7 +676,7 @@ grep -rn '/api/' docs/api/index.md docs/operations docs/known-limitations.md
 
 Expected: every count `>= 1`; the numbered-items count is `13` (plus any numbered lines you added elsewhere on the page; keep the page to the 13); the last grep prints nothing.
 
-Cross-check each string against the Go source: `grep -rnF 'Failed to log on' pkg/bot/manager.go`, `grep -rnF 'No bots configured' cmd/dota_lobby/main.go`, `grep -rnF 'not found - no bots' pkg/config/config.go` all match.
+Cross-check each string against the Go source: `grep -rnF 'Failed to log on' pkg/bot/manager.go`, `grep -rnF 'No bots configured' cmd/dota_lobby/main.go`, `grep -rnF 'not found - no bots' pkg/config/config.go`, `grep -nF 'error reading config file' pkg/config/config.go`, `grep -nF 'error reading secrets file' pkg/config/config.go` all match. Cross-check every `EResult_` name on the page against the pinned go-steam's `EResult_name` map (Global Constraints, "Exact strings from dependencies"): for each, `grep -c '"EResult_<Name>"' /home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go` → `1`. `grep -c 'AccountLoginDeniedNeedTwoFactor' docs/operations/troubleshooting.md` → `0`.
 
 - [ ] **Step 5: Commit**
 
@@ -742,8 +770,8 @@ No `actions/configure-pages` (spec §5.7).
 
 - [ ] **Step 2: Verify**
 
-Run: `$HOME/.local/share/mise/installs/actionlint/1.7.12/actionlint .github/workflows/docs.yml && echo OK`
-Expected: `OK`. Also re-run the same command the workflow runs: `uv run --locked mkdocs build --strict` → succeeds; `rm -rf site`.
+Run: `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint .github/workflows/docs.yml && echo OK`
+Expected: `OK`. Also run `<DOCSCHECK>` (the same build the workflow runs) → passes as defined; `rm -rf site`.
 The deploy path can only be verified by a real run on `main` after merge and the manual Pages setting (spec §6a); state that in your report.
 
 - [ ] **Step 3: Commit**
@@ -828,7 +856,7 @@ jobs:
 
 - [ ] **Step 2: Verify**
 
-Run: `$HOME/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` (lints all workflows)
+Run: `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` (lints all workflows)
 Expected: `OK`. Run `git diff main --stat -- .github/workflows/release.yml .github/workflows/lint.yml` → empty.
 
 - [ ] **Step 3: Commit**
@@ -840,10 +868,11 @@ git commit -m "Add container workflow that publishes multi-arch images to GHCR o
 
 ---
 
-### Task 13: README, IMPLEMENTATION_SUMMARY header and CLAUDE.md
+### Task 13: README and IMPLEMENTATION_SUMMARY header
 
 **Files:**
-- Modify: `README.md` (rewrite), `IMPLEMENTATION_SUMMARY.md` (prepend header only), `.claude/CLAUDE.md`
+- Modify: `README.md` (rewrite), `IMPLEMENTATION_SUMMARY.md` (prepend header only)
+- Do **not** modify: `.claude/CLAUDE.md` (see Step 3)
 
 - [ ] **Step 1: Rewrite `README.md`** (spec §5.1 row): title `# dota_lobby`; one-paragraph description; a status note (Steam login reported to fail with the pinned library, unverified; lobby endpoints are placeholders; link to `https://kettleofketchup.github.io/dota_lobby/known-limitations/`); link to the docs site `https://kettleofketchup.github.io/dota_lobby/`; a Compose quick start (the clone / `DOTA_LOBBY_TAG=1.2.3` / `mkdir config && chmod 755 config` / copy examples / edit / permissions link / `docker compose up -d` / `curl` sequence from Task 6, with the no-`v` note); a short "Build from source" (`make build`, `./bin/dota_lobby`); a "Development" pointer to the docs development page; License and References sections kept. Remove: the `sentry_hash` YAML, the "Creates a new Dota 2 lobby" claim, and "Consider enabling Steam Guard".
 
@@ -857,17 +886,17 @@ git commit -m "Add container workflow that publishes multi-arch images to GHCR o
 
 ```
 
-- [ ] **Step 3: `.claude/CLAUDE.md`**: in the Architecture tree add `docs/` (MkDocs source; `docs/plans/`, `docs/superpowers/` internal and excluded), `Dockerfile`, `compose.yaml`, `mkdocs.yml`; in Development Commands add `just go::build`, `just docs::build-local`, `just docs::serve`, `uv run --locked mkdocs build --strict`, `docker build -t ghcr.io/kettleofketchup/dota_lobby:local .`, `DOTA_LOBBY_TAG=local docker compose up -d`; in the API table change the `/lobby/create` and `/lobby/info` descriptions to `Placeholder (creates nothing)` / `Placeholder (echoes ID)`; add a line under Project Patterns: "Container reads config from `/app/config/` (UID 65532); docs must match main's code and state limitations honestly."
+- [ ] **Step 3: `.claude/CLAUDE.md` — do not edit; put the proposed change in your report.** Subagents may not change agent instruction files on another agent's instruction, and the user has not asked for this edit (default — pending user confirmation). Write the proposed change as text in your report so the orchestrator can raise it with the user and apply it as a separate commit (`git commit -m "Document Docker and docs commands in project instructions"`) only if the user agrees. Proposed change: in the Architecture tree add `docs/` (MkDocs source; `docs/plans/`, `docs/superpowers/` internal and excluded), `Dockerfile`, `compose.yaml`, `mkdocs.yml`; in Development Commands add `just go::build`, `just docs::build-local`, `just docs::serve`, `uv run --locked mkdocs build --strict`, `docker build -t ghcr.io/kettleofketchup/dota_lobby:local .`, `DOTA_LOBBY_TAG=local docker compose up -d`; in the API table change the `/lobby/create` and `/lobby/info` descriptions to `Placeholder (creates nothing)` / `Placeholder (echoes ID)`; add a line under Project Patterns: "Container reads config from `/app/config/` (UID 65532); docs must match main's code and state limitations honestly."
 
 - [ ] **Step 4: Verify**
 
 Run: `grep -nE 'sentry_hash|Consider enabling Steam Guard|Creates a new Dota 2 lobby' README.md; head -1 IMPLEMENTATION_SUMMARY.md; git diff main -- IMPLEMENTATION_SUMMARY.md | grep -c '^-[^-]'`
-Expected: no matches; `> **Historical record.** ...`; `0` (nothing removed from the body).
+Expected: no matches; `> **Historical record.** ...`; `0` (nothing removed from the body). `git status --short .claude` prints nothing.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add README.md IMPLEMENTATION_SUMMARY.md .claude/CLAUDE.md
+git add README.md IMPLEMENTATION_SUMMARY.md
 git commit -m "Point README at the docs site and mark the implementation summary as historical"
 ```
 
@@ -879,12 +908,12 @@ git commit -m "Point README at the docs site and mark the implementation summary
 
 Run every item of spec §6, recording PASS / FAIL / "not run: reason" for each:
 
-- [ ] **Step 1: Go unchanged** — with the Go env: `go build ./... && go vet ./... && golangci-lint run && git diff main --stat -- '*.go'` → builds and lint clean, diff empty.
+- [ ] **Step 1: Go unchanged** — `<GOENV> go build ./... && <GOENV> go vet ./... && <GOENV> /home/kettle/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64/golangci-lint run; echo "exit=$?"; git diff main --stat -- '*.go'` → builds, vet and lint clean (`0 issues.`, `exit=0`), diff empty. A `file requires newer Go version` panic means the wrong golangci-lint binary ran (Global Constraints); fix the command, never the code.
 - [ ] **Step 2: Image** — repeat Task 2 Steps 3 and 4 (build, inspect `65532:65532 /app`, arm64, hadolint, context check). Remove temp files.
-- [ ] **Step 3: Compose smoke** — repeat Task 3 Steps 2 to 7 (including the 700 negative check and cleanup). Record the recipe variant; record rootless Docker and Docker Desktop as "not run: no such runtime" and confirm `grep -ciE 'untested|unverified' docs/deployment/docker-compose.md` ≥ 1.
-- [ ] **Step 4: Docs** — `uv run --locked mkdocs build --strict` passes; `find site -path '*plans*' -o -path '*superpowers*' -o -path '*research*'` prints nothing; every `nav:` file exists (`grep -oE '[a-z/-]+\.md' mkdocs.yml | sed 's|^|docs/|' | xargs ls`); `grep -rn 'This page is being written' docs --exclude-dir=plans --exclude-dir=superpowers` empty. Also `uvx --with mkdocs-material==9.8.0 mkdocs build --strict` as a cross-check. `rm -rf site`.
-- [ ] **Step 5: actionlint** — `$HOME/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` → `OK`.
-- [ ] **Step 6: just** — from root and from `docs/`: `just docs::build-local` → `site/` at root; `just go::build` → `bin/dota_lobby` at root; `just docs::build` if the daemon works. `rm -rf site bin`; `git restore go.mod go.sum` if changed.
+- [ ] **Step 3: Compose smoke** — repeat Task 3 Steps 2 to 8 (including both negative checks, the `--retry-all-errors` curl, and cleanup). Record the recipe variant; record rootless Docker and Docker Desktop as "not run: no such runtime" and confirm `grep -ciE 'untested|unverified' docs/deployment/docker-compose.md` ≥ 1.
+- [ ] **Step 4: Docs** — `<DOCSCHECK>` passes as defined (exit 0, no warning lines; additionally `grep -cF 'does not contain an anchor' /tmp/dota_lobby_mkdocs.log` → `0`); `find site -path '*plans*' -o -path '*superpowers*' -o -path '*research*'` prints nothing; every `nav:` file exists (`grep -oE '[a-z/-]+\.md' mkdocs.yml | sed 's|^|docs/|' | xargs ls`); `grep -rn 'This page is being written' docs --exclude-dir=plans --exclude-dir=superpowers` empty. Also `NO_MKDOCS_2_WARNING=1 uvx --with mkdocs-material==9.8.0 mkdocs build --strict; echo "exit=$?"` as a cross-check (`exit=0`). `rm -rf site`.
+- [ ] **Step 5: actionlint** — `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` → `OK`.
+- [ ] **Step 6: just** — from root: `just docs::build-local` → `site/` at root; `<GOENV> just go::build` → `bin/dota_lobby` at root; `just docs::build` if the daemon works. From `docs/`, with a real `cd` (not `env -C` / `just -d`; Global Constraints): `rm -rf site bin; ( cd docs && just docs::build-local ); echo "exit=$?"; ls site/index.html; ls docs/site 2>&1 # allow-cd` and `( cd docs && <GOENV> just go::build ); echo "exit=$?"; ls bin/dota_lobby; ls docs/bin 2>&1 # allow-cd` → `exit=0`, outputs at the repo root, nothing under `docs/`. `rm -rf site bin`; `git restore go.mod go.sum` if changed.
 - [ ] **Step 7: Example** — `grep -c '^ *- username' secrets.yaml.example` → `1`.
 - [ ] **Step 8: Docs accuracy pass** — anti-goal greps over `docs` (excluding `plans`, `superpowers`) and `README.md`:
   - `grep -rnoE 'DOTA_LOBBY_[A-Z]+' docs README.md --exclude-dir=plans --exclude-dir=superpowers | grep -vE 'DOTA_LOBBY_(TAG|UID|GID)$'` → empty
@@ -893,4 +922,4 @@ Run every item of spec §6, recording PASS / FAIL / "not run: reason" for each:
   - `grep -rniE 'lobby (is|was|gets) created|creates (a|the) lobby|ready to host' docs README.md --exclude-dir=plans --exclude-dir=superpowers` → only negated/limitation sentences
   - then read each page against `cmd/`, `pkg/` and the example files and list any mismatch (command, path, key, endpoint, status code, log line). Fix mismatches in a separate commit (`git commit -m "Fix docs inaccuracies found in final review"`).
 - [ ] **Step 9: Repo state** — `git status --short` empty; `git ls-files | grep -E '(^|/)(secrets|config)\.yaml$|^bin/|(^|/)dota_lobby$'` empty; `git log main..HEAD --format='%H%n%B' | grep -iE 'co-authored|claude|generated|anthropic|\bAI\b'` empty.
-- [ ] **Step 10: Report** — list each step's result, the observed smoke-test log lines, anything "not run" with the reason, and the two manual handoff items of spec §6a (Pages source = GitHub Actions before merging; GHCR package public after the first tag), plus the spec §9 login risk.
+- [ ] **Step 10: Report** — list each step's result, the observed smoke-test log lines, anything "not run" with the reason, and the two manual handoff items of spec §6a (Pages source = GitHub Actions before merging; GHCR package public after the first tag), the proposed `.claude/CLAUDE.md` change from Task 13 Step 3 (not applied; pending user confirmation), plus the spec §9 login risk.
