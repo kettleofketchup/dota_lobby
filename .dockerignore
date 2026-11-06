@@ -13,6 +13,8 @@ secrets.yaml
 **/config.yaml
 config/
 **/secrets*.yaml
+**/secrets.*
+**/config.yml
 *.yaml.example
 .env*
 **/*_test.go

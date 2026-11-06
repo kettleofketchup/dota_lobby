@@ -12,16 +12,16 @@
 
 ## Global Constraints
 
-- Work only in the worktree `/home/kettle/git_repos/dota_lobby/.claude/worktrees/docker-and-docs` (branch `worktree-docker-and-docs`). It is your session's working directory: run every command from there **without** a `cd <dir> &&` prefix (a hook blocks chained `cd`). **One exception:** the subdirectory just checks (Task 4 Steps 1 and 4, Task 5 Step 7, Task 14 Step 6) must really change directory, so they are written as `( cd docs && ... ) # allow-cd`; the trailing `# allow-cd` is the hook's opt-out and is allowed only for those checks. `env -C docs ...` and `just -d docs ...` are **not** valid substitutes: they keep the caller's `PWD` environment variable, and `PWD` is exactly what the `just/go.just` bug reads, so the check would pass even without the fix. Never touch `/home/kettle/git_repos/dota_lobby` (main checkout) and never copy its `docs/research/` notes.
+- Work only in the worktree `<repo root>` (branch `worktree-docker-and-docs`). It is your session's working directory: run every command from there **without** a `cd <dir> &&` prefix (a hook blocks chained `cd`). **One exception:** the subdirectory just checks (Task 4 Steps 1 and 4, Task 5 Step 7, Task 14 Step 6) must really change directory, so they are written as `( cd docs && ... ) # allow-cd`; the trailing `# allow-cd` is the hook's opt-out and is allowed only for those checks. `env -C docs ...` and `just -d docs ...` are **not** valid substitutes: they keep the caller's `PWD` environment variable, and `PWD` is exactly what the `just/go.just` bug reads, so the check would pass even without the fix. Never touch `~/git_repos/dota_lobby` (main checkout) and never copy its `docs/research/` notes.
 - **Go env (`<GOENV>`).** The mise `go` shim is broken, the harness refuses `export` with `$HOME`/`$PATH` values, and shell state does not persist between Bash calls. So every command that runs `go`, `make`, `golangci-lint` or a `just go::*` recipe is prefixed inline, with literal paths, by:
-  `GOROOT=/home/kettle/.local/share/mise/installs/go/1.27.1 PATH=/home/kettle/.local/share/mise/installs/go/1.27.1/bin:/home/kettle/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64:/home/kettle/.local/share/zinit/polaris/bin:/home/kettle/.local/bin:/usr/local/bin:/usr/bin:/bin`
+  `GOROOT=~/.local/share/mise/installs/go/1.27.1 PATH=~/.local/share/mise/installs/go/1.27.1/bin:~/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64:~/.local/share/zinit/polaris/bin:~/.local/bin:/usr/local/bin:/usr/bin:/bin`
   Below this is written `<GOENV> <cmd>`; substitute the literal text. No `export`, no `$HOME`, no `$PATH`. If any command (e.g. `go mod tidy` inside `make build` / `just go::build`) modifies `go.mod` or `go.sum`, run `git restore go.mod go.sum` and report it; never commit those changes.
-- `golangci-lint` binary: `/home/kettle/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64/golangci-lint` (v2.15.0; `<GOENV>` puts its directory first). The zinit `golangci-lint` (v2.11.4, built with go1.26) that is otherwise first on PATH panics under Go 1.27 with `file requires newer Go version go1.27`; that is a tooling failure, not a lint finding, and never a reason to touch `.go` files.
-- `actionlint` binary: `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint` (the shim has no version set).
+- `golangci-lint` binary: `~/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64/golangci-lint` (v2.15.0; `<GOENV>` puts its directory first). The zinit `golangci-lint` (v2.11.4, built with go1.26) that is otherwise first on PATH panics under Go 1.27 with `file requires newer Go version go1.27`; that is a tooling failure, not a lint finding, and never a reason to touch `.go` files.
+- `actionlint` binary: `~/.local/share/mise/installs/actionlint/1.7.12/actionlint` (the shim has no version set).
 - **Docs check (`<DOCSCHECK>`).** Every docs build check in this plan is this command, run without a pipe so its exit status is visible:
   `NO_MKDOCS_2_WARNING=1 uv run --locked mkdocs build --strict > /tmp/dota_lobby_mkdocs.log 2>&1; echo "exit=$?"; grep -E '^WARNING|does not contain an anchor|is not found among documentation files' /tmp/dota_lobby_mkdocs.log; tail -2 /tmp/dota_lobby_mkdocs.log`
   Expected: `exit=0`, the grep prints nothing, the tail ends with `Documentation built in`. `NO_MKDOCS_2_WARNING=1` silences Material 9.8.0's end-of-life banner, which otherwise always contains the word "warning". Broken links and anchors fail the build because `mkdocs.yml` sets `validation:` (Task 5 Step 3); MkDocs 1.6 otherwise reports a missing anchor only at INFO and `--strict` would pass.
-- **Exact strings from dependencies.** EResult names are printed by `EResult.String()`, which uses the `EResult_name` map, not the Go constant name. Where two constants share a value, the map has one name. Cross-check any `EResult_...` string you quote with `grep -n '"EResult_<Name>"' /home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go`. Value 85 (mobile authenticator) prints as `EResult_AccountLogonDeniedNeedTwoFactorCode`.
+- **Exact strings from dependencies.** EResult names are printed by `EResult.String()`, which uses the `EResult_name` map, not the Go constant name. Where two constants share a value, the map has one name. Cross-check any `EResult_...` string you quote with `grep -n '"EResult_<Name>"' ~/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go`. Value 85 (mobile authenticator) prints as `EResult_AccountLogonDeniedNeedTwoFactorCode`.
 - `docker` on this host is **rootless Podman 6.1.4** (`docker compose` runs the docker-compose plugin against Podman). Never claim a build/smoke result you did not run; if something cannot run, write "not run: <reason>" in your report.
 - No behavioural Go changes. `git diff main --stat -- '*.go'` must stay empty.
 - Never commit `config.yaml`, `secrets.yaml`, anything under `config/`, `bin/`, `site/`, `.venv/` or a `dota_lobby` binary. Never push.
@@ -590,7 +590,7 @@ git commit -m "Write prerequisites and quick start docs"
 
 - [ ] **Step 3: Verify** (shared rules, plus)
 
-Run: `grep -c 'sentry_hash' docs/configuration/index.md; grep -c '/app/config' docs/configuration/index.md; grep -c 'error reading config file' docs/configuration/index.md; grep -c 'EResult_AccountLogonDeniedNeedTwoFactorCode' docs/configuration/bot-accounts.md; grep -n '"EResult_AccountLogonDeniedNeedTwoFactorCode"' /home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go`
+Run: `grep -c 'sentry_hash' docs/configuration/index.md; grep -c '/app/config' docs/configuration/index.md; grep -c 'error reading config file' docs/configuration/index.md; grep -c 'EResult_AccountLogonDeniedNeedTwoFactorCode' docs/configuration/bot-accounts.md; grep -n '"EResult_AccountLogonDeniedNeedTwoFactorCode"' ~/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go`
 Expected: the first four `>= 1`; the last prints the `85:` entry of `EResult_name` (cross-check against the pinned go-steam). Also `grep -c 'AccountLoginDeniedNeedTwoFactor' docs/configuration/bot-accounts.md` → `0`.
 
 - [ ] **Step 4: Commit**
@@ -693,7 +693,7 @@ grep -rnE ':[0-9]+/api/|(GET|POST|PUT|DELETE|PATCH) /api/|[`"]/api/' docs/api/in
 
 Expected: every count `>= 1`; the numbered-items count is `13` (plus any numbered lines you added elsewhere on the page; keep the page to the 13); the last grep prints nothing. Its intent: no PR #2 style `/api/...` HTTP routes. `pkg/api/` source paths, relative links such as `../api/index.md`, and links to the docs site's API page (`https://kettleofketchup.github.io/dota_lobby/api/`) are legitimate and are not matched; never rewrite them to satisfy a grep.
 
-Cross-check each string against the Go source: `grep -rnF 'Failed to log on' pkg/bot/manager.go`, `grep -rnF 'No bots configured' cmd/dota_lobby/main.go`, `grep -rnF 'not found - no bots' pkg/config/config.go`, `grep -nF 'error reading config file' pkg/config/config.go`, `grep -nF 'error reading secrets file' pkg/config/config.go` all match. Cross-check every `EResult_` name on the page against the pinned go-steam's `EResult_name` map (Global Constraints, "Exact strings from dependencies"): for each, `grep -c '"EResult_<Name>"' /home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go` → `1`. `grep -c 'AccountLoginDeniedNeedTwoFactor' docs/operations/troubleshooting.md` → `0`.
+Cross-check each string against the Go source: `grep -rnF 'Failed to log on' pkg/bot/manager.go`, `grep -rnF 'No bots configured' cmd/dota_lobby/main.go`, `grep -rnF 'not found - no bots' pkg/config/config.go`, `grep -nF 'error reading config file' pkg/config/config.go`, `grep -nF 'error reading secrets file' pkg/config/config.go` all match. Cross-check every `EResult_` name on the page against the pinned go-steam's `EResult_name` map (Global Constraints, "Exact strings from dependencies"): for each, `grep -c '"EResult_<Name>"' ~/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/protocol/steamlang/enums.go` → `1`. `grep -c 'AccountLoginDeniedNeedTwoFactor' docs/operations/troubleshooting.md` → `0`.
 
 - [ ] **Step 5: Commit**
 
@@ -787,7 +787,7 @@ No `actions/configure-pages` (spec §5.7).
 
 - [ ] **Step 2: Verify**
 
-Run: `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint .github/workflows/docs.yml && echo OK`
+Run: `~/.local/share/mise/installs/actionlint/1.7.12/actionlint .github/workflows/docs.yml && echo OK`
 Expected: `OK`. Also run `<DOCSCHECK>` (the same build the workflow runs) → passes as defined; `rm -rf site`.
 The deploy path can only be verified by a real run on `main` after merge and the manual Pages setting (spec §6a); state that in your report.
 
@@ -873,7 +873,7 @@ jobs:
 
 - [ ] **Step 2: Verify**
 
-Run: `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` (lints all workflows)
+Run: `~/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` (lints all workflows)
 Expected: `OK`. Run `git diff main --stat -- .github/workflows/release.yml .github/workflows/lint.yml` → empty.
 
 - [ ] **Step 3: Commit**
@@ -925,11 +925,11 @@ git commit -m "Point README at the docs site and mark the implementation summary
 
 Run every item of spec §6, recording PASS / FAIL / "not run: reason" for each:
 
-- [ ] **Step 1: Go unchanged** — `<GOENV> go build ./... && <GOENV> go vet ./... && <GOENV> /home/kettle/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64/golangci-lint run; echo "exit=$?"; git diff main --stat -- '*.go'` → builds, vet and lint clean (`0 issues.`, `exit=0`), diff empty. A `file requires newer Go version` panic means the wrong golangci-lint binary ran (Global Constraints); fix the command, never the code.
+- [ ] **Step 1: Go unchanged** — `<GOENV> go build ./... && <GOENV> go vet ./... && <GOENV> ~/.local/share/mise/installs/golangci-lint/2.15.0/golangci-lint-2.15.0-linux-amd64/golangci-lint run; echo "exit=$?"; git diff main --stat -- '*.go'` → builds, vet and lint clean (`0 issues.`, `exit=0`), diff empty. A `file requires newer Go version` panic means the wrong golangci-lint binary ran (Global Constraints); fix the command, never the code.
 - [ ] **Step 2: Image** — repeat Task 2 Steps 3 and 4 (build, inspect `65532:65532 /app`, arm64, hadolint, context check). Run the context check exactly as in Task 2 Step 4, both the red run (`.dockerignore` bypassed: non-zero `exit=`, dummy secrets path and `LEAK` printed) and the green run (`exit=0`, LEAK count `0`, CONTEXT_CLEAN count `>= 1`), with output redirected to a file and the exit status echoed, never piped. Remove temp files.
 - [ ] **Step 3: Compose smoke** — repeat Task 3 Steps 2 to 8 (including both negative checks, the `--retry-all-errors` curl, and cleanup). Record the recipe variant; record rootless Docker and Docker Desktop as "not run: no such runtime" and confirm `grep -ciE 'untested|unverified' docs/deployment/docker-compose.md` ≥ 1.
 - [ ] **Step 4: Docs** — `<DOCSCHECK>` passes as defined (exit 0, no warning lines; additionally `grep -cF 'does not contain an anchor' /tmp/dota_lobby_mkdocs.log` → `0`); `find site -path '*plans*' -o -path '*superpowers*' -o -path '*research*'` prints nothing; every `nav:` file exists (`grep -oE '[a-z/-]+\.md' mkdocs.yml | sed 's|^|docs/|' | xargs ls`); `grep -rn 'This page is being written' docs --exclude-dir=plans --exclude-dir=superpowers` empty. Also `NO_MKDOCS_2_WARNING=1 uvx --with mkdocs-material==9.8.0 mkdocs build --strict; echo "exit=$?"` as a cross-check (`exit=0`). `rm -rf site`.
-- [ ] **Step 5: actionlint** — `/home/kettle/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` → `OK`.
+- [ ] **Step 5: actionlint** — `~/.local/share/mise/installs/actionlint/1.7.12/actionlint && echo OK` → `OK`.
 - [ ] **Step 6: just** — from root: `just docs::build-local` → `site/` at root; `<GOENV> just go::build` → `bin/dota_lobby` at root; `just docs::build` if the daemon works. From `docs/`, with a real `cd` (not `env -C` / `just -d`; Global Constraints): `rm -rf site bin; ( cd docs && just docs::build-local ); echo "exit=$?"; ls site/index.html; ls docs/site 2>&1 # allow-cd` and `( cd docs && <GOENV> just go::build ); echo "exit=$?"; ls bin/dota_lobby; ls docs/bin 2>&1 # allow-cd` → `exit=0`, outputs at the repo root, nothing under `docs/`. `rm -rf site bin`; `git restore go.mod go.sum` if changed.
 - [ ] **Step 7: Example** — `grep -c '^ *- username' secrets.yaml.example` → `1`.
 - [ ] **Step 8: Docs accuracy pass** — anti-goal greps over `docs` (excluding `plans`, `superpowers`) and `README.md`:
