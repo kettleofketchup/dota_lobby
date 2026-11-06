@@ -104,7 +104,9 @@ account: it fails, is retried about every 5 seconds forever, and invites
 
 Now that both files are edited, apply the recipe for your container runtime from
 [File permissions](../deployment/docker-compose.md#file-permissions). Pick exactly one tab;
-the recipes are alternatives and must not be combined.
+the recipes are alternatives and must not be combined. If you are not sure which runtime you
+have (the `docker` command may really be Podman), run the checks under
+[Which runtime do I have?](../deployment/docker-compose.md#which-runtime-do-i-have) first.
 
 Some recipes make the files unwritable by you. To change them later (fix a password, add a
 bot, change `api_key`), follow the "Editing later" line in the same tab for your runtime, then
@@ -138,9 +140,12 @@ Check the startup lines before anything else:
 
 - `API key authentication enabled` must be **present** (you set `api_key` in step 3).
 - `WARNING: secrets.yaml not found - no bots will be configured` must be **absent**.
+- `WARNING: No bots configured in secrets.yaml` must be **absent**. It follows the
+  `not found` line when the file cannot be seen, so treat the two together as one problem.
 
-If you see `WARNING: API key authentication disabled - all endpoints are public` or the
-`secrets.yaml not found` warning while both files exist, the container cannot read the
+If you see `WARNING: API key authentication disabled - all endpoints are public`, the
+`secrets.yaml not found` warning, or `secrets.yaml not found` followed by
+`No bots configured in secrets.yaml`, while both files exist, the container cannot read the
 `config/` directory: that is a directory permission or SELinux mount problem. Stop the
 container and fix it using [File permissions](../deployment/docker-compose.md#file-permissions).
 
@@ -156,6 +161,14 @@ container and fix it using [File permissions](../deployment/docker-compose.md#fi
 
     and look the error up in [Troubleshooting](../operations/troubleshooting.md) before you
     start it again.
+
+!!! warning "`EResult_InvalidPassword` with the right password"
+
+    If the password is correct (you can log in with it in a Steam client) and the bot still
+    gets `EResult_InvalidPassword`, you have most likely hit the upstream login problem, not a
+    setup mistake: see item 5 in [Known limitations](../known-limitations.md) and
+    [go-dota2#78](https://github.com/paralin/go-dota2/issues/78). Everything up to that line
+    (config, permissions, network) is working.
 
 Press Ctrl+C to leave `docker compose logs -f`; the container keeps running.
 

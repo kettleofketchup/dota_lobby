@@ -3,7 +3,11 @@
 !!! warning "Read this before you create any Steam accounts"
 
     - **Steam login is reported to fail.** Login with the pinned go-steam library is reported
-      to fail against current Steam. This project has not verified that report either way.
+      to fail against current Steam with `EResult_InvalidPassword`, even with the right
+      password ([go-dota2#78](https://github.com/paralin/go-dota2/issues/78)). This project
+      has not verified that report with a real account. Expect about 10 minutes of account
+      setup before your first login attempt, and know that `InvalidPassword` at the end of it
+      may be this problem rather than a typo.
     - **Lobbies are not created.** `POST /lobby/create` is a placeholder; no Dota 2 lobby is
       made.
 

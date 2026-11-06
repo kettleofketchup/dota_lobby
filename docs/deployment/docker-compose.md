@@ -126,9 +126,11 @@ chmod 755 config
 
 A `700` directory, or an SELinux denial, does **not** produce an error. The service treats
 the files as missing and starts with defaults: API key authentication off and no bots. If
-you see `WARNING: secrets.yaml not found - no bots will be configured` or
+you see `WARNING: secrets.yaml not found - no bots will be configured` (followed by
+`WARNING: No bots configured in secrets.yaml`) or
 `WARNING: API key authentication disabled - all endpoints are public` while both files exist,
-this is the cause.
+this is the cause. Do not edit `secrets.yaml` in response to the `No bots configured` line
+here: the file is fine, the container just cannot see it.
 
 A readable directory with an unreadable file is fatal instead. `config.yaml` is read first, so
 the line you usually see is:
@@ -148,6 +150,24 @@ and the container restarts in a loop until the files are fixed.
       container cannot read the files, and you cannot either;
     - the rootful `DOTA_LOBBY_UID` override on **rootless Docker**: it runs the container as a
       UID that maps into your subuid range, which cannot read your files.
+
+### Which runtime do I have?
+
+The `docker` command is not always Docker: on many distributions it is Podman behind a
+compatibility wrapper. Run these checks before picking a tab:
+
+| Check | Result | Tab |
+|---|---|---|
+| `docker version` | the `Client:` line says `Podman Engine`, or `docker` is not installed and you use `podman` | **Rootless Podman** if `podman info --format '{{.Host.Security.Rootless}}'` prints `true`. If it prints `false` (Podman run as root), use **Rootful Docker** |
+| `docker info --format '{{.SecurityOptions}}'` | contains `name=rootless` | **Rootless Docker** |
+| `docker context ls` | the active context (marked `*`) is `desktop-linux`, or you are on macOS or Windows | **Docker Desktop** |
+| none of the above | Docker Engine, run as root (you usually need `sudo` or the `docker` group) | **Rootful Docker** |
+
+Work down the table and stop at the first match. The second check only works on real Docker;
+under Podman it fails with a template error, which is why the `docker version` check comes
+first. If `docker version` says Podman, do not use
+the Rootful Docker tab just because the command is called `docker`: its `sudo chown 65532`
+recipe locks you out of the files and the container still cannot read them.
 
 The optional lines below (`user:`, `userns_mode:`, the SELinux `:Z` mount) go in a file named
 `compose.override.yaml` next to `compose.yaml`. Compose merges it in automatically, and

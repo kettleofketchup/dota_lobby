@@ -152,8 +152,8 @@ restart.
 | Situation | Result |
 |---|---|
 | `config.yaml` missing | Defaults are used: `0.0.0.0:8080`, API key authentication **off** |
-| `secrets.yaml` missing | `WARNING: secrets.yaml not found - no bots will be configured` (printed without a timestamp), and the service runs with no bots |
-| `secrets.yaml` present but with no bot entries | `WARNING: No bots configured in secrets.yaml` |
+| `secrets.yaml` missing | Two warnings: `WARNING: secrets.yaml not found - no bots will be configured` (printed without a timestamp), then `WARNING: No bots configured in secrets.yaml`. The service runs with no bots |
+| `secrets.yaml` present but with no bot entries | Only `WARNING: No bots configured in secrets.yaml`, without the `not found` line |
 | Malformed YAML in either file | Fatal: the process exits with `Failed to load configuration: ...` |
 | Config **directory** not traversable by the service (mode `700`, or an SELinux denial) | Looks exactly like both files are missing: defaults, authentication off, no bots. Nothing says permission denied |
 | Directory traversable, but a **file** not readable by the service | Fatal, see below; the container restarts in a loop |
@@ -161,7 +161,8 @@ restart.
 
 !!! warning "Check the startup log every time"
 
-    If the files exist but the log shows `WARNING: secrets.yaml not found` or
+    If the files exist but the log shows `WARNING: secrets.yaml not found` (usually followed
+    by `WARNING: No bots configured in secrets.yaml`) or
     `WARNING: API key authentication disabled`, the service could not see into the config
     directory. That is a directory permission or SELinux mount problem, not a missing file.
     A healthy start logs `API key authentication enabled` (when `api_key` is set) and one

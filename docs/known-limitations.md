@@ -15,8 +15,15 @@ Steam, but it does not create lobbies yet. Read this list before you use real ac
    [Bot accounts](configuration/bot-accounts.md).
 5. **Login may fail for every account.** The pinned go-steam library uses the legacy password
    logon. Upstream reports say current Steam rejects it, answering `EResult_InvalidPassword`
-   even for correct credentials. This is reported, not verified by this project. If it
-   affects you, no configuration change helps; it needs a library upgrade (see the roadmap).
+   even for correct credentials
+   ([go-dota2#78](https://github.com/paralin/go-dota2/issues/78),
+   [go-steam#11](https://github.com/paralin/go-steam/pull/11)). This is reported, not verified
+   by this project with a real account. What has been checked: the container reaches a Steam
+   CM and completes the logon exchange (a test with a non-existent account got
+   `EResult_InvalidPassword` back), so the network path works. That answer looks the same as
+   the reported rejection, so a correct password that still gets `InvalidPassword` is most
+   likely this limitation. No configuration change helps; it needs a library upgrade (see the
+   roadmap).
 6. **Failed logins are retried forever.** A failed login (wrong password, Steam Guard, or the
    legacy-logon rejection) is retried about **every 5 seconds per bot, forever**. A 5 second
    and a 30 second timer both fire, so attempts can pile up. There is no backoff and no
@@ -32,7 +39,9 @@ Steam, but it does not create lobbies yet. Read this list before you use real ac
    then restarts it in a loop.
 9. **An unreadable config directory is not reported.** If the container cannot traverse
    `config/` (permissions or SELinux), the files are treated as missing: the service starts
-   with defaults, API key authentication **off**, and no bots, without an error. Check the
+   with defaults, API key authentication **off**, and no bots, without an error. The only
+   signs are the `secrets.yaml not found`, `No bots configured in secrets.yaml` and
+   `API key authentication disabled` warnings. Check the
    startup log before exposing the port; see
    [Troubleshooting](operations/troubleshooting.md).
 10. **Configuration comes from files only.** There are no environment variables, no

@@ -8,7 +8,11 @@ own bot accounts.
 !!! warning "Project status"
 
     - **Steam login is reported to fail.** Login with the pinned go-steam library is reported
-      to fail against current Steam. This project has not verified that report either way.
+      to fail against current Steam with `EResult_InvalidPassword`, even with the right
+      password ([go-dota2#78](https://github.com/paralin/go-dota2/issues/78)). This project
+      has not verified that report with a real account. Expect about 10 minutes of account
+      setup before your first login attempt, and know that `InvalidPassword` at the end of it
+      may be this problem rather than a typo.
     - **Lobby creation is not implemented yet.** `POST /lobby/create` is a placeholder and
       does not create a lobby.
 
