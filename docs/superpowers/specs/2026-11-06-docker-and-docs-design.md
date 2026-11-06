@@ -2,7 +2,7 @@
 
 Date: 2026-11-06
 Branch: `worktree-docker-and-docs` (based on `main`)
-Status: draft for review (revised after review round 1)
+Status: draft for review (revised after review rounds 1 and 2)
 
 ## 1. Intent and why
 
@@ -140,9 +140,10 @@ half may not be reachable with today's code, and how the docs handle that honest
 | `Dockerfile` | new | Multi-stage image for the service |
 | `.dockerignore` | new | Keeps secrets, git, docs and build output out of the context |
 | `compose.yaml` | new | Single-machine deployment that the docs lead with |
-| `secrets.yaml.example` | changed | Drop `sentry_hash`, add a comment that Steam Guard must be off (see 5.9) |
+| `secrets.yaml.example` | changed | One active bot entry (a second one commented out), drop `sentry_hash`, add a comment that Steam Guard must be off (see 5.9) |
 | `config.yaml.example` | changed (comment only) | Note that `host` must stay `0.0.0.0` inside a container |
-| `Dockerfile.docs` | new | `FROM squidfunk/mkdocs-material:9.8.0`, so the existing `just docs::serve` and `just docs::build` work unchanged |
+| `Dockerfile.docs` | new | `FROM squidfunk/mkdocs-material:9.8.0`, used by `just docs::serve` and `just docs::build` |
+| `just/docs.just`, `just/go.just` | changed | Run recipes from the repo root (see 5.10); today they run in `just/` and fail |
 | `pyproject.toml` + `uv.lock` | new | `uv run mkdocs` for `just docs::*-local` and CI |
 | `mkdocs.yml` | new | Site config |
 | `docs/**` | new pages | See 5.6 |
@@ -225,22 +226,48 @@ services:
     default with umask 022). A 0700 directory, or an SELinux denial, does **not** produce an
     error: Viper reports the files as missing and the service starts with no API key and no
     bots (see section 3). Each recipe therefore starts with `chmod 755 config`.
+  - **Scope: Linux hosts.** The recipes below are for Docker Engine or Podman on Linux, which
+    is what the docs test and recommend for a server. Docker Desktop (macOS/Windows) gets one
+    short tab, labelled **unverified**: bind mounts go through Docker Desktop's file sharing,
+    so no `chown` is needed (a `sudo chown 65532` would only lock you out of your own files);
+    keep the files owned by you, and on macOS keep them at `chmod 600`. Windows users are
+    pointed at WSL2 with the Linux recipes.
   - **Rootful Docker** (default Docker Engine install, no userns-remap): either
     `sudo chown 65532:65532 config/secrets.yaml config/config.yaml && sudo chmod 600 config/*.yaml`,
-    or keep the files owned by your user at 0600 and run the container as you:
-    `user: "${UID}:${GID}"` in Compose (export `UID`/`GID`, or put them in an `.env` next to
-    `compose.yaml`) / `--user "$(id -u):$(id -g)"` with `docker run`.
+    or keep the files owned by your user at 0600 and run the container as you. Do **not** use
+    `${UID}`/`${GID}` for this: in bash `UID` is a readonly, unexported shell variable and `GID`
+    does not exist, and in zsh assigning `UID` tries to change the process UID, so Compose would
+    get an empty or partial `user:`. Instead the docs show
+    `export DOTA_LOBBY_UID=$(id -u) DOTA_LOBBY_GID=$(id -g)` with
+    `user: "${DOTA_LOBBY_UID:?}:${DOTA_LOBBY_GID:?}"` in Compose (the `:?` makes Compose fail
+    loudly if they are unset), or `--user "$(id -u):$(id -g)"` with `docker run`.
+    `DOTA_LOBBY_UID`/`DOTA_LOBBY_GID` are Compose variables like `DOTA_LOBBY_TAG`, not app
+    settings, and the docs say so. No `.env` file is suggested (section 2 anti-goal).
   - **Rootless Podman** (pick one): `podman unshare chown 65532:65532 config/*.yaml` with the
     files at 0600; **or** keep the files user-owned at 0600 and map your user onto 65532 with
     `--userns=keep-id:uid=65532,gid=65532` (Compose: `userns_mode: "keep-id:uid=65532,gid=65532"`).
     Plain `--userns=keep-id` is not enough and is not documented.
-  - **Rootless Docker**: run the chown inside the rootless namespace (`rootlesskit` /
-    `nsenter`, per Docker's rootless docs), or use the `user:` override above.
+  - **Rootless Docker**: the rootful `user:` override above must **not** be used here. Under
+    rootless Docker only container UID 0 maps to your host user; container UID 1000 maps into
+    the subuid range, cannot read your 0600 files, and the service exits with
+    `Failed to load configuration: ... permission denied`. Pick one:
+    - chown through a throwaway container (its root is your user, so it can chown into the
+      subuid range), with the files at 0600 first:
+      `docker run --rm -v "$PWD/config:/c" busybox chown 65532:65532 /c/config.yaml /c/secrets.yaml`;
+      **or**
+    - keep the files user-owned at 0600 and run as container root, which is your unprivileged
+      host user: `user: "0:0"` in Compose / `--user 0:0` with `docker run`. `cap_drop: [ALL]`,
+      `read_only` and `no-new-privileges` still apply.
+
+    The docs label this tab **untested** unless the builder can actually run rootless Docker
+    (the acceptance host only has rootless Podman).
   - **SELinux hosts** (Fedora, RHEL, and Podman on them): mount with `:ro,Z`.
   - `chmod 644` is **not** a recommended option. If mentioned at all, it is labelled as making
     the Steam passwords readable by every local user.
   - `compose.yaml` itself stays as shown above; the `user:` / `userns_mode:` lines are shown in
-    the docs as optional additions, not committed defaults.
+    the docs as optional additions, not committed defaults. The "must not be combined" warning
+    names the two easy mistakes explicitly: a host `chown 65532` with a rootless runtime, and
+    the rootful `DOTA_LOBBY_UID` override on rootless Docker.
 - **Startup check before exposing anything.** After `docker compose up -d` the docs tell the
   user to confirm in `docker compose logs` that the log shows `API key authentication enabled`
   (when `api_key` is set) and does **not** show `WARNING: secrets.yaml not found`. Either
@@ -289,17 +316,17 @@ A real `/livez`, `/readyz` and a `healthcheck` subcommand go on the roadmap.
 |---|---|
 | `index.md` | What it is, a status admonition that says both: Steam login with the current go-steam library is **reported to fail** (unverified here), and lobby creation is not implemented yet; use throwaway accounts, start with one bot, see Known limitations. Then a mermaid diagram (Client → API → Bot manager → Steam CM → Dota 2 GC, with the GC edge marked "not yet"), quick links |
 | `getting-started/prerequisites.md` | Opens with a warning admonition, **before** any account step: login is reported to fail with the current library (unverified), lobbies are not created, so use throwaway accounts and start with one bot; link to Known limitations. Host needs (Docker + Compose v2, outbound TCP 27017 to Steam CMs from go-steam's built-in list, which can go stale; DNS; NTP). **Bot accounts:** dedicated, one per bot, Steam Guard **off**, owns Dota 2 / launched once, non-limited recommended, never logged in elsewhere at the same time |
-| `getting-started/quick-start.md` | The stranger's path. Step 0 gets the files: `git clone --branch vX.Y.Z --depth 1 https://github.com/kettleofketchup/dota_lobby.git` with the tag matching `DOTA_LOBBY_TAG` (before the first release: clone `main` and build locally). Then: `mkdir config && chmod 755 config`, copy the two examples into it, edit (configure **one** bot first), apply the permission recipe for your runtime (5.4), `docker compose up -d`, `docker compose logs -f` (with the real startup lines), the startup check from 5.4, `curl /health`, `curl /bots` (with the API key header if set), what success and failure look like. A warning: failed logins retry about every 5s per bot, forever; run `docker compose stop` at the first `Failed to log on:` line. An admonition: if the pull fails with `unauthorized` or `manifest unknown`, no public image exists yet, so build locally (link) |
+| `getting-started/quick-start.md` | The stranger's path. Step 0 picks a version: find the latest release on the GitHub Releases page (or `git ls-remote --tags https://github.com/kettleofketchup/dota_lobby.git`). One worked example is used consistently: `git clone --branch v1.2.3 --depth 1 https://github.com/kettleofketchup/dota_lobby.git` and `export DOTA_LOBBY_TAG=1.2.3`, with a note that **the image tag has no leading `v`** (`DOTA_LOBBY_TAG=v1.2.3` gives `manifest unknown`). Before the first release: clone `main` and build locally. Then: `mkdir config && chmod 755 config`, copy the two examples into it, edit the one bot entry (the example ships exactly one active bot; leave the commented second entry alone for now), confirm no placeholder is left with `grep -n your_steam config/secrets.yaml` (must print nothing; a leftover placeholder bot retries a fake logon every 5s forever and invites `RateLimitExceeded` on your IP), apply the permission recipe for your runtime (5.4), `docker compose up -d`, `docker compose logs -f` (with the real startup lines), the startup check from 5.4, `curl /health`, `curl /bots` (with the API key header if set), what success and failure look like. A warning: failed logins retry about every 5s per bot, forever; run `docker compose stop` at the first `Failed to log on:` line. An admonition: if the pull fails with `manifest unknown`, first check that `DOTA_LOBBY_TAG` has no `v`; if it still fails (or says `unauthorized`), no public image exists yet, so build locally (link) |
 | `configuration/index.md` | A reference for every key in both files: type, default, which file, required or not. `username` and `password` are **required for every bot entry** (an empty or misspelled key crashes the whole process). Search paths, and that `/app/config/` is the container path, which must be traversable (755). No env vars and no flags. Restart to apply. Missing-file behaviour, including that an unreadable directory looks like missing files. `host` must be `0.0.0.0` in containers. Leave `port` at 8080 in containers and remap the host side instead. `sentry_hash` is not supported |
 | `configuration/bot-accounts.md` | Opens with the same login-risk warning as prerequisites. Account setup in depth, Steam Guard (email codes and the mobile authenticator both break login), rate limits and lockout risk with the real cadence (a failed login retries about every 5s per bot, forever, and can pile up), start with one bot, the one-instance rule, weekly Steam maintenance (a bot whose reconnect dial fails stays down until restart) |
 | `deployment/docker-compose.md` | The compose file explained line by line, pinning `DOTA_LOBBY_TAG` to a version, upgrade flow (`pull` then `up -d`), logs, exposing beyond localhost with a reverse proxy (a short nginx or Caddy example), security hardening already in place |
-| `deployment/docker.md` | The equivalent `docker run` command (`--read-only --cap-drop ALL --security-opt no-new-privileges -v "$PWD/config:/app/config:ro" -p 127.0.0.1:8080:8080`), image tags, platforms, building the image locally |
-| `deployment/from-source.md` | Go 1.24+, `make build` or `just go::build`, running `./bin/dota_lobby` from a directory containing `config.yaml`/`secrets.yaml` or `config/` |
+| `deployment/docker.md` | The `docker run` command that matches `compose.yaml` setting for setting: `docker run -d --name dota_lobby --restart unless-stopped --stop-timeout 30 --log-opt max-size=10m --log-opt max-file=3 --read-only --cap-drop ALL --security-opt no-new-privileges -v "$PWD/config:/app/config:ro" -p 127.0.0.1:8080:8080 ghcr.io/kettleofketchup/dota_lobby:1.2.3`. Image tags (no leading `v`), platforms, building the image locally |
+| `deployment/from-source.md` | Go 1.24+, `make build` first (`just go::build` as an alternative, which relies on the 5.10 fix), running `./bin/dota_lobby` from a directory containing `config.yaml`/`secrets.yaml` or `config/` |
 | `api/index.md` | Written from `server.go`: auth headers, each endpoint with method, request, response and plain-text errors, placeholder warnings on the lobby endpoints, auth-before-method quirk, curl examples. Tabs for other languages are optional |
 | `operations/troubleshooting.md` | A table of real log lines, quoted exactly as printed (`[username]` prefix, full `EResult_` names), and their meaning or fix. Covers: `WARNING: secrets.yaml not found - no bots will be configured` and `WARNING: API key authentication disabled - all endpoints are public` **while the files exist** (config dir not traversable by 65532, or SELinux needs `:Z`); `WARNING: No bots configured in secrets.yaml`; `[user] Failed to log on: EResult_InvalidPassword` (wrong password, or the legacy-logon rejection in section 9); `[user] Failed to log on: EResult_AccountLogonDenied` (email Steam Guard on); `[user] Failed to log on: EResult_AccountLoginDeniedNeedTwoFactor` (mobile authenticator on); `[user] Failed to log on: EResult_RateLimitExceeded` (too many attempts; stop and wait); `[user] Logged off: EResult_LoggedInElsewhere` / `EResult_LogonSessionReplaced` (a second instance or a desktop login; these appear on the `Logged off:` line, not `Failed to log on:`); `Failed to load configuration: error reading secrets file: ... permission denied` (dir traversable, file not readable by 65532; apply the runtime recipe); a panic `Username must be set!` or `Password or LoginKey must be set!` with the container restarting in a loop (a bot entry has an empty or misspelled `username`/`password`); port unreachable (host is not `0.0.0.0`, the bind is localhost-only, or `server.port` no longer matches the container side of the mapping); `unauthorized` / `manifest unknown` on pull (package not public yet); `Added bot: X` or `[X] Disconnected from Steam` followed by no `[X] Connected to Steam` and `/bots` stuck at `false` (a TCP dial failed, which stops the bot silently; `docker compose restart`) |
 | `known-limitations.md` | The list in 5.8 plus a short roadmap |
 | `development/index.md` | Repo layout, `./dev`, `make`/`just` targets, lint, previewing docs locally (`just docs::serve` or `just docs::serve-local`), and that `docs/plans/` and `docs/superpowers/` are internal |
-| `development/releasing.md` | For maintainers and forks: tag `vX.Y.Z` → binary release + GHCR image. The one-time steps: make the GHCR package public, and set Settings → Pages → Source to "GitHub Actions" |
+| `development/releasing.md` | For maintainers and forks: tag `vX.Y.Z` → binary release + GHCR image `X.Y.Z` (no `v`). The one-time steps (same list as section 6a): set Settings → Pages → Source to "GitHub Actions" before the first push to main, and make the GHCR package public after the first tag |
 
 Writing rules: every command and log line in the docs must match main's code. Use admonitions
 for warnings. Write plain prose and don't overclaim (IMPLEMENTATION_SUMMARY.md is not a source
@@ -401,7 +428,10 @@ The roadmap section lists these future items briefly, without promising dates:
 
 ### 5.9 Example-file edits (our call, packaging only)
 
-- `secrets.yaml.example`: remove the `sentry_hash` lines and add a comment that Steam Guard
+- `secrets.yaml.example`: keep **exactly one active bot entry**; the second entry stays only
+  as a commented-out block showing how to add more bots. A second uncommented placeholder would
+  retry a fake logon every 5s forever (section 3) and risk `RateLimitExceeded` for the real bot
+  on the same IP. Remove the `sentry_hash` lines and add a comment that Steam Guard
   must be disabled (email codes and the mobile authenticator), that `username` and `password`
   are required for every entry, and that the file is read from `/app/config/` in the
   container. The struct field stays in Go; this is not a code change.
@@ -416,11 +446,24 @@ The roadmap section lists these future items briefly, without promising dates:
   `[tool.uv] package = false`. Commit `uv.lock`.
 - `Dockerfile.docs`: `FROM squidfunk/mkdocs-material:9.8.0`, nothing else. The existing
   recipes mount `$PWD` at `/docs` and the image's entrypoint is `mkdocs`.
-  - Note: `docker build -f Dockerfile.docs .` uses the repo as its context, so `.dockerignore`
+  - Note: `docker build -f Dockerfile.docs .` (run from the repo root, see below) uses the
+    repo as its context, so `.dockerignore`
     applies. That is harmless because nothing is copied.
-- `just/docs.just`: leave the recipes alone, apart from optionally adding `--strict` to the
-  build recipes (builder's call). No new just module for the service image (our call); the docs
-  use plain `docker`/`docker compose` commands, which strangers already know.
+- **Module recipes run in `just/`, not the repo root.** just runs a module's recipes from the
+  module file's directory (checked with just 1.49.0: `pwd` prints `<root>/just`, while
+  `env_var("PWD")` still returns the invocation directory). So today `docker build -f
+  Dockerfile.docs .`, `uv run mkdocs build|serve` (mkdocs looks for `mkdocs.yml` in the cwd)
+  and `go build ./cmd/dota_lobby` all resolve under `just/` and fail, and `go test ./...` and
+  `go fmt ./...` match no packages.
+- Fix in `just/docs.just` and `just/go.just` (tooling only, no Go change): prefix each recipe
+  command with `cd {{justfile_directory()}} &&` (inside a module, `justfile_directory()` is the
+  root justfile's directory), and replace `env_var("PWD")` with `justfile_directory()` in the
+  docs mount and in `BIN_DIR`. `[no-cd]` is an acceptable alternative but breaks when just is
+  invoked from a subdirectory. Do **not** use `[working-directory]` or `set working-directory`:
+  `./dev` pins just 1.36.0.
+- Optionally add `--strict` to the docs build recipes (builder's call). No new just module for
+  the service image (our call); the docs use plain `docker`/`docker compose` commands, which
+  strangers already know.
 
 ## 6. Acceptance verification
 
@@ -441,6 +484,8 @@ final report. Never fake a result.
    real or fake credentials, because a fake bot would hammer Steam.
    - Apply the **documented rootless Podman recipe** from 5.4 on this host (files at 0600),
      exactly as the docs state it, and record which variant was run.
+   - The rootless Docker and Docker Desktop recipes cannot be run on this host. Record them as
+     "not run: no such runtime" and check that the docs label those tabs untested/unverified.
    - Run `DOTA_LOBBY_TAG=local docker compose up -d`.
    - Logs show `Dota Lobby Manager v0.0.0-test` (one `v`), `API key authentication enabled`
      and `WARNING: No bots configured in secrets.yaml`, and do **not** show
@@ -457,12 +502,30 @@ final report. Never fake a result.
    `superpowers/` pages, and every nav page exists.
    `uvx --with mkdocs-material==9.8.0 mkdocs build --strict` is an acceptable fallback.
 5. `actionlint` passes on all workflows.
-6. **Docs accuracy pass:** a reviewer checks each command, path, key, endpoint and log line in
+6. **just recipes** run from the repo root and from a subdirectory (e.g. `cd docs && just
+   go::build`): `just docs::build-local` produces `site/`, `just go::build` produces
+   `bin/dota_lobby`, and `just docs::build` works if the daemon does. Remove `site/` and `bin/`
+   afterwards.
+7. `secrets.yaml.example` has exactly one uncommented bot entry
+   (`grep -c '^ *- username' secrets.yaml.example` prints `1`).
+8. **Docs accuracy pass:** a reviewer checks each command, path, key, endpoint and log line in
    `docs/` against main's source. It must find no PR #2 artefacts (grep for `DOTA_LOBBY_`
-   apart from `DOTA_LOBBY_TAG`, `internal/`, `--config`, `/etc/dota_lobby`, `/api/`,
-   `STEAM_API_KEY`).
-7. `git status` is clean, and nothing tracked matches `secrets.yaml`, `config.yaml`, `bin/` or
+   apart from the Compose variables `DOTA_LOBBY_TAG`, `DOTA_LOBBY_UID` and `DOTA_LOBBY_GID`,
+   `internal/`, `--config`, `/etc/dota_lobby`, `/api/`, `STEAM_API_KEY`, and any instruction to
+   create a `.env` file).
+9. `git status` is clean, and nothing tracked matches `secrets.yaml`, `config.yaml`, `bin/` or
    `dota_lobby`. Commit messages contain no AI attribution.
+
+### 6a. Manual repo settings (handoff to the user)
+
+`GITHUB_TOKEN` cannot change these. The repo currently has `has_pages: false` and no
+`github-pages` environment. The orchestrator must hand this list to the user, and the PR
+description must repeat it:
+
+1. **Before merging:** Settings → Pages → Build and deployment → Source = "GitHub Actions".
+   Without it, the first `docs.yml` run on `main` fails at `deploy-pages` and leaves a red run.
+2. **After the first `v*` tag:** on the GHCR package page, set visibility to Public (and link
+   it to the repo if it is not already). Until then strangers get `unauthorized` on pull.
 
 ## 7. Calls we made (review these)
 
@@ -471,8 +534,12 @@ final report. Never fake a result.
 - `/app/config/` as the single documented config mount, with `WORKDIR /app`
 - `compose.yaml`: image only, port bound to localhost, `read_only`, `cap_drop`, log rotation,
   a `DOTA_LOBBY_TAG` variable
-- per-runtime permission recipes (rootful `chown 65532` or `user:`; rootless Podman
-  `podman unshare chown` or `keep-id:uid=65532,gid=65532`), never `chmod 644`
+- per-runtime permission recipes for Linux hosts (rootful `chown 65532` or
+  `user: "${DOTA_LOBBY_UID:?}:${DOTA_LOBBY_GID:?}"`; rootless Podman `podman unshare chown` or
+  `keep-id:uid=65532,gid=65532`; rootless Docker busybox `chown` or `user: "0:0"`, untested),
+  a short unverified Docker Desktop note, never `chmod 644`
+- `secrets.yaml.example` ships exactly one active bot
+- just module recipes `cd` to the repo root before running
 - no healthcheck anywhere, documented external checks instead
 - a separate `container.yml`, with `release.yml` left untouched; PR builds without pushing in
   both workflows
