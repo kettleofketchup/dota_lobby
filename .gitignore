@@ -35,3 +35,11 @@ bin/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Docs build output and local Python env
+site/
+.venv/
+
+# Local binary and container config directory
+/dota_lobby
+/config/*.yaml

@@ -1,5 +1,12 @@
 server:
+  # Keep "0.0.0.0" when running in a container, or the API is unreachable
+  # from outside the container.
   host: "0.0.0.0"
+  # Leave 8080 in a container. To use another port, change the HOST side of the
+  # port mapping instead (for example 127.0.0.1:9000:8080). If you change this
+  # value anyway, the container side of the mapping must match it.
   port: 8080
-  # Optional: API key for authentication (recommended for production)
+  # API key for the protected endpoints. Strongly recommended whenever the port
+  # is reachable beyond localhost. Send it as "X-API-Key: <key>" or
+  # "Authorization: Bearer <key>".
   # api_key: "your-secret-api-key-here"
