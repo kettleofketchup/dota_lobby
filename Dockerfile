@@ -23,7 +23,8 @@ LABEL org.opencontainers.image.source="https://github.com/kettleofketchup/dota_l
       org.opencontainers.image.description="Dota 2 lobby service driven by Steam bot accounts" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=build /out/dota_lobby /usr/local/bin/dota_lobby
-# Config is read from /app/config/config.yaml and /app/config/secrets.yaml
+# Config is looked up relative to the working directory, so with WORKDIR /app
+# it lives at /app/config/config.yaml and /app/config/secrets.yaml.
 WORKDIR /app
 USER 65532:65532
 EXPOSE 8080

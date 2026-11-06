@@ -5,13 +5,15 @@ repo_url: https://github.com/kettleofketchup/dota_lobby
 repo_name: kettleofketchup/dota_lobby
 edit_uri: edit/main/docs/
 
-# Internal design notes stay in the repo but are not published.
+# Internal design notes are kept out of the published site; research/ is
+# excluded in advance and does not exist yet.
 exclude_docs: |
   plans/
   superpowers/
   research/
 
-# Make broken links and anchors warnings, so --strict fails on them.
+# Report omitted files, absolute or unrecognized links, and broken anchors as
+# warnings, so --strict fails on them.
 validation:
   omitted_files: warn
   absolute_links: warn
