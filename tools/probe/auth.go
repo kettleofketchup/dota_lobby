@@ -40,26 +40,59 @@ func steamTOTP(sharedSecret string, t time.Time) (string, error) {
 	return string(out), nil
 }
 
-// tokenPath is where a bot's refresh token is stored inside the state dir.
+// tokenPath is where a bot's refresh token is stored inside the state dir
+// when no -token-out is given.
 func tokenPath(stateDir string) string { return filepath.Join(stateDir, "refresh_token") }
 
-func loadToken(stateDir string) (string, error) {
-	b, err := os.ReadFile(tokenPath(stateDir))
+// loadToken prefers STEAM_REFRESH_TOKEN (set by `sops exec-env`), then the
+// plaintext file in the state dir.
+func loadToken(c *config) (string, error) {
+	if c.refreshToken != "" {
+		return c.refreshToken, nil
+	}
+	b, err := os.ReadFile(tokenPath(c.stateDir))
 	if err != nil {
-		return "", fmt.Errorf("read token (run `probe auth` first): %w", err)
+		return "", fmt.Errorf("no STEAM_REFRESH_TOKEN and no token file (run `probe auth` first): %w", err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }
 
-func saveToken(stateDir, token string) error {
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
+// saveToken writes to -token-out: "-" means stdout, so a caller can pipe it
+// straight into `sops set --value-stdin` and it never lands on disk in
+// plaintext. Without -token-out it goes to the state dir with mode 0600.
+func saveToken(c *config, token string) error {
+	switch c.tokenOut {
+	case "-":
+		_, err := fmt.Fprintln(os.Stdout, token)
+		return err
+	case "":
+		if err := os.MkdirAll(c.stateDir, 0o700); err != nil {
+			return fmt.Errorf("create state dir: %w", err)
+		}
+		return writeFileAtomic(tokenPath(c.stateDir), token)
+	default:
+		return writeFileAtomic(c.tokenOut, token)
 	}
-	tmp := tokenPath(stateDir) + ".tmp"
+}
+
+func writeFileAtomic(path, token string) error {
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(token+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write token: %w", err)
 	}
-	return os.Rename(tmp, tokenPath(stateDir))
+	return os.Rename(tmp, path)
+}
+
+// tokenDest describes where saveToken put the token, for the report.
+func tokenDest(c *config) string {
+	switch c.tokenOut {
+	case "":
+		return tokenPath(c.stateDir)
+	case "-":
+		return "stdout"
+	default:
+		return c.tokenOut
+	}
 }
 
 // jwtClaims decodes the unverified payload of a Steam JWT. Only used to
@@ -133,14 +166,14 @@ func cmdAuth(ctx context.Context, c *config, rep *reporter) error {
 		}
 		return fmt.Errorf("authenticate: %w", err)
 	}
-	if err := saveToken(c.stateDir, token); err != nil {
+	if err := saveToken(c, token); err != nil {
 		return err
 	}
 	rep.emit("Q1", "authenticate_ok", map[string]any{
 		"elapsed_ms": time.Since(start).Milliseconds(),
 		"used_totp":  c.sharedSecret != "" && c.guardCode == "",
 		"claims":     claimsSummary(token),
-		"token_file": tokenPath(c.stateDir),
+		"token_dest": tokenDest(c),
 	})
 	return nil
 }

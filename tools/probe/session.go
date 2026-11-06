@@ -155,7 +155,7 @@ func msgName(t uint32) string { return protocol.EDOTAGCMsg(t).String() }
 
 // connect logs in with the stored refresh token and waits for the GC welcome.
 func (s *session) connect(ctx context.Context) error {
-	token, err := loadToken(s.cfg.stateDir)
+	token, err := loadToken(s.cfg)
 	if err != nil {
 		return err
 	}

@@ -25,7 +25,7 @@ func cmdLogin(ctx context.Context, c *config, rep *reporter) error {
 	rep.emit("Q2", "game_account_client", map[string]any{"is_league_admin": admin, "cache_has_object": known})
 
 	if rn != nil {
-		token, err := loadToken(c.stateDir)
+		token, err := loadToken(c)
 		if err != nil {
 			return err
 		}
@@ -39,7 +39,7 @@ func cmdLogin(ctx context.Context, c *config, rep *reporter) error {
 			fields["issued_new_token"] = newToken != token
 			if newToken != token {
 				fields["new_claims"] = claimsSummary(newToken)
-				if err := saveToken(c.stateDir, newToken); err != nil {
+				if err := saveToken(c, newToken); err != nil {
 					return err
 				}
 			}

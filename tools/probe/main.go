@@ -18,6 +18,8 @@ type config struct {
 	pass         string
 	sharedSecret string
 	guardCode    string
+	refreshToken string
+	tokenOut     string
 	stateDir     string
 	verbose      bool
 	quiet        bool
@@ -46,7 +48,8 @@ commands:
   leagues   list leagues this account administers via 7633/7634 (Q2, Q18)
   create    create a lobby and record the GC's answer (Q4, Q6, Q7, Q19)
 
-env: STEAM_USER, STEAM_PASS (auth only), STEAM_SHARED_SECRET
+env: STEAM_USER, STEAM_PASS (auth only), STEAM_SHARED_SECRET,
+     STEAM_REFRESH_TOKEN (instead of the token file; set by sops exec-env)
 run "probe <command> -h" for flags`
 
 func main() {
@@ -70,6 +73,7 @@ func main() {
 		user:         os.Getenv("STEAM_USER"),
 		pass:         os.Getenv("STEAM_PASS"),
 		sharedSecret: os.Getenv("STEAM_SHARED_SECRET"),
+		refreshToken: os.Getenv("STEAM_REFRESH_TOKEN"),
 	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	fs.StringVar(&c.stateDir, "state", "", "state dir for token, captures and report (default probe-state/<user>)")
@@ -77,6 +81,10 @@ func main() {
 	fs.BoolVar(&c.quiet, "q", false, "hide raw GC traffic on stderr (still recorded)")
 	fs.DurationVar(&c.welcomeTimeout, "welcome-timeout", 90*time.Second, "time allowed to reach GC welcome")
 	fs.DurationVar(&c.replyTimeout, "reply-timeout", 10*time.Second, "time allowed for each GC reply")
+	switch cmd {
+	case "auth", "login":
+		fs.StringVar(&c.tokenOut, "token-out", "", `where to write a new refresh token: "-" for stdout (pipe into sops), a path, or empty for the state dir`)
+	}
 	switch cmd {
 	case "auth":
 		fs.StringVar(&c.guardCode, "guard-code", "", "Steam Guard code instead of generating one from STEAM_SHARED_SECRET")

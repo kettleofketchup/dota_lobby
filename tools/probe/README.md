@@ -15,20 +15,31 @@ go test ./...
 
 ## Credentials
 
+Use the just recipes. They keep credentials in local sops files encrypted with a repo-local age key, all
+git-ignored (see the plan's "Secrets" section):
+
+```bash
+just secrets init
+just secrets new-bot bot-a        # fill in STEAM_PASS and STEAM_SHARED_SECRET
+just probe auth bot-a             # token is stored in secrets/bots/bot-a.sops.yaml
+just probe run bot-a leagues
+```
+
 | Env | Used by |
 |---|---|
 | `STEAM_USER` | every command |
 | `STEAM_PASS` | `auth` only |
 | `STEAM_SHARED_SECRET` | `auth`, to generate the Steam Guard code (or pass `-guard-code`) |
+| `STEAM_REFRESH_TOKEN` | every command after `auth` |
 
-`auth` stores only the refresh token, in `probe-state/<user>/refresh_token` (mode 0600). Later commands log in
-with that token alone. `probe-state/` is git-ignored. Use dedicated bot accounts, and don't log the same account
-into a real client while the probe runs.
+Run by hand without `STEAM_REFRESH_TOKEN`, `auth` writes the token to `probe-state/<user>/refresh_token` (0600)
+and later commands read it from there. `-token-out -` prints it to stdout instead, which is what the recipes pipe
+into sops. Use dedicated bot accounts, and don't log the same account into a real client while the probe runs.
 
 ## Commands
 
 ```bash
-probe auth                                   # Q1: password + TOTP -> refresh token
+probe auth                                   # Q1: password + TOTP -> refresh token (just probe auth <bot>)
 probe login                                  # Q1: token login to GC welcome (run twice to test a restart)
 probe login -renew                           # Q12: CM token renewal
 probe leagues                                # Q2, Q18: 7633 via MakeRequest, raw with job, raw without

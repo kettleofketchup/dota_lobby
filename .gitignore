@@ -38,3 +38,8 @@ bin/
 
 # Probe tokens, captures and reports
 probe-state/
+
+# Local sops/age secrets: the key, the generated .sops.yaml and encrypted files stay on this machine
+.sops/
+.sops.yaml
+secrets/
