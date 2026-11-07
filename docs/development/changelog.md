@@ -15,10 +15,20 @@ new file with a unique name cannot do either.
 
 Path: `changelog.d/<section>/<slug>.md`, one file per section.
 
-- `<slug>` is your branch name with `/` turned into `-`: branch `fix/lobby-name` writes
-  `changelog.d/fixed/fix-lobby-name.md`. It must match `^[a-z0-9][a-z0-9._-]*$`.
-- A note added straight on `main` for an already-merged pull request uses `pr-<N>.md`.
-  Never `main.md`.
+- `<slug>` comes from your branch name: lowercase it, turn every run of characters other
+  than `a-z`, `0-9`, `.`, `_` and `-` (including `/`) into one `-`, and drop leading
+  non-alphanumerics and trailing `-` or `.`. Branch `fix/lobby-name` writes
+  `changelog.d/fixed/fix-lobby-name.md`; `Fix/Lobby_Name` gives `fix-lobby_name`;
+  `feature/#12-timeout` gives `feature-12-timeout`. The result must match
+  `^[a-z0-9][a-z0-9._-]*$`. To print the slug for the current branch:
+
+    ```bash
+    python3 just/changelog.py slug
+    ```
+
+- `main` has no slug, and `main.md` is never valid. A pull request opened from a fork's
+  `main`, or a note added on `main` for an already-merged pull request, uses `pr-<N>.md`
+  with the pull request number.
 
 | Section | Heading in the release | What goes in it |
 |---|---|---|
@@ -50,11 +60,20 @@ lobby:
 ```
 ````
 
-Check your fragments with the same command CI runs:
+`git add` the fragment, then run the command CI runs:
 
 ```bash
+git add changelog.d/
 just ci::changelog-check
 ```
+
+Locally it runs the fragment checks and the checker's tests. It also reads untracked files
+under `changelog.d/` and prints a note naming them, because CI only sees committed files. On
+a feature branch it then runs the pull request gates against `origin/main` as last fetched
+(run `git fetch origin` first): no `CHANGELOG.md` edit, no fragment a release already
+consumed, and a warning when the branch adds none. It cannot read pull request labels, so a
+`CHANGELOG.md` edit fails locally; if the pull request will carry `changelog:edit`, run it
+with `CHANGELOG_EDIT=1`. The run in CI has the final say.
 
 Only changes someone running the service would notice need a fragment. CI, test and chore
 work can skip it; the check then only warns.
@@ -62,7 +81,8 @@ work can skip it; the check then only warns.
 ## What CI checks
 
 The `changelog` workflow (`.github/workflows/changelog.yml`) runs `just ci::changelog-check`
-on every pull request and every push to `main`. Every run checks the fragment format, fails
+on every pull request and every push to `main`. Every run checks the fragment format and that
+`[Unreleased]` in `CHANGELOG.md` holds only the pointer comment, fails
 on a fragment that repeats a bullet or upgrading note that was already released, and runs the
 checker's own tests.
 

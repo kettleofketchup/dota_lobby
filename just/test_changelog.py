@@ -296,15 +296,72 @@ class CheckTests(RepoCase):
 
     def test_unknown_section_dir(self):
         self.repo.fragment("misc/a.md", "- X.\n")
-        self.expect_problem("changelog.d/misc/a.md:1: not a fragment")
+        self.expect_problem("changelog.d/misc/a.md:1: not a fragment: unknown section 'misc'; sections: upgrading,")
+
+    def test_unknown_section_suggests_the_closest(self):
+        self.repo.fragment("fix/a.md", "- X.\n")
+        self.expect_problem("unknown section 'fix' (did you mean 'fixed'?)")
 
     def test_stray_file_at_the_top(self):
         self.repo.fragment("notes.txt", "x\n")
-        self.expect_problem("changelog.d/notes.txt:1: not a fragment")
+        self.expect_problem("changelog.d/notes.txt:1: not a fragment: it must sit exactly at changelog.d/<section>/<slug>.md")
+
+    def test_section_named_file_at_the_top_suggests_the_directory(self):
+        self.repo.fragment("fixed.md", "- X.\n")
+        self.expect_problem("(did you mean changelog.d/fixed/<slug>.md?)")
 
     def test_bad_slug(self):
         self.repo.fragment("added/Feat_X.md", "- X.\n")
-        self.expect_problem("changelog.d/added/Feat_X.md:1: not a fragment")
+        self.expect_problem("changelog.d/added/Feat_X.md:1: not a fragment: slug 'Feat_X' must use only lowercase")
+        self.expect_problem("(try 'feat_x')")
+
+    def test_wrong_extension(self):
+        self.repo.fragment("added/a.txt", "- X.\n")
+        problems = self.repo.problems()
+        assert problems == ["changelog.d/added/a.txt:1: not a fragment: the file must end in .md"], problems
+
+    def test_every_wrong_part_is_named(self):
+        self.repo.fragment("fix/Fix-Lobby.md", "- X.\n")
+        self.expect_problem("unknown section 'fix' (did you mean 'fixed'?)")
+        self.expect_problem("slug 'Fix-Lobby' must use only lowercase")
+
+    def test_untracked_fragment_is_checked(self):
+        self.repo.write("changelog.d/fixed/a.md", "# Fixed\n", add=False)
+        self.expect_problem("changelog.d/fixed/a.md:1: a Fixed fragment must start with a '- ' bullet")
+        assert changelog.untracked(self.repo.root) == ["changelog.d/fixed/a.md"]
+
+    def test_untracked_fragment_is_not_consumed(self):
+        self.repo.write("changelog.d/fixed/a.md", "- A.\n", add=False)
+        self.expect_clean()
+        assert changelog.fragment_paths(self.repo.root) == []
+
+    def test_cli_notes_untracked_files(self):
+        self.repo.write("changelog.d/fixed/a.md", "- A.\n", add=False)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--root", str(self.repo.root), "check"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result
+        assert "note: checked 1 untracked file(s) (changelog.d/fixed/a.md); `git add` them" in result.stderr
+
+    def test_unreleased_must_hold_only_the_pointer(self):
+        self.repo.write("CHANGELOG.md", BASE_CHANGELOG.replace(POINTER, POINTER + "\n\n- Sneaked in."))
+        problems = self.repo.problems()
+        assert problems == [
+            "CHANGELOG.md:9: [Unreleased] must contain only the pointer comment; move these lines into "
+            "changelog.d/<section>/<slug>.md (see changelog.d/README.md). The changelog:edit label "
+            "does not cover [Unreleased]."
+        ], problems
+
+    def test_empty_unreleased_is_clean(self):
+        self.repo.write("CHANGELOG.md", BASE_CHANGELOG.replace(POINTER + "\n", ""))
+        self.expect_clean()
+
+    def test_missing_unreleased_heading(self):
+        self.repo.write("CHANGELOG.md", BASE_CHANGELOG.replace("## [Unreleased]", "## Pending"))
+        self.expect_problem("CHANGELOG.md:1: no '## [Unreleased]' heading")
 
     def test_tracked_but_deleted_fragment(self):
         self.repo.fragment("added/a.md", "- A.\n").unlink()
@@ -315,12 +372,15 @@ class CheckTests(RepoCase):
         problems = self.repo.problems()
         assert len(problems) == 1 and problems[0].startswith("changelog.d/sections.json:1: unreadable ("), problems
 
-    def test_enumerates_tracked_files_only(self):
+    def test_ignored_files_are_skipped(self):
         self.repo.write(".gitignore", "*~\n")
         self.repo.write("changelog.d/added/x.md~", "junk\n", add=False)
-        self.repo.write("changelog.d/added/untracked.txt", "junk\n", add=False)
         self.expect_clean()
         assert changelog.fragment_paths(self.repo.root) == []
+
+    def test_untracked_non_fragment_is_reported(self):
+        self.repo.write("changelog.d/added/untracked.txt", "junk\n", add=False)
+        self.expect_problem("changelog.d/added/untracked.txt:1: not a fragment")
 
     def test_cli_exits_1_and_prints_problems(self):
         self.repo.fragment("added/a.md", "Prose.\n")
@@ -347,7 +407,9 @@ class ResurrectionTests(RepoCase):
             BASE_CHANGELOG.replace(f"{POINTER}\n", f"{POINTER}\n\n### Changed\n\n- **Unreleased only.** Note.\n"),
         )
         self.repo.fragment("changed/new.md", "- **Unreleased only.** Note.\n")
-        self.expect_clean()
+        problems = self.repo.problems()
+        # Only the [Unreleased]-is-pointer-only rule fires, not resurrection.
+        assert len(problems) == 1 and problems[0].startswith("CHANGELOG.md:9: [Unreleased] must"), problems
 
     def test_a_whole_consumed_prose_fragment_fails(self):
         self.repo.fragment(
@@ -431,6 +493,43 @@ class HasLabelTests(unittest.TestCase):
             assert not changelog.has_label("changelog:edit", env)
         assert "no GH_TOKEN" in err.getvalue()
 
+    def test_outside_a_pull_request_assumes_no_label(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            assert not changelog.has_label("changelog:edit", {})
+            push = Path(self.tmp.name) / "push.json"
+            push.write_text(json.dumps({"ref": "refs/heads/main"}))
+            assert not changelog.has_label("changelog:edit", {"GITHUB_EVENT_PATH": str(push)})
+        assert "not in a pull_request event; assuming no label" in err.getvalue()
+
+
+class SlugTests(unittest.TestCase):
+    def test_slugify(self):
+        cases = {
+            "changelog-fragments": "changelog-fragments",
+            "fix/lobby-name": "fix-lobby-name",
+            "Fix/Lobby_Name": "fix-lobby_name",
+            "feature/#12-timeout": "feature-12-timeout",
+            "user@fork/fix": "user-fork-fix",
+            "_wip/x+y": "wip-x-y",
+            "release/1.2.": "release-1.2",
+        }
+        for branch, slug in cases.items():
+            assert changelog.slugify(branch) == slug, (branch, changelog.slugify(branch))
+            assert changelog.SLUG.match(slug), slug
+
+    def test_main_has_no_slug(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            assert changelog.main(["slug", "main"]) == 1
+        assert "pr-<N>.md" in err.getvalue()
+
+    def test_cli_prints_the_slug(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            assert changelog.main(["slug", "Fix/Lobby_Name"]) == 0
+        assert out.getvalue() == "fix-lobby_name\n"
+
 
 class _Forbidden(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
@@ -465,15 +564,16 @@ class HasLabelApiErrorTests(unittest.TestCase):
 
 
 class CommittedRepoTests(unittest.TestCase):
+    # Thin wrappers: `changelog.py check` reports the same problems with file and line.
     def test_unreleased_body_is_only_the_pointer(self):
-        text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        body = text.split("## [Unreleased]\n", 1)[1].split("\n## [", 1)[0]
-        assert body.strip() == POINTER
+        problems = changelog._check_unreleased((REPO / "CHANGELOG.md").read_text(encoding="utf-8"))
+        assert problems == [], "\n".join(problems)
 
     def test_committed_fragments_pass_check(self):
         if not shutil.which("git") or not (REPO / ".git").exists():
             self.skipTest("not a git checkout")
-        assert changelog.check(REPO) == []
+        problems = changelog.check(REPO)
+        assert problems == [], "\n".join(problems)
 
 
 if __name__ == "__main__":

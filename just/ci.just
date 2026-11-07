@@ -1,10 +1,12 @@
 # CI checks (module: ci::). .github/workflows/changelog.yml and release.yml call these, and
 # they run locally too. Each recipe works from the repository root.
 
-# Changelog fragments gate. On every event: fragment rules and the checker's tests. On a
-# pull_request: CHANGELOG.md untouched (unless labelled changelog:edit), no fragment a
-# release already consumed, and a warning when the PR adds none. Any other event (a push to
-# main, or a local run): HEAD must not hand-edit CHANGELOG.md. Host python3, stdlib only.
+# Changelog fragments gate. Every run: fragment rules and the checker's tests. A
+# pull_request, or a local run on a branch other than main: CHANGELOG.md untouched since the
+# merge base (unless labelled changelog:edit), no fragment a release already consumed, and a
+# warning when none is added. A push to main (or a local run on main): HEAD must not
+# hand-edit CHANGELOG.md. Every gate runs and reports before the recipe fails. Host python3,
+# stdlib only.
 
 # Changelog fragments gate (what CI runs)
 [group('ci')]
@@ -12,10 +14,19 @@ changelog-check:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
-    python3 just/changelog.py check
-    python3 just/test_changelog.py
+    fail=0
+    python3 just/changelog.py check || fail=1
+    python3 just/test_changelog.py || fail=1
     event="${GITHUB_EVENT_NAME:-}"
-    if [ "$event" != "pull_request" ]; then
+    branch="$(git branch --show-current)"
+    mode=push
+    if [ "$event" = "pull_request" ]; then
+        mode=pr
+    elif [ -z "$event" ] && [ -n "$branch" ] && [ "$branch" != "main" ]; then
+        mode=local
+    fi
+
+    if [ "$mode" = "push" ]; then
         # A direct push that hand-edits CHANGELOG.md skips the PR gate. Exempt: release
         # commits, squash merges ("(#N)" subject) and merge commits (two or more parents);
         # the PR behind the last two was already gated. Only HEAD is checked.
@@ -26,29 +37,56 @@ changelog-check:
             && git rev-parse -q --verify HEAD~1 >/dev/null \
             && ! git diff --quiet HEAD~1 HEAD -- CHANGELOG.md; then
             echo "::error file=CHANGELOG.md::$(git rev-parse --short HEAD) edits CHANGELOG.md outside a release commit. Backfill notes go in changelog.d/<section>/pr-<N>.md."
-            exit 1
+            fail=1
         fi
-        echo "event '${event:-none}': fragment checks only"; exit 0
+        echo "event '${event:-none}' on '${branch:-detached HEAD}': fragment checks and the HEAD commit only"
+        exit "$fail"
     fi
-    base="$(scripts/ci-merge-base.sh)" || exit 1
+
+    if [ "$mode" = "pr" ]; then
+        base="$(scripts/ci-merge-base.sh)" || exit 1
+    else
+        # Local run on a feature branch: the same gates a pull request gets, against
+        # origin/main as last fetched. The PR's labels cannot be read from here.
+        if ! base="$(git merge-base HEAD origin/main 2>/dev/null)"; then
+            echo "::warning::no merge base with origin/main (run git fetch origin); skipping the pull-request gates"
+            exit "$fail"
+        fi
+        if slug="$(python3 just/changelog.py slug "$branch" 2>/dev/null)"; then
+            echo "Local run on '${branch}': fragments from this branch are changelog.d/<section>/${slug}.md"
+        fi
+    fi
     echo "Comparing $(git rev-parse --short HEAD) against merge base $(git rev-parse --short "$base")"
-    fail=0
 
     if ! git diff --quiet "$base" HEAD -- CHANGELOG.md; then
-        # Read live, not from the frozen event payload, so a re-run sees a label added later.
-        rc=0; python3 just/changelog.py has-label changelog:edit || rc=$?
-        if [ "$rc" -eq 0 ]; then
-            echo "CHANGELOG.md edit allowed by the changelog:edit label"
-        elif [ "$rc" -ne 1 ]; then
-            echo "::error file=CHANGELOG.md::could not read PR labels (exit $rc); re-run the changelog job."
-            fail=1
+        if [ "$mode" = "local" ]; then
+            if [ "${CHANGELOG_EDIT:-}" = "1" ]; then
+                echo "::notice file=CHANGELOG.md::This branch edits CHANGELOG.md; CHANGELOG_EDIT=1 says the PR will carry the changelog:edit label, which CI checks."
+            else
+                echo "::error file=CHANGELOG.md::This branch edits CHANGELOG.md, so CI will fail its PR. Move the new bullets into changelog.d/<section>/<branch-slug>.md (see changelog.d/README.md) and revert the CHANGELOG.md hunk. A deliberate correction to a released section needs the changelog:edit label on the PR; rerun with CHANGELOG_EDIT=1 to check the rest locally."
+                fail=1
+            fi
         else
-            echo "::error file=CHANGELOG.md::This PR edits CHANGELOG.md. Move the new bullets into changelog.d/<section>/<branch-slug>.md (see changelog.d/README.md) and revert the CHANGELOG.md hunk. A deliberate correction to a released section: add the changelog:edit label, then re-run the failed changelog job."
-            fail=1
+            # Read live, not from the frozen event payload, so a re-run sees a label added later.
+            rc=0; python3 just/changelog.py has-label changelog:edit || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                echo "CHANGELOG.md edit allowed by the changelog:edit label"
+            elif [ "$rc" -ne 1 ]; then
+                echo "::error file=CHANGELOG.md::could not read PR labels (exit $rc); re-run the changelog job."
+                fail=1
+            else
+                echo "::error file=CHANGELOG.md::This PR edits CHANGELOG.md. Move the new bullets into changelog.d/<section>/<branch-slug>.md (see changelog.d/README.md) and revert the CHANGELOG.md hunk. A deliberate correction to a released section: add the changelog:edit label, then re-run the failed changelog job."
+                fail=1
+            fi
         fi
     fi
 
     mapfile -d '' -t added < <(git diff -z --name-only --diff-filter=A "$base" HEAD -- 'changelog.d/*/*.md')
+    if [ "$mode" = "local" ]; then
+        # Not yet committed (staged or untracked) fragments count locally as added too.
+        mapfile -d '' -t pending < <({ git diff -z --cached --name-only --diff-filter=A -- 'changelog.d/*/*.md'; git ls-files -z --others --exclude-standard -- 'changelog.d/*/*.md'; })
+        added+=(${pending[@]+"${pending[@]}"})
+    fi
     for path in ${added[@]+"${added[@]}"}; do
         hit="$(git log -n 1 --diff-filter=D --format='%H %s' --grep='^chore(release): v' "$base" -- "$path")"
         if [ -n "$hit" ]; then

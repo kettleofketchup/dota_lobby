@@ -4,6 +4,7 @@
     just/changelog.py check                   # every fragment rule; exit 1 on any problem
     just/changelog.py assemble VERSION DATE   # write ## [VERSION] - DATE, print consumed paths
     just/changelog.py has-label NAME          # exit 0 if the PR carries NAME, 1 if not, 2 on API error
+    just/changelog.py slug [BRANCH]           # print the fragment slug for BRANCH (default: current)
 
 PRs add files under changelog.d/<section>/ and never edit CHANGELOG.md, so a branch that
 merges after a release cannot drop its notes under the released version. Stdlib only;
@@ -11,6 +12,7 @@ tests in test_changelog.py.
 """
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -31,6 +33,8 @@ RELEASE_HEADING = re.compile(r"^## \[([^\]]+)\]")
 SUB_HEADING = re.compile(r"^### (.+?)\s*$")
 LINK_DEFINITION = re.compile(r"^\[[^\]]+\]:\s")
 FENCE = re.compile(r"^\s*(```|~~~)")
+UNRELEASED = re.compile(r"^## \[Unreleased\][^\n]*\n", re.M)
+NO_SLUG_BRANCHES = ("main", "master")
 
 
 class ChangelogError(Exception):
@@ -42,24 +46,94 @@ def sections(root: Path) -> list:
 
 
 def fragment_paths(root: Path) -> list:
-    """Tracked fragment paths. git ls-files, not a walk: ignored debris must not count."""
+    """Tracked fragment paths: the ones a release consumes and `git rm`s."""
     root = Path(root)
     known = {s["dir"] for s in sections(root)}
     return sorted(p for p in _tracked(root) if _is_fragment(p, known))
 
 
-def _tracked(root: Path) -> list:
+def _ls_files(root: Path, *args: str) -> list:
+    """git ls-files, not a walk: ignored debris (editor backups) must not count."""
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--", FRAGMENT_DIR],
+        ["git", "-C", str(root), "ls-files", "-z", *args, "--", FRAGMENT_DIR],
         check=True,
         capture_output=True,
     ).stdout
     return [p for p in out.decode().split("\0") if p]
 
 
+def _tracked(root: Path) -> list:
+    return _ls_files(root)
+
+
+def untracked(root: Path) -> list:
+    """Files under changelog.d/ that are neither tracked nor ignored, such as a fragment not
+    yet `git add`ed. check() reads them too, so a local run cannot pass on a file CI rejects."""
+    return sorted(_ls_files(Path(root), "--others", "--exclude-standard"))
+
+
+def slugify(branch: str) -> str:
+    """Branch name to fragment slug: lowercase, every run of characters outside [a-z0-9._-]
+    (including '/') becomes one '-', leading non-alphanumerics and trailing '-'/'.' dropped."""
+    slug = re.sub(r"[^a-z0-9._-]+", "-", branch.lower())
+    slug = re.sub(r"-{2,}", "-", slug)
+    return re.sub(r"^[^a-z0-9]+", "", slug).rstrip("-.")
+
+
 def _is_fragment(path: str, known: set) -> bool:
     parts = path.split("/")
     return len(parts) == 3 and parts[1] in known and parts[2].endswith(".md") and bool(SLUG.match(parts[2][:-3]))
+
+
+def _not_a_fragment(path: str, by_dir: dict) -> str:
+    """Say which part of the path is wrong, not just the template."""
+    names = ", ".join(by_dir)
+    parts = path.split("/")
+    if len(parts) != 3:
+        stem = parts[-1][:-3] if parts[-1].endswith(".md") else parts[-1]
+        hint = f" (did you mean {FRAGMENT_DIR}/{stem}/<slug>.md?)" if len(parts) == 2 and stem in by_dir else ""
+        return (
+            f"{path}:1: not a fragment: it must sit exactly at {FRAGMENT_DIR}/<section>/<slug>.md{hint}; "
+            f"sections: {names}"
+        )
+    section, name = parts[1], parts[2]
+    reasons = []
+    if section not in by_dir:
+        guess = difflib.get_close_matches(section, list(by_dir), n=1)
+        maybe = f" (did you mean '{guess[0]}'?)" if guess else ""
+        reasons.append(f"unknown section '{section}'{maybe}; sections: {names}")
+    if name.endswith(".md"):
+        slug = name[:-3]
+    else:
+        slug = name.rsplit(".", 1)[0] if "." in name[1:] else name
+        reasons.append("the file must end in .md")
+    if not SLUG.match(slug):
+        suggestion = slugify(slug)
+        maybe = f" (try '{suggestion}')" if suggestion else ""
+        reasons.append(
+            f"slug '{slug}' must use only lowercase letters, digits, '.', '_' and '-', "
+            f"starting with a letter or digit{maybe}"
+        )
+    return f"{path}:1: not a fragment: " + "; ".join(reasons)
+
+
+def _check_unreleased(text: str) -> list:
+    """[Unreleased] holds only the pointer comment. A release refuses to discard anything
+    else there, and notes left there would end up under whichever version ships next."""
+    match = UNRELEASED.search(text)
+    if not match:
+        return ["CHANGELOG.md:1: no '## [Unreleased]' heading"]
+    first = text.count("\n", 0, match.end()) + 1
+    for n, line in enumerate(text[match.end() :].splitlines(), first):
+        if line.startswith("## ["):
+            break
+        if line.strip() and line.strip() != POINTER:
+            return [
+                f"CHANGELOG.md:{n}: [Unreleased] must contain only the pointer comment; move these lines "
+                f"into {FRAGMENT_DIR}/<section>/<slug>.md (see {FRAGMENT_DIR}/README.md). The "
+                "changelog:edit label does not cover [Unreleased]."
+            ]
+    return []
 
 
 def _drop_fences(lines: list) -> list:
@@ -177,17 +251,14 @@ def check(root: Path) -> list:
     except (OSError, ValueError) as exc:
         return [f"{FRAGMENT_DIR}/sections.json:1: unreadable ({exc})"]
     by_dir = {s["dir"]: s for s in config}
-    history = released((root / "CHANGELOG.md").read_text(encoding="utf-8"))
-    problems = []
-    for path in sorted(_tracked(root)):
+    text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    history = released(text)
+    problems = _check_unreleased(text)
+    for path in sorted(set(_tracked(root)) | set(untracked(root))):
         if path in (f"{FRAGMENT_DIR}/sections.json", f"{FRAGMENT_DIR}/README.md"):
             continue
         if not _is_fragment(path, set(by_dir)):
-            problems.append(
-                f"{path}:1: not a fragment; use {FRAGMENT_DIR}/<section>/<slug>.md, sections: "
-                + ", ".join(by_dir)
-                + ", slug ^[a-z0-9][a-z0-9._-]*$"
-            )
+            problems.append(_not_a_fragment(path, by_dir))
             continue
         full = root / path
         if not full.exists():
@@ -248,8 +319,12 @@ def assemble(root: Path, version: str, date: str) -> list:
 
 def has_label(name: str, env=os.environ) -> bool:
     """Read the PR's labels live, so a re-run after labelling sees the new label."""
-    event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-    pr = event["pull_request"]
+    event_path = env.get("GITHUB_EVENT_PATH")
+    event = json.loads(Path(event_path).read_text(encoding="utf-8")) if event_path else {}
+    pr = event.get("pull_request")
+    if not pr:
+        print("has-label: not in a pull_request event; assuming no label", file=sys.stderr)
+        return False
     token = env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
     if not token:
         print("has-label: no GH_TOKEN; using the event payload's labels (frozen at trigger time)", file=sys.stderr)
@@ -266,6 +341,23 @@ def has_label(name: str, env=os.environ) -> bool:
     return any(label["name"] == name for label in labels)
 
 
+def _print_slug(root: Path, branch) -> int:
+    if branch is None:
+        branch = subprocess.run(
+            ["git", "-C", str(root), "branch", "--show-current"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+    slug = slugify(branch)
+    if not slug or slug in NO_SLUG_BRANCHES:
+        print(
+            f"slug: branch '{branch or '(detached HEAD)'}' has no fragment slug; name the file "
+            "pr-<N>.md after the pull request number instead",
+            file=sys.stderr,
+        )
+        return 1
+    print(slug)
+    return 0
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -276,6 +368,8 @@ def main(argv: list) -> int:
     asm.add_argument("date")
     lab = sub.add_parser("has-label")
     lab.add_argument("name")
+    slg = sub.add_parser("slug")
+    slg.add_argument("branch", nargs="?")
     args = parser.parse_args(argv)
 
     try:
@@ -285,7 +379,16 @@ def main(argv: list) -> int:
                 print(problem)
             if problems:
                 print(f"{len(problems)} changelog fragment problem(s); see {FRAGMENT_DIR}/README.md", file=sys.stderr)
+            loose = untracked(args.root)
+            if loose:
+                print(
+                    f"note: checked {len(loose)} untracked file(s) ({', '.join(loose)}); "
+                    "`git add` them or CI will not see them",
+                    file=sys.stderr,
+                )
             return 1 if problems else 0
+        if args.cmd == "slug":
+            return _print_slug(args.root, args.branch)
         if args.cmd == "assemble":
             for path in assemble(args.root, args.version, args.date):
                 print(path)
