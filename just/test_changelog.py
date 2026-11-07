@@ -207,6 +207,20 @@ class AssembleTests(RepoCase):
         refused(lambda: changelog.assemble(self.repo.root, "0.3.0", "2026-10-03"), "fails check")
         assert self.repo.text() == before
 
+    def test_release_notes_awk_finds_the_new_section(self):
+        self.repo.fragment("added/a.md", "- A feature.\n")
+        changelog.assemble(self.repo.root, "0.3.0", "2026-10-03")
+        recipe = (REPO / "just" / "ci.just").read_text(encoding="utf-8")
+        program = re.search(r"awk -v ver=\"\$version\" '(.*?)' CHANGELOG\.md", recipe, re.S).group(1)
+        out = subprocess.run(
+            ["awk", "-v", "ver=0.3.0", program, "CHANGELOG.md"],
+            cwd=self.repo.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert out.strip() == "### Added\n\n- A feature."
+
     def test_empty_unreleased_body_is_accepted(self):
         self.repo.write("CHANGELOG.md", BASE_CHANGELOG.replace(f"{POINTER}\n\n", ""))
         self.repo.fragment("added/a.md", "- A feature.\n")
