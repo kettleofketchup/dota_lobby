@@ -50,7 +50,7 @@ here as `[user]`.
 | Port unreachable (`curl` cannot connect) | `server.host` is not `0.0.0.0`, the port is published on `127.0.0.1` only and you are connecting from another machine, or `server.port` no longer matches the container side of the port mapping | Keep `host: "0.0.0.0"` and `port: 8080` in the container, remap the host side instead, see [Changing the port](../deployment/docker-compose.md#changing-the-port) |
 | `Failed to start API server: ...` | The listener could not start, for example the port is already in use when running from source | Free the port or change `server.port` |
 | `manifest unknown` on `docker compose pull` / `up` | The image tag does not exist. Most often `DOTA_LOBBY_TAG` (a Compose variable, not an app setting) has a leading `v` (`v1.2.3` instead of `1.2.3`) | Use the tag without `v`. If it still fails, no public image exists for that version yet: [build it locally](../deployment/docker.md#build-the-image-locally) |
-| `unauthorized` (or `denied`) on pull | The image package is not public yet | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
+| `unauthorized` (or `denied`) on pull | The image package is private. This happens with a fork whose repository is private, or before a maintainer has made the package public | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
 | `401` with `Unauthorized: Invalid or missing API key` | The API key header is missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>`, see [API](../api/index.md#authentication) |
 
 !!! note "`/health` is not a readiness signal"
