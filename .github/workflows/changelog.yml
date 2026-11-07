@@ -1,0 +1,30 @@
+name: Changelog
+
+on:
+  push:
+    branches: [main]
+  # Not `labeled`: after adding changelog:edit, re-run the failed job.
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0: the gate diffs against the merge base and reads release history.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: 1.49.0
+      - name: Changelog fragments gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: just ci::changelog-check
