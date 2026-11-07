@@ -20,9 +20,13 @@ state_dir: /var/lib/dota_lobby
 
 # Optional: one decrypted credentials file per bot, named <bot>.yaml (or
 # .yml, .json, .env). Point it at a tmpfs filled from the sops files, e.g.
+#   umask 077   # the files hold passwords and shared secrets: owner-only
+#   install -d -m 0700 /run/dota_lobby/creds
 #   for f in secrets/bots/*.sops.yaml; do
 #     sops decrypt "$f" > "/run/dota_lobby/creds/$(basename "$f" .sops.yaml).yaml"
 #   done
+# Quote secret values in the sops files (STEAM_PASS: "0123"); an unquoted
+# number is rejected at startup rather than silently rewritten.
 # With no bots list below, every file there becomes a bot.
 # credentials_dir: /run/dota_lobby/creds
 
@@ -39,6 +43,7 @@ steam:
   reconnect_backoff_max: 5m
   cooldown_rate_limited: 30m
   cooldown_elsewhere: 10m
+  totp_skew: 0s            # Steam clock minus host clock; keep the host on NTP
 
 gc:
   hello_interval: 10s

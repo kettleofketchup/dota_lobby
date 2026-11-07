@@ -33,6 +33,9 @@ type Bots interface {
 	Statuses() []bot.Status
 	// Stalled names the bots whose run loop has not moved for maxAge.
 	Stalled(maxAge time.Duration) []string
+	// Retry asks a bot in needs_attention, backoff or cooling_down to try
+	// again now; false means no such bot.
+	Retry(name string) bool
 }
 
 // Options configures a Server.
@@ -142,6 +145,7 @@ func (s *Server) routes() http.Handler {
 
 	r.handle("GET /v1/bots", s.authed(s.handleBots))
 	r.handle("GET /v1/bots/{name}", s.authed(s.handleBot))
+	r.handle("POST /v1/bots/{name}/retry", s.authed(s.handleBotRetry))
 
 	// Lobbies arrive in Phase 3.
 	r.handle("/v1/lobbies", s.authed(notImplemented))
@@ -277,3 +281,4 @@ type noBots struct{}
 
 func (noBots) Statuses() []bot.Status         { return nil }
 func (noBots) Stalled(time.Duration) []string { return nil }
+func (noBots) Retry(string) bool              { return false }

@@ -10,7 +10,10 @@ import (
 // the process serves and that no bot loop is wedged.
 func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
 	if stalled := s.opts.Bots.Stalled(s.opts.WatchdogMaxAge); len(stalled) > 0 {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "stalled", "stalled_bots": stalled})
+		// /livez is open, so it reports a count; names stay behind /v1/bots
+		// and in the log.
+		s.log.Error("bot run loop stalled", "bots", stalled)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "stalled", "stalled_bots": len(stalled)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})

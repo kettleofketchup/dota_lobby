@@ -85,3 +85,16 @@ func (s *Server) handleBot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeError(w, http.StatusNotFound, "not_found", "no bot named "+strconv.Quote(name))
 }
+
+// handleBotRetry is the operator's way out of needs_attention (plan §4.1),
+// e.g. after `dota_lobby auth --bot <name> --force` stored a new token or a
+// password was fixed. It is a no-op for a bot that is not waiting.
+func (s *Server) handleBotRetry(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.opts.Bots.Retry(name) {
+		writeError(w, http.StatusNotFound, "not_found", "no bot named "+strconv.Quote(name))
+		return
+	}
+	s.log.Info("bot retry requested", "bot", name)
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "retry_requested"})
+}

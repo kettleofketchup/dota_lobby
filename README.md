@@ -110,6 +110,7 @@ sops exec-file --no-fifo --filename league_bot_1.yaml \
 Several bots: decrypt into a tmpfs and point `credentials_dir` at it.
 
 ```bash
+umask 077   # passwords and shared secrets: owner-only files
 install -d -m 700 /run/dota_lobby/creds
 for f in secrets/bots/*.sops.yaml; do
   sops decrypt "$f" > "/run/dota_lobby/creds/$(basename "$f" .sops.yaml).yaml"
@@ -132,15 +133,21 @@ sops exec-env secrets/bots/league_bot_1.sops.yaml \
 `state_dir` (default `/var/lib/dota_lobby`) holds a `LOCK` file, taken with
 `flock` so two processes never run the same accounts, and one token store
 per bot at `<state_dir>/bots/<username>/token.json` (mode 0600). On start a
-bot uses its stored token; if there is none it seeds the store from
-`refresh_token`; if there is still none, or Steam rejects the token, it
-authenticates with password + TOTP and stores the new token. Tokens close to
+bot uses its stored token. `refresh_token` (`STEAM_REFRESH_TOKEN`) seeds the
+store when it holds nothing usable (no file, an unreadable one, or an expired
+token), and replaces a stored token that expires earlier, so a token minted
+elsewhere can be shipped through sops. If there is still no token, or Steam
+rejects it, the bot authenticates with password + TOTP and stores the new
+token. Quote secret values in the sops files: an unquoted `STEAM_PASS: 0123`
+is a number to YAML and is rejected at startup. If the host clock cannot be
+kept on NTP, `steam.totp_skew` shifts the Steam Guard code time. Tokens close to
 expiry are renewed in the background. Renewed tokens stay in `state_dir`;
 nothing is written back to sops, so keep `state_dir` on a persistent volume.
 
 A bot without a `shared_secret` cannot recover on its own: when its token
-dies it goes to `needs_attention`. Run `dota_lobby auth --bot NAME` (with
-`--code` or at a terminal) and restart the service.
+dies it goes to `needs_attention`. Run `dota_lobby auth --bot NAME --force`
+(with `--code` or at a terminal) while the service runs, then
+`POST /v1/bots/NAME/retry` to make the bot log on with the new token.
 
 ## API
 
@@ -152,11 +159,12 @@ logged. Errors share one envelope:
 
 | Method | Path | Auth | Response |
 |---|---|---|---|
-| GET | `/livez` | no | `200 {"status":"ok"}`; `503` with `stalled_bots` if a bot's loop has not moved for 30 s. Does not depend on Steam |
+| GET | `/livez` | no | `200 {"status":"ok"}`; `503` with a `stalled_bots` count if a bot's loop has not moved for 30 s (names go to the log). Does not depend on Steam |
 | GET | `/readyz` | no | `200` when at least `readiness.min_ready_bots` bots are `gc_ready`; `503` otherwise and while shutting down |
 | GET | `/health` | no | Always `200`: readiness, bot counts per state, version, uptime |
 | GET | `/v1/bots` | yes | `{"bots": [...]}`: name, username, state, ready, reason, last_error (EResult name), last_error_message, since, steam_id (string), limited, lobby_stale, token_expires_at, attempt, gc_queue_position |
 | GET | `/v1/bots/{name}` | yes | One bot, same shape; `404` if unknown |
+| POST | `/v1/bots/{name}/retry` | yes | `202`: a bot in `needs_attention`, `backoff` or `cooling_down` re-reads its token store and tries again now; a no-op otherwise. `404` if unknown |
 | any | `/v1/lobbies`, `/v1/lobbies/...` | yes | `501 not_implemented` until Phase 3 |
 | any | `/bots`, `/lobby/create`, `/lobby/info` | yes | `410 gone`; the pre-v1 placeholders were removed |
 

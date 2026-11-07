@@ -20,6 +20,19 @@ type fakeBots struct {
 	mu       sync.Mutex
 	statuses []bot.Status
 	stalled  []string
+	retried  []string
+}
+
+func (f *fakeBots) Retry(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, st := range f.statuses {
+		if strings.EqualFold(st.Name, name) {
+			f.retried = append(f.retried, name)
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeBots) Statuses() []bot.Status {
@@ -151,8 +164,9 @@ func TestLivez(t *testing.T) {
 	if r.code != 503 || r.body["status"] != "stalled" {
 		t.Fatalf("livez with a stalled bot = %d %v", r.code, r.body)
 	}
-	if got, _ := r.body["stalled_bots"].([]any); len(got) != 1 || got[0] != "a" {
-		t.Errorf("stalled_bots = %v", r.body["stalled_bots"])
+	// The endpoint is open, so it gives a count, never bot names.
+	if got := r.body["stalled_bots"]; got != float64(1) {
+		t.Errorf("stalled_bots = %#v, want 1", got)
 	}
 }
 
@@ -268,6 +282,29 @@ func TestBots(t *testing.T) {
 	r = do(t, s, http.MethodGet, "/v1/bots/nobody", auth)
 	if r.code != 404 || errCode(r) != "not_found" {
 		t.Errorf("missing bot = %d %v", r.code, r.body)
+	}
+}
+
+func TestBotRetry(t *testing.T) {
+	bots := &fakeBots{}
+	bots.set(backoff("league_bot_3"))
+	s := newTestServer(t, testKey, 0, bots)
+	auth := map[string]string{"X-API-Key": testKey}
+
+	if r := do(t, s, http.MethodPost, "/v1/bots/league_bot_3/retry", nil); r.code != 401 {
+		t.Errorf("retry without key = %d", r.code)
+	}
+	if r := do(t, s, http.MethodPost, "/v1/bots/league_bot_3/retry", auth); r.code != 202 || r.body["status"] != "retry_requested" {
+		t.Errorf("retry = %d %v", r.code, r.body)
+	}
+	if r := do(t, s, http.MethodPost, "/v1/bots/nobody/retry", auth); r.code != 404 || errCode(r) != "not_found" {
+		t.Errorf("retry missing bot = %d %v", r.code, r.body)
+	}
+	if r := do(t, s, http.MethodGet, "/v1/bots/league_bot_3/retry", auth); r.code != 405 {
+		t.Errorf("GET retry = %d", r.code)
+	}
+	if len(bots.retried) != 1 || bots.retried[0] != "league_bot_3" {
+		t.Errorf("retried = %v", bots.retried)
 	}
 }
 
