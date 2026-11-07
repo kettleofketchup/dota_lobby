@@ -1,0 +1,22 @@
+# Single-machine deployment. See https://kettleofketchup.github.io/dota_lobby/deployment/docker-compose/
+# DOTA_LOBBY_TAG is a Compose variable (image tag, no leading "v"), not an app setting.
+services:
+  dota_lobby:
+    image: ghcr.io/kettleofketchup/dota_lobby:${DOTA_LOBBY_TAG:-latest}
+    container_name: dota_lobby # also blocks accidental --scale
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

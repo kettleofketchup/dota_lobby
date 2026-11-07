@@ -1,3 +1,8 @@
+> **Historical record.** This file describes the first implementation as it was written and is
+> not current documentation. Some claims below are wrong (Steam Guard sentry hashes are not
+> loaded, and no lobby is actually created). See the documentation site, in particular
+> [Known limitations](https://kettleofketchup.github.io/dota_lobby/known-limitations/).
+
 # Dota Lobby Implementation Summary
 
 ## Overview

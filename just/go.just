@@ -1,5 +1,5 @@
 BINARY_NAME := "dota_lobby"
-BIN_DIR := env_var("PWD") / "bin"
+BIN_DIR := justfile_directory() / "bin"
 VERSION := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 COMMIT := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 DATE := `date -u +%Y-%m-%dT%H:%M:%SZ`
@@ -9,49 +9,49 @@ LDFLAGS := "-s -w -X main.version=" + VERSION + " -X main.commit=" + COMMIT + " 
 [group('go')]
 build: deps
     @echo "Building {{BINARY_NAME}}..."
-    @mkdir -p {{BIN_DIR}}
-    go build -trimpath -o {{BIN_DIR}}/{{BINARY_NAME}} -ldflags "{{LDFLAGS}}" ./cmd/dota_lobby
+    @cd "{{justfile_directory()}}" && mkdir -p {{BIN_DIR}}
+    cd "{{justfile_directory()}}" && go build -trimpath -o {{BIN_DIR}}/{{BINARY_NAME}} -ldflags "{{LDFLAGS}}" ./cmd/dota_lobby
 
 # Run the application
 [group('go')]
 run: build
     @echo "Version: {{VERSION}}, Commit: {{COMMIT}}, Date: {{DATE}}"
     @echo "Running {{BINARY_NAME}}..."
-    {{BIN_DIR}}/{{BINARY_NAME}}
+    cd "{{justfile_directory()}}" && {{BIN_DIR}}/{{BINARY_NAME}}
 
 # Run tests
 [group('go')]
 test:
     @echo "Running tests..."
-    go test -v ./...
+    cd "{{justfile_directory()}}" && go test -v ./...
 
 # Run tests with race detection and coverage
 [group('go')]
 test-full:
-    go test -race -cover ./...
+    cd "{{justfile_directory()}}" && go test -race -cover ./...
 
 # Format code
 [group('go')]
 format: deps
     @echo "Formatting code..."
-    go fmt ./...
+    cd "{{justfile_directory()}}" && go fmt ./...
 
 # Run linter
 [group('go')]
 lint: deps
     @echo "Linting..."
-    golangci-lint run
+    cd "{{justfile_directory()}}" && golangci-lint run
 
 # Install dependencies
 [group('go')]
 deps:
     @echo "Installing dependencies..."
-    go mod tidy
-    go mod download
+    cd "{{justfile_directory()}}" && go mod tidy
+    cd "{{justfile_directory()}}" && go mod download
 
 # Clean build artifacts
 [group('go')]
 clean:
     @echo "Cleaning..."
-    go clean
-    rm -rf {{BIN_DIR}}
+    cd "{{justfile_directory()}}" && go clean
+    cd "{{justfile_directory()}}" && rm -rf {{BIN_DIR}}

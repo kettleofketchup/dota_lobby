@@ -1,0 +1,79 @@
+site_name: Dota Lobby
+site_description: Self-hosted Dota 2 lobby service driven by Steam bot accounts
+site_url: https://kettleofketchup.github.io/dota_lobby/
+repo_url: https://github.com/kettleofketchup/dota_lobby
+repo_name: kettleofketchup/dota_lobby
+edit_uri: edit/main/docs/
+
+# Internal design notes are kept out of the published site; research/ is
+# excluded in advance and does not exist yet.
+exclude_docs: |
+  plans/
+  superpowers/
+  research/
+
+# Report omitted files, absolute or unrecognized links, and broken anchors as
+# warnings, so --strict fails on them.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.tabs.link
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Prerequisites: getting-started/prerequisites.md
+      - Quick start: getting-started/quick-start.md
+  - Configuration:
+      - Reference: configuration/index.md
+      - Bot accounts: configuration/bot-accounts.md
+  - Deployment:
+      - Docker Compose: deployment/docker-compose.md
+      - docker run: deployment/docker.md
+      - Build from source: deployment/from-source.md
+  - API: api/index.md
+  - Operations:
+      - Troubleshooting: operations/troubleshooting.md
+      - Known limitations: known-limitations.md
+  - Development:
+      - Overview: development/index.md
+      - Releasing: development/releasing.md

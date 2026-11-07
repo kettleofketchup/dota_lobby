@@ -29,9 +29,19 @@ go.work.sum
 
 # Config files (use .example files as templates)
 config.yaml
-secrets.yaml
+config.yml
+secrets.*
+!secrets.yaml.example
 bin/
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Docs build output and local Python env
+site/
+.venv/
+
+# Local binary and container config directory
+/dota_lobby
+/config/
