@@ -5,18 +5,23 @@ images.
 
 ## What a release publishes
 
-A release is a git tag that starts with `v`, in the form `vX.Y.Z`:
+A release is a git tag that starts with `v`, in the form `vX.Y.Z`. A repo admin cuts it from
+an up-to-date `main` with:
 
 ```bash
-git tag v1.2.3
-git push origin v1.2.3
+just release::upgrade
 ```
+
+The recipe assembles the release notes, commits, tags and pushes; see
+[Cutting a release](changelog.md#cutting-a-release). Do not push a `vX.Y.Z` tag by hand: its
+notes would not be assembled, and the next release would list them under the wrong version.
+Only pre-release tags such as `v1.3.0-rc.1` may be pushed by hand.
 
 Pushing the tag starts two workflows:
 
 | Workflow | Publishes |
 |---|---|
-| `.github/workflows/release.yml` | A GitHub Release for the tag with the `dota_lobby` binary attached (Linux amd64 only) |
+| `.github/workflows/release.yml` | A GitHub Release for the tag, with the version's `CHANGELOG.md` section as its notes and the `dota_lobby` binary attached (Linux amd64 only) |
 | `.github/workflows/container.yml` | A multi-arch image (`linux/amd64` and `linux/arm64`) at `ghcr.io/<owner>/dota_lobby` |
 
 The image tags never have a leading `v`. For `v1.2.3` the image gets:
@@ -48,6 +53,13 @@ The site is published to GitHub Pages by `.github/workflows/docs.yml` on **every
 so a broken link fails the pull request instead of the deploy. The docs therefore describe
 `main`, which can be ahead of the newest release.
 
+## Release notes
+
+Each pull request adds its notes as a fragment in `changelog.d/`, and the release recipe
+assembles them into `CHANGELOG.md`. `release.yml` uses that version's section, followed by
+the commits since the previous release, as the GitHub Release body. See
+[Changelog](changelog.md) for how to write a fragment and what CI checks.
+
 ## One-time setup
 
 `GITHUB_TOKEN` cannot change these settings, so someone with admin rights on the repository
@@ -70,7 +82,7 @@ does them once, in this order.
 ## Checklist
 
 1. On `main`: CI is green (lint and the docs build) and `make test` passes locally.
-2. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. Cut the release (repo admin): `just release::upgrade|hotfix|major`.
 3. Check that both `release.yml` and `container.yml` succeeded on the Actions tab.
 4. If this is the first release, do step 2 of [One-time setup](#one-time-setup).
 5. Check the image pulls without logging in:

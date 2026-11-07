@@ -12,7 +12,10 @@ This page is for people changing the code or the docs. To run the service, start
 | `pkg/bot/` | Bot manager and the Steam client for each bot (`manager.go`) |
 | `pkg/config/` | Config loading with Viper and the `Secret` type that redacts itself (`config.go`) |
 | `docs/` | This documentation site (MkDocs Material) |
-| `just/` | just modules: `dev.just`, `go.just`, `docs.just` |
+| `changelog.d/` | Changelog fragments, added by each pull request; see [Changelog](changelog.md) |
+| `CHANGELOG.md` | Release notes, assembled from `changelog.d/` at release time; never edited in a pull request |
+| `scripts/` | CI helper scripts (`ci-merge-base.sh`) |
+| `just/` | just modules: `dev.just`, `go.just`, `docs.just`, `ci.just`, `release.just`; the changelog checker `changelog.py` and its tests |
 | `Dockerfile` | Two-stage image build: Go cross-compile, then distroless `nonroot` |
 | `compose.yaml` | Single-machine deployment, see [Docker Compose](../deployment/docker-compose.md) |
 | `Dockerfile.docs` | Pinned `squidfunk/mkdocs-material` image used by the Docker docs recipes |
@@ -55,6 +58,9 @@ Steam, so read [Bot accounts](../configuration/bot-accounts.md) first.
 
 Lint is `golangci-lint run` with the repository's `.golangci.yml`. CI runs the same linter in
 `.github/workflows/lint.yml` on every pull request and every push to `main`.
+
+The `changelog` check (`.github/workflows/changelog.yml`, `just ci::changelog-check`) runs on
+the same events and validates the changelog fragments; see [Changelog](changelog.md).
 
 ## Docs
 
