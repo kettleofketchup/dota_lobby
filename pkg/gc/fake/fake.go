@@ -30,6 +30,7 @@ type Client struct {
 	every   map[string][]gc.Event
 
 	connected    bool
+	seq          uint64 // successful Connects, as in Disconnected.Conn
 	steamID      uint64
 	flags        uint32
 	flagsKnown   bool
@@ -313,14 +314,24 @@ func (f *Client) Connect(_ context.Context, creds gc.Credentials) error {
 		return gc.ErrAlreadyConnected
 	}
 	f.connected = true
+	f.seq++
 	f.mu.Unlock()
 	if err := f.record("Connect", creds); err != nil {
 		f.mu.Lock()
 		f.connected = false
+		f.seq--
 		f.mu.Unlock()
 		return err
 	}
 	return nil
+}
+
+// ConnSeq is the number of the current (or last) connection, the value its
+// Disconnected carries.
+func (f *Client) ConnSeq() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seq
 }
 
 // Authenticate returns the SetToken token unless an error is scripted.
@@ -342,11 +353,12 @@ func (f *Client) Disconnect() {
 	f.mu.Lock()
 	wasConnected := f.connected
 	f.connected = false
+	seq := f.seq
 	scripted := len(f.scripts["Disconnect"]) > 0 || f.every["Disconnect"] != nil
 	f.mu.Unlock()
 	_ = f.record("Disconnect")
 	if wasConnected && !scripted {
-		f.Emit(gc.Disconnected{})
+		f.Emit(gc.Disconnected{Conn: seq})
 	}
 }
 

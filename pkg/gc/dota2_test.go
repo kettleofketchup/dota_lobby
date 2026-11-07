@@ -112,7 +112,9 @@ func TestDisconnectThenReconnect(t *testing.T) {
 	}
 
 	a.Disconnect()
-	waitEvent[Disconnected](t, a)
+	if d := waitEvent[Disconnected](t, a); d.Conn != 1 {
+		t.Errorf("first Disconnected.Conn = %d, want 1", d.Conn)
+	}
 	// The pair is dropped before Disconnected is delivered, so a supervisor
 	// can reconnect straight away, on a fresh transport (D11).
 	if err := a.Connect(t.Context(), tokenCreds); err != nil {
@@ -120,6 +122,88 @@ func TestDisconnectThenReconnect(t *testing.T) {
 	}
 	waitEvent[Connected](t, a)
 	<-second.logons
+	a.Disconnect()
+	if d := waitEvent[Disconnected](t, a); d.Conn != 2 {
+		t.Errorf("second Disconnected.Conn = %d, want 2", d.Conn)
+	}
+}
+
+// TestSetPlayingDoesNotBlock: go-dota2's SetPlaying(false) emits a status
+// change on the caller's goroutine. With the pump stuck on a full Events()
+// channel, a synchronous call would deadlock the supervisor that drains it.
+func TestSetPlayingDoesNotBlock(t *testing.T) {
+	ft := newFakeTransport()
+	a := newTestAdapter(t, ft)
+	connectWelcomed(t, a, ft)
+	c := a.current()
+
+	// Fill Events() and the dota channel behind it without reading.
+	status := protocol.GCConnectionStatus_GCConnectionStatus_HAVE_SESSION
+	go func() {
+		for range EventBuffer + cap(c.dota) + 8 {
+			select {
+			case c.dota <- &devents.GCConnectionStatusChanged{OldState: status, NewState: status}:
+			case <-c.stop:
+				return
+			}
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(a.events) < EventBuffer || len(c.dota) < cap(c.dota) {
+		if time.Now().After(deadline) {
+			t.Fatalf("buffers not full: events %d dota %d", len(a.events), len(c.dota))
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		a.SetPlaying(false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SetPlaying(false) blocked on the event pump")
+	}
+
+	// Once the consumer drains, the NO_SESSION it caused comes through.
+	timeout := time.After(3 * time.Second)
+	for {
+		select {
+		case ev := <-a.Events():
+			if s, ok := ev.(GCStatus); ok && s.New == GCNoSession {
+				a.Disconnect()
+				return
+			}
+		case <-timeout:
+			t.Fatal("no NO_SESSION after SetPlaying(false)")
+		}
+	}
+}
+
+func TestAuthErrorEResult(t *testing.T) {
+	// The messages are go-steam's authServiceCall format.
+	tests := []struct {
+		name string
+		err  error
+		want EResult
+	}{
+		{"totp mismatch", errors.New("UpdateAuthSessionWithSteamGuardCode failed: eresult 88 (200 OK)"), EResultTwoFactorCodeMismatch},
+		{"rate limited", errors.New("BeginAuthSessionViaCredentials failed: eresult 84 (200 OK)"), EResultRateLimitExceeded},
+		{"service unavailable", errors.New("GetPasswordRSAPublicKey failed: eresult 20 (Service Unavailable)"), EResult(20)},
+		{"steam message", errors.New("BeginAuthSessionViaCredentials failed: eresult 5 (Invalid password)"), EResultInvalidPassword},
+		{"no eresult", errors.New("begin auth session failed: something"), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := authError(&steam.AuthSessionError{State: steam.AuthSessionStateDenied, Err: tt.err})
+			var ae *AuthError
+			if !errors.As(err, &ae) || ae.State != "denied" || ae.Result != tt.want {
+				t.Errorf("authError = %#v, want Result %d", err, tt.want)
+			}
+		})
+	}
 }
 
 func TestDialFailure(t *testing.T) {

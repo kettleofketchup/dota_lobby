@@ -20,7 +20,8 @@ type Client interface {
 	// done. It returns at once; the outcome arrives on Events(). ctx bounds
 	// the whole connection, not just the dial: cancelling it disconnects.
 	// It fails with ErrAlreadyConnected until the previous connection's
-	// Disconnected event has been delivered.
+	// Disconnected event has been delivered. Successful calls number the
+	// connections 1, 2, 3, ...; see Disconnected.Conn.
 	Connect(ctx context.Context, creds Credentials) error
 	// Authenticate exchanges a password (and Steam Guard code) for a refresh
 	// token over the Steam Web API. It opens no CM connection, so it can run
@@ -135,10 +136,12 @@ const (
 
 // AuthError is a failed Steam auth session (Authenticate, or a password
 // logon). State is go-steam's AuthSessionState, e.g. "device_code" or
-// "denied"; Guards lists what Steam would have accepted.
+// "denied"; Guards lists what Steam would have accepted. Result is the
+// x-eresult Steam's Web API sent with a denial, 0 when there was none.
 type AuthError struct {
 	State  string
 	Guards []GuardKind
+	Result EResult
 	Err    error
 }
 
@@ -225,8 +228,11 @@ type LogOnFailed struct {
 type LoggedOff struct{ Result EResult }
 
 // Disconnected is the last event of every connection, including a failed
-// dial. It is the one event that decides reconnects (plan §4.1).
-type Disconnected struct{}
+// dial. It is the one event that decides reconnects (plan §4.1). Conn is
+// the number of the connection it ends (the nth successful Connect), so a
+// late Disconnected from an abandoned connection can be told from the
+// current one's; 0 means unknown.
+type Disconnected struct{ Conn uint64 }
 
 // Fatal carries an error go-steam reported. go-steam's event channel cannot
 // tell fatal errors from recoverable ones, so this may be either; a fatal one

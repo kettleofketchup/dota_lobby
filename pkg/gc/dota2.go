@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +54,8 @@ type Adapter struct {
 
 	mu  sync.Mutex
 	cur *conn
+	// seq numbers successful Connects for Disconnected.Conn.
+	seq uint64
 
 	steamID atomic.Uint64
 	// flags holds EAccountFlags in the low 32 bits and a "known" bit above.
@@ -120,6 +124,7 @@ func (t *steamTransport) LogOn(ctx context.Context, d *steam.LogOnDetails) error
 
 // conn is one Steam connection: its transport, Dota2 session and tap.
 type conn struct {
+	id    uint64
 	t     transport
 	d     *dota2.Dota2
 	tap   *tap
@@ -138,6 +143,34 @@ type conn struct {
 	logon    sync.WaitGroup
 
 	status atomic.Int32 // GCConnStatus, updated on the reader goroutine
+
+	// wantPlay is the latest SetPlaying request (playNone, playOff, playOn)
+	// and playKick wakes playLoop to apply it.
+	wantPlay atomic.Int32
+	playKick chan struct{}
+}
+
+const (
+	playNone int32 = iota
+	playOff
+	playOn
+)
+
+// playLoop applies SetPlaying requests off the caller's goroutine.
+// go-dota2's SetPlaying(false) emits a status change synchronously, and that
+// emit waits for the pump, which may itself be waiting for the caller to
+// drain Events(). Only the latest request matters, so requests coalesce.
+func (c *conn) playLoop() {
+	for {
+		select {
+		case <-c.playKick:
+			if v := c.wantPlay.Swap(playNone); v != playNone {
+				c.d.SetPlaying(v == playOn)
+			}
+		case <-c.stop:
+			return
+		}
+	}
 }
 
 // emitDota is go-dota2's emit func. It runs on the Steam reader goroutine.
@@ -175,11 +208,12 @@ func (a *Adapter) Connect(ctx context.Context, creds Credentials) error {
 		return ErrAlreadyConnected
 	}
 	c := &conn{
-		t:       a.newTransport(a.opts.DialTimeout),
-		creds:   creds,
-		dota:    make(chan any, 64),
-		dialErr: make(chan error, 1),
-		stop:    make(chan struct{}),
+		t:        a.newTransport(a.opts.DialTimeout),
+		creds:    creds,
+		dota:     make(chan any, 64),
+		dialErr:  make(chan error, 1),
+		stop:     make(chan struct{}),
+		playKick: make(chan struct{}, 1),
 	}
 	c.ctx, c.cancel = context.WithCancel(ctx)
 	c.status.Store(int32(GCNoSession))
@@ -195,10 +229,13 @@ func (a *Adapter) Connect(ctx context.Context, creds Credentials) error {
 		c.d.Close()
 		return fmt.Errorf("subscribe lobby cache: %w", err)
 	}
+	a.seq++
+	c.id = a.seq
 	a.cur = c
 	a.mu.Unlock()
 
 	go a.pump(c)
+	go c.playLoop()
 	go a.forwardLobbies(c, lobbies, unsub)
 	go func() {
 		if err := c.t.Dial(c.ctx); err != nil {
@@ -233,7 +270,7 @@ func (a *Adapter) pump(c *conn) {
 		case raw := <-c.t.Events():
 			if _, ok := raw.(*steam.DisconnectedEvent); ok {
 				a.finish(c)
-				a.forward(Disconnected{})
+				a.forward(Disconnected{Conn: c.id})
 				a.drain(c)
 				return
 			}
@@ -250,7 +287,7 @@ func (a *Adapter) pump(c *conn) {
 		case err := <-c.dialErr:
 			a.forward(Fatal{Err: fmt.Errorf("dial steam: %w", err)})
 			a.finish(c)
-			a.forward(Disconnected{})
+			a.forward(Disconnected{Conn: c.id})
 			a.drain(c)
 			return
 		}
@@ -368,10 +405,20 @@ func (a *Adapter) translate(c *conn, raw any) (Event, bool) {
 
 func (a *Adapter) setFlags(f uint32) { a.flags.Store(1<<32 | uint64(f)) }
 
-// SetPlaying implements Client.
+// SetPlaying implements Client. It returns at once; playLoop sends it.
 func (a *Adapter) SetPlaying(playing bool) {
-	if c := a.current(); c != nil {
-		c.d.SetPlaying(playing)
+	c := a.current()
+	if c == nil {
+		return
+	}
+	v := playOff
+	if playing {
+		v = playOn
+	}
+	c.wantPlay.Store(v)
+	select {
+	case c.playKick <- struct{}{}:
+	default: // a wake-up is already pending and will read the latest value
 	}
 }
 
@@ -491,7 +538,27 @@ func authError(err error) error {
 	if out.Err == nil {
 		out.Err = errors.New(ae.Error())
 	}
+	out.Result = deniedResult(out.Err.Error())
 	return out
+}
+
+// eresultInMessage matches go-steam's Web API failure text,
+// "<Method> failed: eresult <N> (<message>)" (auth_session.go). go-steam
+// keeps the number only in the message.
+var eresultInMessage = regexp.MustCompile(`\beresult (\d+)\b`)
+
+// deniedResult extracts the x-eresult from a go-steam auth error message,
+// or 0 when there is none.
+func deniedResult(msg string) EResult {
+	m := eresultInMessage.FindStringSubmatch(msg)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(m[1], 10, 32)
+	if err != nil {
+		return 0
+	}
+	return EResult(n)
 }
 
 // reqErr maps go-dota2's ErrNotReady to ours.
