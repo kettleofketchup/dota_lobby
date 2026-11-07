@@ -9,21 +9,29 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
 
 const bearerPrefix = "Bearer "
 
+// Bots is what the API needs from the bot layer. It is a placeholder until
+// the bot supervisor and pool land.
+type Bots interface {
+	// ListBots maps bot name to whether it is ready.
+	ListBots() map[string]bool
+	// AvailableBot returns the name of a ready bot.
+	AvailableBot() (string, error)
+}
+
 // Server represents the HTTP API server
 type Server struct {
-	botManager *bot.Manager
+	botManager Bots
 	server     *http.Server
 	apiKey     config.Secret
 }
 
 // NewServer creates a new API server
-func NewServer(host string, port int, apiKey config.Secret, botManager *bot.Manager) *Server {
+func NewServer(host string, port int, apiKey config.Secret, botManager Bots) *Server {
 	return &Server{
 		botManager: botManager,
 		apiKey:     apiKey,
@@ -51,7 +59,7 @@ func (s *Server) Start() error {
 	s.server.Handler = mux
 
 	log.Printf("Starting API server on %s", s.server.Addr)
-	if s.apiKey.Value() != "" {
+	if s.apiKey.Reveal() != "" {
 		log.Println("API key authentication enabled")
 	} else {
 		log.Println("WARNING: API key authentication disabled - all endpoints are public")
@@ -75,7 +83,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// If no API key is configured, allow all requests
-		if s.apiKey.Value() == "" {
+		if s.apiKey.Reveal() == "" {
 			next(w, r)
 			return
 		}
@@ -91,7 +99,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Validate API key using constant-time comparison to prevent timing attacks
-		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.apiKey.Value())) != 1 {
+		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.apiKey.Reveal())) != 1 {
 			http.Error(w, "Unauthorized: Invalid or missing API key", http.StatusUnauthorized)
 			return
 		}
@@ -177,16 +185,9 @@ func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get an available bot
-	availableBot, err := s.botManager.GetAvailableBot()
+	botName, err := s.botManager.AvailableBot()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("No available bots: %v", err), http.StatusServiceUnavailable)
-		return
-	}
-
-	// Verify bot has Dota client ready
-	_, err = availableBot.GetDotaClient()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Bot not ready: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -196,7 +197,7 @@ func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
 		"status":     "success",
 		"message":    "Lobby creation initiated",
 		"lobby_name": req.LobbyName,
-		"bot_used":   availableBot.Username,
+		"bot_used":   botName,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

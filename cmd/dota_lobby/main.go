@@ -2,14 +2,14 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/api"
-	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
 
@@ -19,58 +19,53 @@ var (
 	buildDate = "unknown"
 )
 
+// offlineBots reports the configured bots as not ready. It stands in for the
+// bot supervisor, which is not wired up yet.
+type offlineBots []config.BotConfig
+
+func (b offlineBots) ListBots() map[string]bool {
+	out := make(map[string]bool, len(b))
+	for _, bot := range b {
+		out[bot.Name] = false
+	}
+	return out
+}
+
+func (offlineBots) AvailableBot() (string, error) {
+	return "", errors.New("bot runtime not implemented yet")
+}
+
 func main() {
-	log.Printf("Dota Lobby Manager v%s (commit: %s, built: %s)", version, commit, buildDate)
+	if err := run(); err != nil {
+		slog.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
 
-	// Load configuration
-	cfg, err := config.LoadConfig()
+func run() error {
+	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	log.Info("starting dota_lobby", "version", version, "commit", commit, "built", buildDate)
+
+	cfg, err := config.Load(config.Options{Logger: log})
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		return err
 	}
+	log.Info("configuration loaded", "host", cfg.Server.Host, "port", cfg.Server.Port, "bots", len(cfg.Bots))
 
-	log.Printf("Server configuration: %s:%d", cfg.Server.Host, cfg.Server.Port)
+	srv := api.NewServer(cfg.Server.Host, cfg.Server.Port, cfg.Secrets.APIKey, offlineBots(cfg.Bots))
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Start() }()
 
-	// Create bot manager
-	botManager := bot.NewManager()
-	defer botManager.Shutdown()
-
-	// Add bots from configuration
-	if len(cfg.Secrets.Bots) == 0 {
-		log.Println("WARNING: No bots configured in secrets.yaml")
-	} else {
-		for i, botCfg := range cfg.Secrets.Bots {
-			if err := botManager.AddBot(botCfg); err != nil {
-				log.Printf("Failed to add bot %d (%s): %v", i+1, botCfg.Username, err)
-			} else {
-				log.Printf("Added bot: %s", botCfg.Username)
-			}
-		}
-	}
-
-	// Create and start API server
-	apiServer := api.NewServer(cfg.Server.Host, cfg.Server.Port, cfg.Server.APIKey, botManager)
-
-	// Start server in a goroutine
-	go func() {
-		if err := apiServer.Start(); err != nil {
-			log.Fatalf("Failed to start API server: %v", err)
-		}
-	}()
-
-	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Shutting down gracefully...")
-
-	// Shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := apiServer.Shutdown(ctx); err != nil {
-		log.Printf("Error shutting down API server: %v", err)
+	select {
+	case err := <-errc:
+		return err
+	case <-quit:
 	}
 
-	log.Println("Shutdown complete")
+	log.Info("shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return srv.Shutdown(ctx)
 }
