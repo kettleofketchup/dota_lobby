@@ -1,5 +1,10 @@
+# Run tools through mise when it is installed, so the versions pinned in
+# mise.toml (go, golangci-lint) are used rather than whatever is on PATH.
+RUN := $(if $(shell command -v mise 2>/dev/null),mise exec --,)
+
 # Go parameters
-GOCMD=go
+GOCMD ?= $(RUN) go
+GOLANGCI_LINT ?= $(RUN) golangci-lint
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
@@ -25,7 +30,7 @@ LDFLAGS := -ldflags "-s -w \
 all: build
 
 # Build the binary
-build: deps
+build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p bin
 	$(GOBUILD) -trimpath -o bin/$(BINARY_NAME) $(LDFLAGS) ./cmd/dota_lobby
@@ -34,12 +39,12 @@ build: deps
 run: build
 	@echo "Version: $(VERSION), Commit: $(COMMIT), Date: $(DATE)"
 	@echo "Running $(BINARY_NAME)..."
-	./bin/$(BINARY_NAME)
+	./bin/$(BINARY_NAME) serve
 
 # Run tests
 test:
 	@echo "Running tests..."
-	$(GOTEST) -v ./...
+	$(GOTEST) -race ./...
 
 # Clean up build artifacts
 clean:
@@ -47,15 +52,15 @@ clean:
 	$(GOCLEAN)
 	rm -rf bin/
 
-format: deps
+format:
 	@echo "Formatting code..."
 	$(GOCMD) fmt ./...
 
-lint: deps
+lint:
 	@echo "Linting..."
-	golangci-lint run
+	$(GOLANGCI_LINT) run ./...
 
-# Install dependencies
+# Tidy and download dependencies
 deps:
 	@echo "Installing dependencies..."
 	$(GOMOD) tidy

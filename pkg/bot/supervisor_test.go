@@ -9,6 +9,7 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/auth"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
+	"github.com/kettleofketchup/dota_lobby/pkg/gc/fake"
 )
 
 func TestColdStartWithSeedToken(t *testing.T) {
@@ -382,5 +383,49 @@ func TestRenewalBeforeExpiry(t *testing.T) {
 	}
 	if n := h.fc.CallCount("Connect"); n != 1 {
 		t.Errorf("renewal reconnected: %d Connect calls", n)
+	}
+}
+
+func TestSupervisorHeartbeatKeepsIdleLoopAlive(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "76561198000000001", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+	})
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+	// Five idle minutes: only the heartbeat wakes the loop.
+	for range 30 {
+		h.clk.Advance(10 * time.Second)
+		time.Sleep(time.Millisecond)
+	}
+	h.until("heartbeat", time.Second, 20*time.Second, func(Status) bool { return !h.sup.Stalled(30 * time.Second) })
+}
+
+func TestSupervisorStalled(t *testing.T) {
+	clk := newFakeClock()
+	s := NewSupervisor(headlessBot(), fake.New(), SupervisorOptions{Store: auth.NewStore(t.TempDir()), Clock: clk})
+	if s.Stalled(time.Second) {
+		t.Fatal("a supervisor that never ran is not stalled")
+	}
+	// Pretend the loop ran once and then wedged.
+	s.lastBeat.Store(clk.Now().UnixNano())
+	clk.Advance(31 * time.Second)
+	tests := []struct {
+		maxAge time.Duration
+		want   bool
+	}{
+		{30 * time.Second, true},
+		{time.Minute, false},
+	}
+	for _, tt := range tests {
+		if got := s.Stalled(tt.maxAge); got != tt.want {
+			t.Errorf("Stalled(%s) = %v, want %v", tt.maxAge, got, tt.want)
+		}
+	}
+	close(s.done)
+	if s.Stalled(30 * time.Second) {
+		t.Error("an exited loop is not stalled")
 	}
 }

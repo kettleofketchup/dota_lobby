@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/auth"
@@ -29,6 +30,9 @@ const (
 	DefaultRenewBefore = 14 * 24 * time.Hour
 	// DefaultRenewCheck is how often the token's expiry is looked at.
 	DefaultRenewCheck = 6 * time.Hour
+	// DefaultHeartbeat is how often an idle run loop wakes up so the /livez
+	// watchdog can tell idle from wedged.
+	DefaultHeartbeat = 10 * time.Second
 )
 
 // Status is a point-in-time view of one bot, safe to hand to the API.
@@ -96,6 +100,12 @@ type Supervisor struct {
 	renewTimer Timer
 	authCancel context.CancelFunc
 	renewing   bool
+	beatTimer  Timer
+
+	// lastBeat is when the run loop last finished an input (unix nanos on
+	// clock); beatArmed is set while a heartbeat timer is pending.
+	lastBeat  atomic.Int64
+	beatArmed atomic.Bool
 
 	mu     sync.Mutex
 	status Status
@@ -105,10 +115,12 @@ type Supervisor struct {
 type (
 	renewTick struct{}
 	renewDone struct{ err error }
+	heartbeat struct{}
 )
 
 func (renewTick) isInput() {}
 func (renewDone) isInput() {}
+func (heartbeat) isInput() {}
 
 // NewSupervisor builds a stopped supervisor for b. Call Start to run it.
 func NewSupervisor(b config.BotConfig, client gc.Client, opts SupervisorOptions) *Supervisor {
@@ -174,6 +186,23 @@ func (s *Supervisor) Status() Status {
 
 // Ready reports whether the bot is in gc_ready.
 func (s *Supervisor) Ready() bool { return s.Status().Ready }
+
+// Stalled reports whether the run loop is running but has not finished an
+// input for longer than maxAge. An idle loop wakes every DefaultHeartbeat,
+// so a stall means it is stuck, and with it the event pump that feeds it
+// (plan §6). A supervisor that is not running is never stalled.
+func (s *Supervisor) Stalled(maxAge time.Duration) bool {
+	last := s.lastBeat.Load()
+	if last == 0 {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false
+	default:
+	}
+	return s.clock.Now().Sub(time.Unix(0, last)) > maxAge
+}
 
 // Start seeds the token store, then starts the run goroutine and the first
 // logon. ctx bounds the supervisor's life; cancelling it is a hard stop that
@@ -253,6 +282,7 @@ func (s *Supervisor) run() {
 	s.scheduleRenew()
 	events := s.client.Events()
 	for {
+		s.beat()
 		select {
 		case <-s.ctx.Done():
 			return
@@ -267,10 +297,30 @@ func (s *Supervisor) run() {
 	}
 }
 
+// beat records that the loop is alive and keeps one heartbeat pending. The
+// timer never blocks: when the input queue is full the beat is dropped and
+// re-armed on the next pass, which the queued inputs guarantee.
+func (s *Supervisor) beat() {
+	s.lastBeat.Store(s.clock.Now().UnixNano())
+	if !s.beatArmed.CompareAndSwap(false, true) {
+		return
+	}
+	s.beatTimer = s.clock.AfterFunc(DefaultHeartbeat, func() {
+		select {
+		case s.inputs <- heartbeat{}:
+		default:
+			s.beatArmed.Store(false)
+		}
+	})
+}
+
 func (s *Supervisor) cleanup() {
 	s.stopTimer()
 	if s.renewTimer != nil {
 		s.renewTimer.Stop()
+	}
+	if s.beatTimer != nil {
+		s.beatTimer.Stop()
 	}
 	if s.authCancel != nil {
 		s.authCancel()
@@ -282,6 +332,9 @@ func (s *Supervisor) cleanup() {
 // result back in before the status is published.
 func (s *Supervisor) handle(in Input) {
 	switch in := in.(type) {
+	case heartbeat:
+		s.beatArmed.Store(false)
+		return
 	case renewTick:
 		s.maybeRenew()
 		s.scheduleRenew()

@@ -1,251 +1,279 @@
+// Package api is the service's HTTP API (plan §7). Health endpoints are
+// open; everything else needs the API key when one is configured.
 package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
-	"fmt"
-	"log"
+	"errors"
+	"log/slog"
+	"net"
 	"net/http"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
 
-const bearerPrefix = "Bearer "
+// Defaults for Options.
+const (
+	DefaultMaxBodyBytes   = 64 << 10
+	DefaultWatchdogMaxAge = 30 * time.Second
+)
 
-// Bots is what the API needs from the bot layer. It is a placeholder until
-// the bot supervisor and pool land.
+// Bots is what the API reads from the bot layer. *bot.Manager implements
+// it.
 type Bots interface {
-	// ListBots maps bot name to whether it is ready.
-	ListBots() map[string]bool
-	// AvailableBot returns the name of a ready bot.
-	AvailableBot() (string, error)
+	// Statuses returns every bot's status in config order.
+	Statuses() []bot.Status
+	// Stalled names the bots whose run loop has not moved for maxAge.
+	Stalled(maxAge time.Duration) []string
 }
 
-// Server represents the HTTP API server
+// Options configures a Server.
+type Options struct {
+	// Addr is the listen address for ListenAndServe, e.g. "0.0.0.0:8080".
+	Addr string
+	// APIKey guards /v1/*; empty leaves them open.
+	APIKey config.Secret
+	Bots   Bots
+	// MinReadyBots is how many bots must be gc_ready for /readyz.
+	MinReadyBots int
+	// MaxBodyBytes caps request bodies; 0 means DefaultMaxBodyBytes.
+	MaxBodyBytes int64
+	// WatchdogMaxAge is how long a bot's loop may stall before /livez
+	// fails; 0 means DefaultWatchdogMaxAge.
+	WatchdogMaxAge time.Duration
+	Logger         *slog.Logger
+	// Version is reported by /health.
+	Version string
+	// Now defaults to time.Now.
+	Now func() time.Time
+}
+
+// Server serves the API. Create it with New.
 type Server struct {
-	botManager Bots
-	server     *http.Server
-	apiKey     config.Secret
+	opts     Options
+	log      *slog.Logger
+	http     *http.Server
+	handler  http.Handler
+	started  time.Time
+	draining atomic.Bool
 }
 
-// NewServer creates a new API server
-func NewServer(host string, port int, apiKey config.Secret, botManager Bots) *Server {
-	return &Server{
-		botManager: botManager,
-		apiKey:     apiKey,
-		server: &http.Server{
-			Addr:         fmt.Sprintf("%s:%d", host, port),
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
-			IdleTimeout:  60 * time.Second,
-		},
+// New builds a server; nothing listens until Serve or ListenAndServe.
+func New(opts Options) *Server {
+	if opts.Logger == nil {
+		opts.Logger = slog.New(slog.DiscardHandler)
 	}
+	if opts.MaxBodyBytes <= 0 {
+		opts.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+	if opts.WatchdogMaxAge <= 0 {
+		opts.WatchdogMaxAge = DefaultWatchdogMaxAge
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Bots == nil {
+		opts.Bots = noBots{}
+	}
+	s := &Server{opts: opts, log: opts.Logger, started: opts.Now()}
+	s.handler = s.routes()
+	s.http = &http.Server{
+		Addr:              opts.Addr,
+		Handler:           s.handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		ErrorLog:          slog.NewLogLogger(opts.Logger.Handler(), slog.LevelWarn),
+	}
+	return s
 }
 
-// Start starts the HTTP server
-func (s *Server) Start() error {
-	mux := http.NewServeMux()
+// Handler returns the routed handler, for tests and embedding.
+func (s *Server) Handler() http.Handler { return s.handler }
 
-	// Health check endpoint (no auth required)
-	mux.HandleFunc("/health", s.handleHealth)
-
-	// Protected endpoints with authentication
-	mux.HandleFunc("/bots", s.authMiddleware(s.handleBots))
-	mux.HandleFunc("/lobby/create", s.authMiddleware(s.handleCreateLobby))
-	mux.HandleFunc("/lobby/info", s.authMiddleware(s.handleLobbyInfo))
-
-	s.server.Handler = mux
-
-	log.Printf("Starting API server on %s", s.server.Addr)
-	if s.apiKey.Reveal() != "" {
-		log.Println("API key authentication enabled")
-	} else {
-		log.Println("WARNING: API key authentication disabled - all endpoints are public")
-	}
-	err := s.server.ListenAndServe()
-	if err != nil && err != http.ErrServerClosed {
+// ListenAndServe listens on Options.Addr and serves until Shutdown, which
+// makes it return nil.
+func (s *Server) ListenAndServe() error {
+	ln, err := net.Listen("tcp", s.opts.Addr)
+	if err != nil {
 		return err
 	}
+	return s.Serve(ln)
+}
 
-	log.Println("API server stopped")
+// Serve serves on ln until Shutdown, which makes it return nil.
+func (s *Server) Serve(ln net.Listener) error {
+	if !s.opts.APIKey.IsSet() {
+		s.log.Warn("API key authentication disabled; /v1 endpoints are public")
+	}
+	s.log.Info("API listening", "addr", ln.Addr().String())
+	if err := s.http.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
 	return nil
 }
 
-// Shutdown gracefully shuts down the server
+// SetDraining makes /readyz fail so load balancers stop sending work, the
+// first step of shutdown (plan §6).
+func (s *Server) SetDraining() { s.draining.Store(true) }
+
+// Shutdown drains, then stops the listener and waits for in-flight
+// requests until ctx ends.
 func (s *Server) Shutdown(ctx context.Context) error {
-	log.Println("Shutting down API server...")
-	return s.server.Shutdown(ctx)
+	s.SetDraining()
+	return s.http.Shutdown(ctx)
 }
 
-// authMiddleware provides API key authentication for protected endpoints
-func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// If no API key is configured, allow all requests
-		if s.apiKey.Reveal() == "" {
-			next(w, r)
+func (s *Server) routes() http.Handler {
+	r := &router{mux: http.NewServeMux()}
+
+	r.handle("GET /livez", http.HandlerFunc(s.handleLivez))
+	r.handle("GET /readyz", http.HandlerFunc(s.handleReadyz))
+	r.handle("GET /health", http.HandlerFunc(s.handleHealth))
+
+	r.handle("GET /v1/bots", s.authed(s.handleBots))
+	r.handle("GET /v1/bots/{name}", s.authed(s.handleBot))
+
+	// Lobbies arrive in Phase 3.
+	r.handle("/v1/lobbies", s.authed(notImplemented))
+	r.handle("/v1/lobbies/", s.authed(notImplemented))
+
+	// The pre-v1 placeholders; nothing depends on them (plan §7).
+	r.handle("/bots", s.authed(gone("/v1/bots")))
+	r.handle("/lobby/create", s.authed(gone("/v1/lobbies")))
+	r.handle("/lobby/info", s.authed(gone("/v1/lobbies")))
+
+	r.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
+	})
+	r.addMethodFallbacks()
+	return s.limitBody(r.mux)
+}
+
+// router registers method patterns and remembers their paths, so a wrong
+// method gets a JSON 405 instead of falling through to the 404 catch-all.
+type router struct {
+	mux     *http.ServeMux
+	allowed map[string][]string // path -> methods
+	order   []string
+}
+
+func (r *router) handle(pattern string, h http.Handler) {
+	r.mux.Handle(pattern, h)
+	method, path, ok := strings.Cut(pattern, " ")
+	if !ok {
+		return
+	}
+	if r.allowed == nil {
+		r.allowed = map[string][]string{}
+	}
+	if _, seen := r.allowed[path]; !seen {
+		r.order = append(r.order, path)
+	}
+	r.allowed[path] = append(r.allowed[path], method)
+}
+
+func (r *router) addMethodFallbacks() {
+	for _, path := range r.order {
+		methods := r.allowed[path]
+		if slices.Contains(methods, http.MethodGet) {
+			methods = append(methods, http.MethodHead)
+		}
+		allow := strings.Join(methods, ", ")
+		r.mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Allow", allow)
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "allowed: "+allow)
+		})
+	}
+}
+
+func (s *Server) limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, s.opts.MaxBodyBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authed requires the API key, from X-API-Key or "Authorization: Bearer"
+// (the scheme matched case-insensitively), when one is configured.
+func (s *Server) authed(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.opts.APIKey.IsSet() && !s.validKey(requestKey(r)) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="dota_lobby"`)
+			writeError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid API key")
 			return
 		}
-
-		// Check for API key in X-API-Key header
-		apiKey := r.Header.Get("X-API-Key")
-		if apiKey == "" {
-			// Also check Authorization header with Bearer token
-			authHeader := r.Header.Get("Authorization")
-			if len(authHeader) > len(bearerPrefix) && authHeader[:len(bearerPrefix)] == bearerPrefix {
-				apiKey = authHeader[len(bearerPrefix):]
-			}
-		}
-
-		// Validate API key using constant-time comparison to prevent timing attacks
-		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.apiKey.Reveal())) != 1 {
-			http.Error(w, "Unauthorized: Invalid or missing API key", http.StatusUnauthorized)
-			return
-		}
-
-		// API key is valid, proceed to handler
 		next(w, r)
-	}
+	})
 }
 
-// handleHealth returns the health status of the service
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+func requestKey(r *http.Request) string {
+	if k := r.Header.Get("X-API-Key"); k != "" {
+		return k
 	}
-
-	response := map[string]interface{}{
-		"status": "healthy",
-		"time":   time.Now().UTC(),
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return ""
 	}
+	return strings.TrimSpace(token)
+}
 
+// validKey compares digests in constant time, so neither the key's
+// contents nor its length leak through timing.
+func (s *Server) validKey(got string) bool {
+	if got == "" {
+		return false
+	}
+	a := sha256.Sum256([]byte(got))
+	b := sha256.Sum256([]byte(s.opts.APIKey.Reveal()))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+}
+
+// errorBody is the error envelope shared by every endpoint (plan §7).
+type errorBody struct {
+	Error apiError `json:"error"`
+}
+
+type apiError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+}
+
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	retryable := status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+	writeJSON(w, status, errorBody{Error: apiError{Code: code, Message: msg, Retryable: retryable}})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding health response: %v", err)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	// The status line is out; a failed write only means the client left.
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func notImplemented(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "not_implemented", "lobby endpoints are not available yet")
+}
+
+func gone(moved string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusGone, "gone", "this endpoint was removed; use "+moved)
 	}
 }
 
-// handleBots returns the status of all bots
-func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// noBots stands in when no bot source is wired, e.g. in tests.
+type noBots struct{}
 
-	bots := s.botManager.ListBots()
-
-	response := map[string]interface{}{
-		"bots": bots,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding bots response: %v", err)
-	}
-}
-
-// LobbyCreateRequest represents a request to create a lobby
-type LobbyCreateRequest struct {
-	LobbyName    string `json:"lobby_name"`
-	Password     string `json:"password,omitempty"`
-	ServerRegion string `json:"server_region,omitempty"`
-	GameMode     string `json:"game_mode,omitempty"`
-}
-
-// handleCreateLobby handles lobby creation requests
-func (s *Server) handleCreateLobby(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req LobbyCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Validate lobby name
-	if req.LobbyName == "" {
-		http.Error(w, "lobby_name is required", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.LobbyName) > 100 {
-		http.Error(w, "lobby_name must be 100 characters or less", http.StatusBadRequest)
-		return
-	}
-
-	// Validate password if provided
-	if len(req.Password) > 50 {
-		http.Error(w, "password must be 50 characters or less", http.StatusBadRequest)
-		return
-	}
-
-	// Get an available bot
-	botName, err := s.botManager.AvailableBot()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("No available bots: %v", err), http.StatusServiceUnavailable)
-		return
-	}
-
-	// TODO: Implement actual lobby creation using dotaClient
-	// This is a placeholder response
-	response := map[string]interface{}{
-		"status":     "success",
-		"message":    "Lobby creation initiated",
-		"lobby_name": req.LobbyName,
-		"bot_used":   botName,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding lobby create response: %v", err)
-	}
-}
-
-// LobbyInfoRequest represents a request to get lobby information
-type LobbyInfoRequest struct {
-	LobbyID string `json:"lobby_id"`
-}
-
-// handleLobbyInfo handles lobby information requests
-func (s *Server) handleLobbyInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// For GET requests, read from query params
-	var lobbyID string
-	if r.Method == http.MethodGet {
-		lobbyID = r.URL.Query().Get("lobby_id")
-	} else {
-		var req LobbyInfoRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-			return
-		}
-		lobbyID = req.LobbyID
-	}
-
-	if lobbyID == "" {
-		http.Error(w, "lobby_id is required", http.StatusBadRequest)
-		return
-	}
-
-	// TODO: Implement actual lobby info retrieval
-	response := map[string]interface{}{
-		"status":   "success",
-		"lobby_id": lobbyID,
-		"message":  "Lobby info retrieval not yet fully implemented",
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding lobby info response: %v", err)
-	}
-}
+func (noBots) Statuses() []bot.Status         { return nil }
+func (noBots) Stalled(time.Duration) []string { return nil }

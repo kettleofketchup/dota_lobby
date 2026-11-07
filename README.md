@@ -1,231 +1,186 @@
 # dota_lobby
 
-A Dota 2 lobby management service that provides an API endpoint for curating Dota 2 lobbies for league play. This service manages multiple Steam bot accounts to create and manage game lobbies.
+A Go service that keeps a set of Steam bot accounts logged on to the Dota 2
+Game Coordinator and exposes them over a REST API, for creating and running
+league lobbies.
 
-## Features
+**Status: Phase 1.** Bots log on headless (refresh token, with password +
+TOTP re-authentication), reach a GC session, reconnect with backoff, and
+report their true state. Lobby endpoints arrive in Phase 3 and answer
+`501 Not Implemented` until then. The design is in
+[docs/plans/2026-11-06-lobby-service-architecture.md](docs/plans/2026-11-06-lobby-service-architecture.md).
 
-- **Multi-Bot Management**: Support for multiple Steam bot accounts
-- **REST API**: HTTP API for lobby creation and management
-- **Configuration Management**: Separate configs for application settings and sensitive credentials using Viper
-- **GitHub Automations**: Integrated CI/CD with golangci-lint and automated binary releases
-- **Go-Dota2 Integration**: Uses the [go-dota2](https://github.com/paralin/go-dota2) API for bot operations
+## Requirements
 
-## Quick Start
+- [mise](https://mise.jdx.dev) for the toolchain: `mise.toml` pins Go and
+  golangci-lint, and `make`/`just` run them through `mise exec`.
+- One Steam account per bot. For fully headless operation each account needs
+  a Steam Guard mobile authenticator whose `shared_secret` you hold (see
+  [docs/research/04-steam-auth-headless.md](docs/research/04-steam-auth-headless.md)).
+- [sops](https://github.com/getsops/sops) + age, if you keep bot
+  credentials encrypted in the repo (`just secrets ...`).
 
-### Prerequisites
+## Build and test
 
-- Go 1.24 or higher
-- Steam accounts for bots
-- Make (optional, for using Makefile commands)
-
-### Installation
-
-1. Clone the repository:
 ```bash
-git clone https://github.com/kettleofketchup/dota_lobby.git
-cd dota_lobby
+make build        # bin/dota_lobby (or: just go build)
+make test         # go test -race ./...
+make lint         # golangci-lint run ./...
 ```
 
-2. Build the binary:
-```bash
-make build
+## Commands
+
+```text
+dota_lobby [serve] [--config FILE] [--secrets FILE]
+dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
+dota_lobby healthcheck [--url URL] [--timeout 5s]
+dota_lobby version
 ```
 
-3. Create configuration files:
-```bash
-cp config.yaml.example config.yaml
-cp secrets.yaml.example secrets.yaml
-```
+- **serve** (the default) runs the service until SIGINT/SIGTERM. Shutdown
+  fails `/readyz`, stops the HTTP server (5 s), then disconnects every bot in
+  parallel (15 s budget) and releases the state-dir lock.
+- **auth** logs one bot on with its password once and stores the refresh
+  token in the token store. With a `shared_secret` it needs no input. Without
+  one it takes `--code` (authenticator or email code) or asks on the
+  terminal. It refuses to run while a `serve` process holds the state dir
+  unless you pass `--force`; the running service then uses the new token at
+  the bot's next logon.
+- **healthcheck** does `GET http://127.0.0.1:$DOTA_LOBBY_SERVER_PORT/livez`
+  (port 8080 by default) and exits 0 only on `200`. It is meant for Docker's
+  `HEALTHCHECK CMD ["/usr/local/bin/dota_lobby","healthcheck"]`.
 
-4. Edit `secrets.yaml` with your Steam bot credentials:
-```yaml
-secrets:
-  bots:
-    - username: "your_steam_username"
-      password: "your_steam_password"
-      sentry_hash: ""  # Optional
-```
-
-5. (Optional) Customize `config.yaml`:
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 8080
-  # Optional: Enable API key authentication (recommended for production)
-  api_key: "your-secret-api-key-here"
-```
-
-6. Run the service:
-```bash
-./bin/dota_lobby
-```
+Exit codes: `0` success, `1` failure, `2` usage error.
 
 ## Configuration
 
-The service uses two configuration files:
+Settings and secrets are separate. Copy the examples and edit them:
 
-### config.yaml (Application Settings)
-Contains non-sensitive application settings:
-- `server.host`: Server bind address (default: "0.0.0.0")
-- `server.port`: Server port (default: 8080)
-- `server.api_key`: Optional API key for authentication (recommended for production)
-
-**Note:** All sensitive fields (API keys, passwords) use a `Secret` type that prevents accidental logging or exposure. They will appear as `***REDACTED***` in logs and JSON output.
-
-### secrets.yaml (Bot Credentials)
-Contains sensitive Steam bot credentials. **Keep this file secure and never commit it to version control.**
-
-Configuration files are loaded from:
-1. Current directory
-2. `./config/` directory
-3. `$HOME/.config/dota_lobby/` directory
-
-## Authentication
-
-The API supports optional API key authentication to restrict access to protected endpoints.
-
-**When enabled** (by setting `server.api_key` in config.yaml):
-- Protected endpoints require authentication
-- API key can be provided via:
-  - `X-API-Key` header: `X-API-Key: your-api-key`
-  - `Authorization` header: `Authorization: Bearer your-api-key`
-- Health endpoint (`/health`) remains public
-
-**When disabled** (no `api_key` configured):
-- All endpoints are public
-- A warning is logged on startup
-
-**Protected endpoints:**
-- `GET /bots` - Bot status
-- `POST /lobby/create` - Create lobby
-- `GET|POST /lobby/info` - Lobby information
-
-**Example authenticated request:**
 ```bash
-# Using X-API-Key header
-curl -H "X-API-Key: your-secret-key" http://localhost:8080/bots
-
-# Using Authorization Bearer
-curl -H "Authorization: Bearer your-secret-key" http://localhost:8080/bots
+cp config.yaml.example config.yaml     # settings, safe to put in a ConfigMap
+cp secrets.yaml.example secrets.yaml   # credentials, never committed
 ```
 
-## API Endpoints
+Layers, lowest first: built-in defaults, `config.yaml`, `secrets.yaml`,
+per-bot credentials files, `DOTA_LOBBY_*` env vars, `DOTA_LOBBY_*_FILE`.
 
-### Health Check
-```
-GET /health
-```
-Returns the service health status. **No authentication required.**
+- Env names are the key path uppercased with `.` and `-` turned into `_`:
+  `DOTA_LOBBY_SERVER_PORT=9000`,
+  `DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_PASSWORD=...`.
+- Adding `_FILE` reads the value from a file (Docker/K8s secrets):
+  `DOTA_LOBBY_SECRETS_API_KEY_FILE=/run/secrets/api_key`.
+- Files are found via `--config`/`--secrets`, `DOTA_LOBBY_CONFIG_FILE`/
+  `DOTA_LOBBY_SECRETS_FILE`, or the search path (`$DOTA_LOBBY_CONFIG_DIR`,
+  `/etc/dota_lobby`, `.`, `./config`, `~/.config/dota_lobby`; secrets also in
+  `/run/secrets/dota_lobby`).
+- Unknown keys are an error, so typos fail at startup.
 
-### Bot Status
-```
-GET /bots
-```
-Returns the list of configured bots and their connection status. **Requires authentication if API key is configured.**
+Every secret is a `config.Secret`, which prints as `***REDACTED***` in logs,
+`fmt` and JSON. Tokens, passwords and `shared_secret` never appear in an API
+response.
 
-### Create Lobby
-```
-POST /lobby/create
-Content-Type: application/json
-X-API-Key: your-api-key  # If authentication is enabled
+### Bot credentials
 
-{
-  "lobby_name": "My League Lobby",
-  "password": "optional_password",
-  "server_region": "USE",
-  "game_mode": "AP"
-}
-```
-Creates a new Dota 2 lobby using an available bot. **Requires authentication if API key is configured.**
+Each bot needs a password and, for headless re-authentication, the
+authenticator's `shared_secret`. A `refresh_token` is optional: it only seeds
+the token store the first time.
 
-### Lobby Info
-```
-GET /lobby/info?lobby_id=12345
-X-API-Key: your-api-key  # If authentication is enabled
-```
-or
-```
-POST /lobby/info
-Content-Type: application/json
-X-API-Key: your-api-key  # If authentication is enabled
+They can come from `secrets.yaml` (`secrets.bots.<name>`), from a per-bot
+credentials file, or from env. A credentials file uses the same keys as the
+sops files in `secrets/bots/` (`STEAM_USER`, `STEAM_PASS`,
+`STEAM_SHARED_SECRET`, `STEAM_REFRESH_TOKEN`) or the lowercase names, as YAML,
+JSON or dotenv. The service looks for `<credentials_dir>/<bot>.yaml` (or
+`.yml`, `.json`, `.env`), or `bots[].credentials_file`. With no `bots:` list
+in the config, every file in `credentials_dir` becomes a bot.
 
-{
-  "lobby_id": "12345"
-}
-```
-Retrieves information about a specific lobby. **Requires authentication if API key is configured.**
+### Using the sops files
 
-## Development
+The service never reads encrypted files; decrypt them for it. Manage them
+with `just secrets init`, `just secrets new-bot <name>`, `just secrets edit
+<name>` and `just secrets list`.
 
-### Building
+One bot, decrypted only for the life of the process:
+
 ```bash
-make build
+sops exec-file --no-fifo --filename league_bot_1.yaml \
+  secrets/bots/league_bot_1.sops.yaml \
+  'DOTA_LOBBY_CREDENTIALS_DIR=$(dirname {}) bin/dota_lobby serve'
 ```
 
-### Running
+Several bots: decrypt into a tmpfs and point `credentials_dir` at it.
+
 ```bash
-make run
+install -d -m 700 /run/dota_lobby/creds
+for f in secrets/bots/*.sops.yaml; do
+  sops decrypt "$f" > "/run/dota_lobby/creds/$(basename "$f" .sops.yaml).yaml"
+done
+DOTA_LOBBY_CREDENTIALS_DIR=/run/dota_lobby/creds bin/dota_lobby serve
 ```
 
-### Testing
+`sops exec-env` works too if you map the variables to the service's names:
+
 ```bash
-make test
+sops exec-env secrets/bots/league_bot_1.sops.yaml \
+  'DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_PASSWORD="$STEAM_PASS" \
+   DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_SHARED_SECRET="$STEAM_SHARED_SECRET" \
+   DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_REFRESH_TOKEN="$STEAM_REFRESH_TOKEN" \
+   bin/dota_lobby serve'
 ```
 
-### Linting
+### Tokens and state
+
+`state_dir` (default `/var/lib/dota_lobby`) holds a `LOCK` file, taken with
+`flock` so two processes never run the same accounts, and one token store
+per bot at `<state_dir>/bots/<username>/token.json` (mode 0600). On start a
+bot uses its stored token; if there is none it seeds the store from
+`refresh_token`; if there is still none, or Steam rejects the token, it
+authenticates with password + TOTP and stores the new token. Tokens close to
+expiry are renewed in the background. Renewed tokens stay in `state_dir`;
+nothing is written back to sops, so keep `state_dir` on a persistent volume.
+
+A bot without a `shared_secret` cannot recover on its own: when its token
+dies it goes to `needs_attention`. Run `dota_lobby auth --bot NAME` (with
+`--code` or at a terminal) and restart the service.
+
+## API
+
+Health endpoints are open. Everything under `/v1` needs the API key
+(`secrets.api_key`) when one is set, as `X-API-Key: <key>` or
+`Authorization: Bearer <key>`. Without a key `/v1` is open and a warning is
+logged. Errors share one envelope:
+`{"error": {"code": "...", "message": "...", "retryable": false}}`.
+
+| Method | Path | Auth | Response |
+|---|---|---|---|
+| GET | `/livez` | no | `200 {"status":"ok"}`; `503` with `stalled_bots` if a bot's loop has not moved for 30 s. Does not depend on Steam |
+| GET | `/readyz` | no | `200` when at least `readiness.min_ready_bots` bots are `gc_ready`; `503` otherwise and while shutting down |
+| GET | `/health` | no | Always `200`: readiness, bot counts per state, version, uptime |
+| GET | `/v1/bots` | yes | `{"bots": [...]}`: name, username, state, ready, reason, last_error (EResult name), last_error_message, since, steam_id (string), limited, lobby_stale, token_expires_at, attempt, gc_queue_position |
+| GET | `/v1/bots/{name}` | yes | One bot, same shape; `404` if unknown |
+| any | `/v1/lobbies`, `/v1/lobbies/...` | yes | `501 not_implemented` until Phase 3 |
+| any | `/bots`, `/lobby/create`, `/lobby/info` | yes | `410 gone`; the pre-v1 placeholders were removed |
+
+Bot states: `disconnected`, `connecting`, `logging_on`, `authenticating`,
+`steam_online`, `gc_hello`, `gc_queued`, `gc_ready`, `backoff`,
+`cooling_down`, `needs_attention`, `suspended`, `stopped`.
+
 ```bash
-make lint
+curl -s localhost:8080/readyz
+curl -s -H "X-API-Key: $KEY" localhost:8080/v1/bots
 ```
 
-### Cleaning
-```bash
-make clean
+## Layout
+
+```text
+cmd/dota_lobby/   serve, auth, healthcheck
+pkg/config/       Viper loading, env + _FILE, credentials files, Secret
+pkg/gc/           the only importer of go-steam/go-dota2; gc.Client + fake
+pkg/auth/         token store, TOTP, EResult classifier, state-dir lock
+pkg/bot/          per-bot supervisor state machine, GC worker, manager
+pkg/api/          HTTP API
+tools/probe/      Phase 0 live probe (its own module)
 ```
-
-## GitHub Workflows
-
-### Linting
-Automatically runs `golangci-lint` on every push to main and on pull requests.
-
-### Release
-Creates a GitHub release with the compiled binary when a version tag (e.g., `v1.0.0`) is pushed:
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## Architecture
-
-```
-dota_lobby/
-├── cmd/dota_lobby/      # Main application entry point
-├── pkg/
-│   ├── api/             # HTTP API server
-│   ├── bot/             # Bot manager and Steam client handling
-│   └── config/          # Configuration loading with Viper
-├── .github/workflows/   # CI/CD workflows
-├── config.yaml.example  # Example configuration
-└── secrets.yaml.example # Example secrets configuration
-```
-
-## Security Notes
-
-- Never commit `secrets.yaml` to version control
-- **Enable API key authentication** in production by setting `server.api_key` in config.yaml
-- Use strong, randomly generated API keys (e.g., 32+ characters)
-- Use strong passwords for bot accounts
-- Consider enabling Steam Guard for additional security
-- Run the service behind a reverse proxy with HTTPS in production
-- Rotate API keys periodically
-- Monitor access logs for unauthorized attempts
 
 ## License
 
-See LICENSE file for details.
-
-## References
-
-- [go-dota2](https://github.com/paralin/go-dota2) - Dota 2 client implementation
-- [go-steam](https://github.com/paralin/go-steam) - Steam client implementation
-- [Viper](https://github.com/spf13/viper) - Configuration management
-
+See LICENSE.

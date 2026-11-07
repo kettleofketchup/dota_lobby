@@ -157,6 +157,18 @@ func (m *Manager) Supervisor(name string) (*Supervisor, bool) {
 	return s, ok
 }
 
+// Stalled returns the names of bots whose run loop has not made progress
+// for longer than maxAge, for the /livez watchdog.
+func (m *Manager) Stalled(maxAge time.Duration) []string {
+	var out []string
+	for _, s := range m.sups {
+		if s.Stalled(maxAge) {
+			out = append(out, s.Name())
+		}
+	}
+	return out
+}
+
 // ReadyCount is how many bots are in gc_ready, for /readyz.
 func (m *Manager) ReadyCount() int {
 	n := 0

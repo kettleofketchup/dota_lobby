@@ -1,5 +1,12 @@
+set working-directory := ".."
+
+# Tools run through mise when it is installed, so the versions pinned in
+# mise.toml (go, golangci-lint) are used.
+RUN := `command -v mise >/dev/null 2>&1 && echo "mise exec --" || true`
+GO := RUN + " go"
+LINT := RUN + " golangci-lint"
 BINARY_NAME := "dota_lobby"
-BIN_DIR := env_var("PWD") / "bin"
+BIN_DIR := "bin"
 VERSION := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 COMMIT := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 DATE := `date -u +%Y-%m-%dT%H:%M:%SZ`
@@ -7,51 +14,51 @@ LDFLAGS := "-s -w -X main.version=" + VERSION + " -X main.commit=" + COMMIT + " 
 
 # Build the binary
 [group('go')]
-build: deps
+build:
     @echo "Building {{BINARY_NAME}}..."
     @mkdir -p {{BIN_DIR}}
-    go build -trimpath -o {{BIN_DIR}}/{{BINARY_NAME}} -ldflags "{{LDFLAGS}}" ./cmd/dota_lobby
+    {{GO}} build -trimpath -o {{BIN_DIR}}/{{BINARY_NAME}} -ldflags "{{LDFLAGS}}" ./cmd/dota_lobby
 
 # Run the application
 [group('go')]
 run: build
     @echo "Version: {{VERSION}}, Commit: {{COMMIT}}, Date: {{DATE}}"
     @echo "Running {{BINARY_NAME}}..."
-    {{BIN_DIR}}/{{BINARY_NAME}}
+    {{BIN_DIR}}/{{BINARY_NAME}} serve
 
 # Run tests
 [group('go')]
 test:
     @echo "Running tests..."
-    go test -v ./...
+    {{GO}} test -race ./...
 
 # Run tests with race detection and coverage
 [group('go')]
 test-full:
-    go test -race -cover ./...
+    {{GO}} test -race -cover ./...
 
 # Format code
 [group('go')]
-format: deps
+format:
     @echo "Formatting code..."
-    go fmt ./...
+    {{GO}} fmt ./...
 
 # Run linter
 [group('go')]
-lint: deps
+lint:
     @echo "Linting..."
-    golangci-lint run
+    {{LINT}} run ./...
 
-# Install dependencies
+# Tidy and download dependencies
 [group('go')]
 deps:
     @echo "Installing dependencies..."
-    go mod tidy
-    go mod download
+    {{GO}} mod tidy
+    {{GO}} mod download
 
 # Clean build artifacts
 [group('go')]
 clean:
     @echo "Cleaning..."
-    go clean
+    {{GO}} clean
     rm -rf {{BIN_DIR}}
