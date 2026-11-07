@@ -70,6 +70,10 @@ type SteamConfig struct {
 	ReconnectBackoffMax time.Duration `mapstructure:"reconnect_backoff_max"`
 	CooldownRateLimited time.Duration `mapstructure:"cooldown_rate_limited"`
 	CooldownElsewhere   time.Duration `mapstructure:"cooldown_elsewhere"`
+	// TOTPSkew is Steam's clock minus this host's, added before computing
+	// Steam Guard codes. Keep the host on NTP; this is for a host that
+	// cannot be (plan §4.8: code at now+skew).
+	TOTPSkew time.Duration `mapstructure:"totp_skew"`
 }
 
 // GCConfig times the Dota 2 game coordinator session and requests.
@@ -232,6 +236,7 @@ func defaults() map[string]any {
 		"steam::reconnect_backoff_max": "5m",
 		"steam::cooldown_rate_limited": "30m",
 		"steam::cooldown_elsewhere":    "10m",
+		"steam::totp_skew":             "0s",
 
 		"gc::hello_interval":  "10s",
 		"gc::request_timeout": "10s",

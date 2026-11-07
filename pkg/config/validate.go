@@ -74,6 +74,9 @@ func (c *Config) Validate() error {
 	}
 	positive("steam.cooldown_rate_limited", c.Steam.CooldownRateLimited)
 	positive("steam.cooldown_elsewhere", c.Steam.CooldownElsewhere)
+	if c.Steam.TOTPSkew < -MaxTOTPSkew || c.Steam.TOTPSkew > MaxTOTPSkew {
+		add("steam.totp_skew %s is beyond ±%s; fix the host clock instead", c.Steam.TOTPSkew, MaxTOTPSkew)
+	}
 	positive("gc.hello_interval", c.GC.HelloInterval)
 	positive("gc.request_timeout", c.GC.RequestTimeout)
 	positive("gc.create_timeout", c.GC.CreateTimeout)
@@ -150,8 +153,8 @@ func (c *Config) Validate() error {
 		}
 		users[lu] = b.Name
 		if s := b.Credentials.SharedSecret; s.IsSet() {
-			if raw, err := base64.StdEncoding.DecodeString(s.Reveal()); err != nil || len(raw) == 0 {
-				// The decode error can echo input bytes, so it is not wrapped.
+			if _, err := DecodeSharedSecret(s); err != nil {
+				// Not wrapped, in case a decoder ever echoes input bytes.
 				add("bot %s: shared_secret is not valid base64", b.Name)
 			}
 		}
@@ -169,4 +172,29 @@ func checkHTTPURL(raw string) error {
 		return fmt.Errorf("%q is not an absolute http(s) URL", raw)
 	}
 	return nil
+}
+
+// MaxTOTPSkew bounds steam.totp_skew. A larger offset means a broken host
+// clock, which breaks TLS and token expiry checks too.
+const MaxTOTPSkew = 10 * time.Minute
+
+// ErrBadSharedSecret is returned by DecodeSharedSecret for a value that is
+// not base64. It never carries the value.
+var ErrBadSharedSecret = errors.New("shared_secret is not valid base64")
+
+// DecodeSharedSecret decodes a Steam Guard shared_secret (the base64 value
+// from the authenticator's maFile). Surrounding whitespace is ignored and
+// the padding is optional, because some export tools strip it. Validate and
+// the TOTP generator both use it, so config never rejects a secret that
+// would produce codes.
+func DecodeSharedSecret(s Secret) ([]byte, error) {
+	raw := strings.TrimSpace(s.Reveal())
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		key, err = base64.RawStdEncoding.DecodeString(raw)
+	}
+	if err != nil || len(key) == 0 {
+		return nil, ErrBadSharedSecret
+	}
+	return key, nil
 }

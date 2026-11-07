@@ -344,6 +344,8 @@ secrets:
 func TestLoadErrors(t *testing.T) {
 	encrypted := write(t, t.TempDir(), "enc.yaml", "STEAM_PASS: ENC[AES256_GCM,data:x]\nsops:\n  version: 3.9.0\n")
 	mismatch := write(t, t.TempDir(), "m.yaml", "STEAM_USER: someone_else\n")
+	hexPass := write(t, t.TempDir(), "h.yaml", "STEAM_PASS: 0x1F\n")
+	floatToken := write(t, t.TempDir(), "f.yaml", "STEAM_REFRESH_TOKEN: 1e3\n")
 
 	cases := []struct {
 		name    string
@@ -371,6 +373,12 @@ webhooks: [{ url: "ftp://x", events: [] }]
 		{"encrypted credentials", "bots:\n  - { name: a, credentials_file: " + encrypted + " }\n", "", []string{"still sops-encrypted"}},
 		{"STEAM_USER mismatch", "bots:\n  - { name: a, username: me, credentials_file: " + mismatch + " }\n", "", []string{"differs from STEAM_USER"}},
 		{"encrypted secrets file", "", "secrets: {}\nsops: { version: 3 }\n", []string{"still sops-encrypted"}},
+		{"unquoted hex STEAM_PASS", "bots:\n  - { name: a, credentials_file: " + hexPass + " }\n", "", []string{"STEAM_PASS: quote the value"}},
+		{"unquoted float STEAM_REFRESH_TOKEN", "bots:\n  - { name: a, credentials_file: " + floatToken + " }\n", "", []string{"STEAM_REFRESH_TOKEN: quote the value"}},
+		{"unquoted octal password", "bots:\n  - name: a\n", "secrets:\n  bots:\n    a: { password: 0123 }\n", []string{"password", "quoted string"}},
+		{"unquoted float password", "bots:\n  - name: a\n", "secrets:\n  bots:\n    a: { password: 1e3 }\n", []string{"password", "quoted string"}},
+		{"unquoted api key", "", "secrets:\n  api_key: 12345\n", []string{"api_key", "quoted string"}},
+		{"totp skew too large", "steam: { totp_skew: 1h }\n", "", []string{"steam.totp_skew"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -383,10 +391,26 @@ webhooks: [{ url: "ftp://x", events: [] }]
 					t.Errorf("error %q does not mention %q", err, w)
 				}
 			}
-			if strings.Contains(err.Error(), "not base64!") {
-				t.Errorf("error echoes the secret: %v", err)
+			for _, secret := range []string{"not base64!", "0x1F"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("error echoes the secret %q: %v", secret, err)
+				}
 			}
 		})
+	}
+}
+
+// TestLoadUnquotedSecretNotEchoed: the decode error for a non-string secret
+// names the key but shows neither the typed value nor what YAML made of it.
+func TestLoadUnquotedSecretNotEchoed(t *testing.T) {
+	_, err := load(t, files{config: "bots:\n  - name: a\n", secrets: "secrets:\n  bots:\n    a: { password: 0123 }\n"})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, leak := range []string{"0123", "83"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error echoes %q: %v", leak, err)
+		}
 	}
 }
 
@@ -437,5 +461,44 @@ func TestParseDotenv(t *testing.T) {
 	}
 	if _, err := parseDotenv([]byte("just words\n")); err == nil {
 		t.Fatal("expected error for a non KEY=VALUE line")
+	}
+}
+
+func TestDecodeSharedSecret(t *testing.T) {
+	want := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+	tests := []struct {
+		name string
+		in   Secret
+		ok   bool
+	}{
+		{"padded", sharedSecret, true},
+		{"padding stripped", Secret(strings.TrimRight(sharedSecret, "=")), true},
+		{"trailing newline", sharedSecret + "\n", true},
+		{"surrounding spaces", " " + sharedSecret + " ", true},
+		{"not base64", "not base64!", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := DecodeSharedSecret(tt.in)
+			if tt.ok != (err == nil) {
+				t.Fatalf("err = %v", err)
+			}
+			if tt.ok && string(got) != string(want) {
+				t.Errorf("got %v", got)
+			}
+		})
+	}
+}
+
+// TestLoadAcceptsLooseSharedSecret: Validate takes every form the TOTP
+// generator does, e.g. an exported secret without its '=' padding.
+func TestLoadAcceptsLooseSharedSecret(t *testing.T) {
+	for _, v := range []string{strings.TrimRight(sharedSecret, "="), sharedSecret + " "} {
+		t.Setenv("DOTA_LOBBY_SECRETS_BOTS_A_SHARED_SECRET", v)
+		cfg := mustLoad(t, files{config: "bots:\n  - name: a\n"})
+		if cfg.Bots[0].Credentials.SharedSecret.Reveal() != v {
+			t.Errorf("shared_secret not loaded for %q", v)
+		}
 	}
 }

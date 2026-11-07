@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -216,8 +217,25 @@ func Load(opts Options) (*Config, error) {
 }
 
 // strictDecode rejects unknown keys so a typo fails loudly instead of being
-// silently ignored (08 §3.3: sentry_hash was never loaded).
-func strictDecode(c *mapstructure.DecoderConfig) { c.ErrorUnused = true }
+// silently ignored (08 §3.3: sentry_hash was never loaded), and refuses
+// secrets that YAML did not read as strings.
+func strictDecode(c *mapstructure.DecoderConfig) {
+	c.ErrorUnused = true
+	c.DecodeHook = mapstructure.ComposeDecodeHookFunc(secretMustBeString, c.DecodeHook)
+}
+
+var secretType = reflect.TypeFor[Secret]()
+
+// secretMustBeString stops weak decoding from rewriting a secret: an
+// unquoted `password: 0123` is the integer 83 to YAML, and the bot would
+// then fail every logon with InvalidPassword for no visible reason.
+func secretMustBeString(from, to reflect.Type, data any) (any, error) {
+	if to != secretType || from.Kind() == reflect.String || data == nil {
+		return data, nil
+	}
+	// The value is not echoed; mapstructure adds the key name.
+	return nil, fmt.Errorf("secret must be a quoted string, YAML read it as %s", from.Kind())
+}
 
 func defaultSearchPaths() []string {
 	var paths []string

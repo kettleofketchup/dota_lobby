@@ -31,6 +31,12 @@ var credentialFileKeys = map[string]string{
 	"device_name":         "device_name",
 }
 
+// secretFileKeys are the credentials file keys that must be strings.
+var secretFileKeys = map[string]bool{
+	"STEAM_PASS": true, "STEAM_SHARED_SECRET": true, "STEAM_REFRESH_TOKEN": true,
+	"password": true, "shared_secret": true, "refresh_token": true,
+}
+
 // credentialExts are the decrypted formats accepted in credentials_dir.
 var credentialExts = []string{".yaml", ".yml", ".json", ".env"}
 
@@ -77,6 +83,11 @@ func parseCredentials(data []byte) (map[string]string, error) {
 			case string:
 				out[k] = v
 			case bool, int, int64, uint64, float64:
+				if secretFileKeys[k] {
+					// YAML turns an unquoted 0x1F into 31; a rewritten
+					// password fails every logon. The value is not echoed.
+					return nil, fmt.Errorf("key %s: quote the value (YAML read it as a %T)", k, v)
+				}
 				out[k] = fmt.Sprint(v)
 			default:
 				return nil, fmt.Errorf("key %s: want a string, got %T", k, v)

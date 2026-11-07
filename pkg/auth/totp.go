@@ -3,7 +3,6 @@ package auth
 import (
 	"crypto/hmac"
 	"crypto/sha1" // Steam Guard TOTP is defined over HMAC-SHA1.
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -47,17 +46,11 @@ func Code(sharedSecret config.Secret, t time.Time) (string, error) {
 }
 
 func decodeSharedSecret(s config.Secret) ([]byte, error) {
-	raw := strings.TrimSpace(s.Reveal())
-	if raw == "" {
+	if strings.TrimSpace(s.Reveal()) == "" {
 		return nil, ErrNoSharedSecret
 	}
-	key, err := base64.StdEncoding.DecodeString(raw)
+	key, err := config.DecodeSharedSecret(s)
 	if err != nil {
-		// Some tools strip the padding.
-		if k, rerr := base64.RawStdEncoding.DecodeString(raw); rerr == nil {
-			return k, nil
-		}
-		// The decode error does not echo the input, so it is safe to wrap.
 		return nil, fmt.Errorf("auth: decode shared_secret: %w", err)
 	}
 	return key, nil

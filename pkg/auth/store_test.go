@@ -291,10 +291,22 @@ func TestStoreLoadOrSeed(t *testing.T) {
 	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
 	seed := fakeJWT(t, map[string]any{"sub": "76561198000000009", "exp": 1_800_000_000})
 	stored := Token{RefreshToken: fakeJWT(t, map[string]any{"sub": "5"}), SteamID: 5, Source: SourceRenew}
+	tokAt := func(sub string, exp time.Time) Token {
+		tok, err := NewToken(fakeJWT(t, map[string]any{"sub": sub, "exp": exp.Unix()}), now.Add(-time.Hour), SourceAuthenticate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	expired := tokAt("6", now.Add(-24*time.Hour))
+	renewed := tokAt("7", time.Unix(1_900_000_000, 0)) // later than seed
+	older := tokAt("8", now.Add(10*24*time.Hour))      // valid, but before seed's exp
+	expiredSeed := fakeJWT(t, map[string]any{"sub": "76561198000000010", "exp": now.Add(-time.Hour).Unix()})
 
 	tests := []struct {
 		name       string
 		existing   *Token
+		raw        string // file contents instead of existing
 		seed       config.Secret
 		wantSeeded bool
 		wantID     uint64
@@ -306,12 +318,27 @@ func TestStoreLoadOrSeed(t *testing.T) {
 		{name: "stored token without seed", existing: &stored, wantID: 5},
 		{name: "nothing at all", wantErr: ErrNoToken},
 		{name: "seed is not a JWT", seed: "plain-old-string", anyErr: true},
+		// An operator shipped a fresh token through sops (plan §4.8).
+		{name: "seed replaces an expired token", existing: &expired, seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
+		{name: "seed replaces an unreadable file", raw: "{not json", seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
+		{name: "newer seed replaces a valid token", existing: &older, seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
+		{name: "renewed token beats the original seed", existing: &renewed, seed: config.Secret(seed), wantID: 7},
+		{name: "expired seed does not replace an expired token", existing: &expired, seed: config.Secret(expiredSeed), wantID: 6},
+		{name: "bad seed leaves a stored token alone", existing: &older, seed: "plain-old-string", wantID: 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewStore(filepath.Join(t.TempDir(), "bot"))
 			if tt.existing != nil {
 				if err := s.Save(*tt.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.raw != "" {
+				if err := os.MkdirAll(filepath.Dir(s.Path()), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(s.Path(), []byte(tt.raw), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

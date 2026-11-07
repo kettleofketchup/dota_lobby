@@ -94,26 +94,50 @@ func (s *Store) Delete() error {
 	return syncDir(s.dir)
 }
 
-// LoadOrSeed returns the stored token. When there is none and seed is set
-// (the STEAM_REFRESH_TOKEN from the bot's credentials), the seed is saved as
-// the stored token and returned with seeded=true. Later renewals overwrite
-// the stored copy; the seed in sops is never written back, so once a token
-// is stored the seed is ignored. Without a seed it returns ErrNoToken.
+// LoadOrSeed returns the stored token, replacing it with seed (the
+// STEAM_REFRESH_TOKEN from the bot's credentials) when the seed is the
+// better token: nothing usable is stored (missing, unreadable or expired),
+// or the seed is a different token that expires later, which means an
+// operator minted a new one and shipped it through sops (plan §4.8). A seed
+// that is older than the stored token, the usual case once the service has
+// renewed, is ignored; renewals are never written back to sops. seeded
+// reports that the seed was saved. Without a seed or token it returns
+// ErrNoToken.
 func (s *Store) LoadOrSeed(seed config.Secret, now time.Time) (t Token, seeded bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, err = s.load()
-	if !errors.Is(err, ErrNoToken) || !seed.IsSet() {
+	if !seed.IsSet() {
 		return t, false, err
 	}
-	t, err = NewToken(seed.Reveal(), now, SourceSeed)
-	if err != nil {
-		return Token{}, false, fmt.Errorf("auth: seed refresh token: %w", err)
+	st, serr := NewToken(seed.Reveal(), now, SourceSeed)
+	if serr != nil {
+		if errors.Is(err, ErrNoToken) {
+			return Token{}, false, fmt.Errorf("auth: seed refresh token: %w", serr)
+		}
+		return t, false, err // keep what is stored; the seed is unusable
 	}
-	if err := s.save(t); err != nil {
+	if !seedWins(t, err, st, now) {
+		return t, false, err
+	}
+	if err := s.save(st); err != nil {
 		return Token{}, false, err
 	}
-	return t, true, nil
+	return st, true, nil
+}
+
+func seedWins(stored Token, loadErr error, seed Token, now time.Time) bool {
+	switch {
+	case loadErr != nil:
+		return true // missing or unreadable
+	case seed.RefreshToken == stored.RefreshToken:
+		return false
+	case stored.Expired(now):
+		return !seed.Expired(now)
+	}
+	// Both usable: only a newer seed replaces a stored token, and only
+	// when both expiries are known.
+	return !stored.ExpiresAt.IsZero() && !seed.ExpiresAt.IsZero() && seed.ExpiresAt.After(stored.ExpiresAt)
 }
 
 // writeFileAtomic writes b next to path, fsyncs it, renames it over path and
