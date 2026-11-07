@@ -2,7 +2,6 @@ package bot
 
 import (
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/auth"
@@ -173,6 +172,15 @@ type Snapshot struct {
 
 	Conn    bool // a connection is open (Connect succeeded, no Disconnected yet)
 	Playing bool // SetPlaying(true) was sent on this connection
+	// ConnSeq counts successful Connects, matching gc.Disconnected.Conn.
+	// Abandoned is a connection given up on after TimerDisconnect, whose
+	// late Disconnected must not decide again.
+	ConnSeq, Abandoned uint64
+	// Draining is set from our Disconnect until the connection is gone.
+	// GC input is ignored meanwhile: SetPlaying(false) itself reports
+	// NO_SESSION, and reacting to that would send a hello on an account
+	// another session may hold, and replace the disconnect timer.
+	Draining bool
 	// Pending is what the Disconnected that ends this connection will do.
 	// LogOnFailed, LoggedOff and PlayingBlocked only set it (plan §4.1:
 	// a single reconnect owner).
@@ -197,7 +205,7 @@ type Snapshot struct {
 }
 
 // Ready reports whether the bot can take GC work.
-func (s Snapshot) Ready() bool { return s.State == StateGCReady }
+func (s Snapshot) Ready() bool { return s.State == StateGCReady && !s.Draining }
 
 // Input is anything that drives the state machine.
 type Input interface{ isInput() }
@@ -356,6 +364,7 @@ func (st *step) awaitSlot() {
 func (st *step) begin() {
 	st.disarm()
 	st.s.Pending, st.s.HasPending = auth.Policy{}, false
+	st.s.Draining = false
 	switch {
 	case st.s.HasToken:
 		st.enter(StateConnecting, "")
@@ -450,11 +459,16 @@ func (st *step) decide(p auth.Policy) {
 }
 
 // dropConn ends the connection on our side. The Disconnected that follows
-// applies pending; the timer covers a Disconnected that never comes.
+// applies pending; the timer covers a Disconnected that never comes. While
+// already draining it only updates pending.
 func (st *step) dropConn(pending auth.Policy, override bool) {
 	if override || !st.s.HasPending {
 		st.s.Pending, st.s.HasPending = pending, true
 	}
+	if st.s.Draining {
+		return
+	}
+	st.s.Draining = true
 	if st.s.Playing {
 		st.do(SetPlaying{Playing: false})
 		st.s.Playing = false
@@ -470,7 +484,7 @@ func (st *step) connectionGone() {
 		p = st.s.Pending
 	}
 	st.s.Pending, st.s.HasPending = auth.Policy{}, false
-	st.s.Playing = false
+	st.s.Playing, st.s.Draining = false, false
 	st.s.LobbyStale = true
 	st.s.QueuePosition = 0
 	st.disarm()
@@ -505,8 +519,12 @@ func (st *step) timer(kind TimerKind) {
 		}
 	case TimerDisconnect:
 		// Disconnected never came. Decide anyway; Conn stays set, so the
-		// next Connect fails with ErrAlreadyConnected and tries again.
+		// next Connect fails with ErrAlreadyConnected and tries again, and
+		// the late Disconnected is recognised as this connection's.
 		if s.State.online() {
+			if s.Conn {
+				s.Abandoned = s.ConnSeq
+			}
 			st.connectionGone()
 		}
 	case TimerSettle:
@@ -571,9 +589,12 @@ func (st *step) connectResult(err error) {
 	switch {
 	case err == nil:
 		s.Conn = true
+		s.ConnSeq++
 	case errors.Is(err, gc.ErrAlreadyConnected):
 		// A previous connection has not delivered its Disconnected yet.
+		// Dropping it again means its Disconnected decides after all.
 		s.Conn = true
+		s.Abandoned = 0
 		s.LastError = err.Error()
 		st.dropConn(auth.Policy{Action: auth.ActionRetryBackoff, Reason: ReasonAlreadyConnected}, false)
 	case errors.Is(err, auth.ErrNoToken), errors.Is(err, gc.ErrNoCredentials):
@@ -608,6 +629,12 @@ func (st *step) authResult(err error) {
 
 func (st *step) event(ev gc.Event) {
 	s := &st.s
+	if s.Draining {
+		switch ev.(type) {
+		case gc.Connected, gc.LoggedOn, gc.PlayingSession, gc.GCWelcomed, gc.GCStatus:
+			return
+		}
+	}
 	switch ev := ev.(type) {
 	case gc.Connected:
 		if s.State == StateConnecting {
@@ -658,6 +685,17 @@ func (st *step) event(ev gc.Event) {
 			s.LastError = ev.Err.Error()
 		}
 	case gc.Disconnected:
+		if ev.Conn != 0 {
+			if ev.Conn < s.ConnSeq {
+				return // an older connection's; the current one is open
+			}
+			s.ConnSeq = ev.Conn // equal, unless the counts drifted
+			if ev.Conn == s.Abandoned {
+				// Already decided by TimerDisconnect.
+				s.Conn, s.Abandoned = false, 0
+				return
+			}
+		}
 		// While connecting, only a connection we opened counts: a late
 		// Disconnected from an abandoned one must not decide twice.
 		live := s.State.online() && (s.State != StateConnecting || s.Conn)
@@ -734,10 +772,12 @@ func classifyAuthError(err error, hasSharedSecret bool, c auth.Classifier) auth.
 	case errors.As(err, &ae) && ae.NeedsGuard():
 		return auth.GuardPrompt(hasSharedSecret)
 	case errors.As(err, &ae) && ae.State == "denied":
-		// go-steam only gives the EResult name in the message.
-		msg := ae.Error()
-		if strings.Contains(msg, "RateLimitExceeded") || strings.Contains(msg, "LoginDeniedThrottle") {
-			return c.Classify(int32(auth.EResultRateLimitExceeded), false)
+		// A Web API x-eresult goes through the same table as a CM logon:
+		// 88 retries in a new TOTP window, 84/87 cool down, 2/20 back off.
+		// A denial without one (an extended error message) is taken as a
+		// refused password.
+		if ae.Result != 0 {
+			return c.Classify(int32(ae.Result), false)
 		}
 		return c.Classify(int32(auth.EResultInvalidPassword), false)
 	case errors.As(err, &ae) && ae.State == "agreement":

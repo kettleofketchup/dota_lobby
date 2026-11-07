@@ -274,6 +274,182 @@ func TestRateLimitPausesGate(t *testing.T) {
 	}
 }
 
+// TestOwnNoSessionWhileDraining: go-dota2 reports NO_SESSION for our own
+// SetPlaying(false). Until the Disconnected arrives the bot must not say
+// hello on an account another session holds, nor count as ready.
+func TestOwnNoSessionWhileDraining(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+		h.fc.Script("SetPlaying") // true
+		h.fc.Script("SetPlaying", gc.GCStatus{Old: gc.GCHaveSession, New: gc.GCNoSession})
+		h.fc.Script("Disconnect") // Disconnected comes later
+	})
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+	hellos := h.fc.CallCount("SayHello")
+
+	h.fc.Emit(gc.PlayingSession{Blocked: true, AppID: 570})
+	h.until("draining", time.Millisecond, time.Second, func(s Status) bool { return !s.Ready })
+	// A restarted hello loop would send at once and again after 10 s; stay
+	// inside the 30 s disconnect timeout.
+	for range 5 {
+		h.clk.Advance(5 * time.Second)
+		time.Sleep(2 * time.Millisecond)
+	}
+	if n := h.fc.CallCount("SayHello"); n != hellos {
+		t.Errorf("SayHello sent %d times while draining", n-hellos)
+	}
+	if st := h.sup.Status(); st.State != StateGCReady || st.Ready {
+		t.Errorf("status while draining = %s ready=%t", st.State, st.Ready)
+	}
+
+	h.fc.Emit(gc.Disconnected{})
+	st := h.untilState(StateCoolingDown, time.Second)
+	if st.Reason != ReasonBlockedElsewhere {
+		t.Errorf("reason = %q", st.Reason)
+	}
+}
+
+// TestDisconnectTimeoutStillCoversDraining: with the NO_SESSION ignored, the
+// disconnect timer is what moves on when Disconnected never arrives.
+func TestDisconnectTimeoutStillCoversDraining(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+		h.fc.Script("SetPlaying")
+		h.fc.Script("SetPlaying", gc.GCStatus{Old: gc.GCHaveSession, New: gc.GCNoSession})
+		h.fc.Script("Disconnect")
+	})
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+	h.fc.Emit(gc.LoggedOff{Result: gc.EResultLoggedInElsewhere})
+	st := h.untilState(StateCoolingDown, 2*time.Minute)
+	if st.Reason != auth.ReasonElsewhere {
+		t.Errorf("reason = %q", st.Reason)
+	}
+}
+
+// TestPauseHoldsReservedSlots: a rate limit after a bot booked its slot
+// still holds that bot (plan §9: pause the other bots' logons).
+func TestPauseHoldsReservedSlots(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.gate = NewGate(10 * time.Second)
+		h.gate.Reserve(h.clk.Now()) // another bot holds the first slot
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+	})
+	h.start()
+	time.Sleep(10 * time.Millisecond)
+	// The other bot is rate-limited before this bot's slot comes due.
+	h.gate.Pause(h.clk.Now().Add(5 * time.Minute))
+	for range 30 {
+		h.clk.Advance(9 * time.Second) // 4.5 minutes
+		time.Sleep(time.Millisecond)
+	}
+	if n := h.fc.CallCount("Connect"); n != 0 {
+		t.Fatalf("logged on during the pause: %d Connect calls", n)
+	}
+	h.untilState(StateGCReady, 2*time.Minute)
+}
+
+// TestRetryPicksUpNewToken: an operator mints a token with `auth --bot`
+// while the bot is in needs_attention, then calls retry.
+func TestRetryPicksUpNewToken(t *testing.T) {
+	b := config.BotConfig{Name: "bot-a", Username: "bota", Enabled: true}
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+	})
+	h.start()
+	h.untilState(StateNeedsAttention, time.Second)
+
+	tok, err := auth.NewToken(jwt(t, "1", h.clk.Now().Add(200*24*time.Hour)), h.clk.Now(), auth.SourceAuthenticate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.Save(tok); err != nil {
+		t.Fatal(err)
+	}
+	h.sup.Retry()
+	h.untilState(StateGCReady, time.Minute)
+	if creds := connectCreds(t, h.fc); len(creds) != 1 || creds[0].AccessToken.Reveal() != tok.RefreshToken {
+		t.Errorf("Connect creds = %+v", creds)
+	}
+}
+
+// TestStaleAuthResultsDropped: a renewal superseded by a re-auth, or an
+// Authenticate superseded by another, must not touch the store.
+func TestStaleAuthResultsDropped(t *testing.T) {
+	now := newFakeClock().Now()
+	tok, err := auth.NewToken(jwt(t, "1", now.Add(200*24*time.Hour)), now, auth.SourceAuthenticate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewSupervisor(headlessBot(), fake.New(), SupervisorOptions{Store: auth.NewStore(t.TempDir()), Clock: newFakeClock()})
+	s.ctx, s.cancel = context.WithCancel(t.Context())
+	defer s.cancel()
+
+	renewCancelled := false
+	s.renewCancel = func() { renewCancelled = true }
+	s.renewGen = 5
+	s.startAuth()
+	if !renewCancelled || s.renewCancel != nil {
+		t.Fatal("startAuth did not cancel the in-flight renewal")
+	}
+	if _, ok := s.authFinished(authDone{gen: 5, renew: true, tok: tok}); ok {
+		t.Error("renewal result fed to the state machine")
+	}
+	if _, err := s.store.Load(); !errors.Is(err, auth.ErrNoToken) {
+		t.Errorf("superseded renewal saved a token: %v", err)
+	}
+	if _, ok := s.authFinished(authDone{gen: s.authGen - 1, tok: tok}); ok {
+		t.Error("stale Authenticate result accepted")
+	}
+	in, ok := s.authFinished(authDone{gen: s.authGen, tok: tok})
+	if ar, isAR := in.(AuthResult); !ok || !isAR || ar.Err != nil {
+		t.Errorf("current result = %#v, %t", in, ok)
+	}
+	if got, err := s.store.Load(); err != nil || got.RefreshToken != tok.RefreshToken {
+		t.Errorf("stored token = %v, %v", got, err)
+	}
+}
+
+// TestStopWithFullQueue: a wedged loop with a full input queue must not
+// hold Stop past its ctx.
+func TestStopWithFullQueue(t *testing.T) {
+	s := NewSupervisor(headlessBot(), fake.New(), SupervisorOptions{Store: auth.NewStore(t.TempDir()), Clock: newFakeClock()})
+	s.startOnce.Do(func() {
+		s.ctx, s.cancel = context.WithCancel(t.Context())
+		// Stands in for a run loop stuck in handle that exits on cancel.
+		go func() {
+			<-s.ctx.Done()
+			close(s.done)
+		}()
+	})
+	for range cap(s.inputs) {
+		s.inputs <- heartbeat{}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- s.Stop(ctx) }()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Stop = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked on a full input queue")
+	}
+}
+
 func TestGuardWithoutSharedSecretNeedsAttention(t *testing.T) {
 	b := headlessBot()
 	b.Credentials.SharedSecret = ""

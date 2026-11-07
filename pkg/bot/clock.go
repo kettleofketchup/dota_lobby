@@ -68,3 +68,16 @@ func (g *Gate) Pause(until time.Time) {
 		g.paused = until
 	}
 }
+
+// Recheck is called when a reserved slot comes due. If a Pause began after
+// the slot was booked, it books a fresh slot after the pause (keeping the
+// stagger between the waiting bots) and returns the wait; otherwise 0.
+func (g *Gate) Recheck(now time.Time) time.Duration {
+	g.mu.Lock()
+	paused := g.paused.After(now)
+	g.mu.Unlock()
+	if !paused {
+		return 0
+	}
+	return g.Reserve(now)
+}

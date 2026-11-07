@@ -69,7 +69,8 @@ func (c cli) auth(ctx context.Context, args []string) error {
 	lock, err := auth.AcquireLock(cfg.StateDir)
 	switch {
 	case errors.Is(err, auth.ErrLocked) && *force:
-		_, _ = fmt.Fprintln(c.stderr, "warning: a serve process holds the state dir; it uses the new token at the bot's next logon")
+		_, _ = fmt.Fprintf(c.stderr, "warning: a serve process holds the state dir; it uses the new token at the bot's next logon\n"+
+			"  (a bot in needs_attention waits for: POST /v1/bots/%s/retry)\n", b.Name)
 	case errors.Is(err, auth.ErrLocked):
 		return fmt.Errorf("%w (stop the service or pass --force)", err)
 	case err != nil:
@@ -84,7 +85,7 @@ func (c cli) auth(ctx context.Context, args []string) error {
 		SteamGuard: c.guardPrompt(*code),
 	}
 	if b.Credentials.SharedSecret.IsSet() {
-		totp, err := auth.TOTP{SharedSecret: b.Credentials.SharedSecret}.Code()
+		totp, err := auth.TOTP{SharedSecret: b.Credentials.SharedSecret, Skew: cfg.Steam.TOTPSkew}.Code()
 		if err != nil {
 			return fmt.Errorf("shared_secret: %w", err)
 		}

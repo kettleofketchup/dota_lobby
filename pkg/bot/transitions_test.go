@@ -48,6 +48,12 @@ func pending(p auth.Policy) func(*Snapshot) {
 
 func classify(r auth.EResult) auth.Policy { return auth.Classify(int32(r), true) }
 
+// deniedErr is the AuthError the adapter builds from a go-steam Web API
+// denial (auth_session.go authServiceCall).
+func deniedErr(method string, r gc.EResult) error {
+	return &gc.AuthError{State: "denied", Result: r, Err: fmt.Errorf("%s failed: eresult %d (200 OK)", method, int32(r))}
+}
+
 // describe renders actions compactly. Backoff durations are jittered, so
 // they are checked separately.
 func describe(acts []Action) []string {
@@ -359,12 +365,37 @@ func TestNext(t *testing.T) {
 			wantState: StateBackoff, wantReason: auth.ReasonTOTPMismatch, wantActs: []string{"timer(backoff)"}},
 		{name: "auth guard without secret", s: snap(StateAuthenticating, func(s *Snapshot) { s.HasSharedSecret = false }), in: AuthResult{Err: guardErr},
 			wantState: StateNeedsAttention, wantReason: auth.ReasonGuardRequired, wantActs: []string{}},
+		// go-steam reports Web API failures as "<Method> failed: eresult <N>
+		// (<message>)"; the adapter puts N in AuthError.Result.
 		{name: "auth bad password", s: snap(StateAuthenticating),
-			in:        AuthResult{Err: &gc.AuthError{State: "denied", Err: errors.New("begin auth session failed: eresult EResult_InvalidPassword")}},
+			in:        AuthResult{Err: deniedErr("BeginAuthSessionViaCredentials", 5)},
+			wantState: StateNeedsAttention, wantReason: auth.ReasonBadCredential, wantActs: []string{}},
+		{name: "auth denied without eresult", s: snap(StateAuthenticating),
+			in:        AuthResult{Err: &gc.AuthError{State: "denied", Err: errors.New("begin auth session failed: InvalidPassword")}},
 			wantState: StateNeedsAttention, wantReason: auth.ReasonBadCredential, wantActs: []string{}},
 		{name: "auth rate limited", s: snap(StateAuthenticating),
-			in:        AuthResult{Err: &gc.AuthError{State: "denied", Err: errors.New("BeginAuthSessionViaCredentials failed: eresult EResult_RateLimitExceeded")}},
+			in:        AuthResult{Err: deniedErr("BeginAuthSessionViaCredentials", 84)},
 			wantState: StateCoolingDown, wantReason: auth.ReasonRateLimited, wantActs: []string{"timer(cooldown,30m0s)", "pause(5m0s)"}},
+		{name: "auth login throttled", s: snap(StateAuthenticating),
+			in:        AuthResult{Err: deniedErr("BeginAuthSessionViaCredentials", 87)},
+			wantState: StateCoolingDown, wantReason: auth.ReasonRateLimited, wantActs: []string{"timer(cooldown,30m0s)", "pause(5m0s)"}},
+		{name: "auth totp mismatch retries in a new window", s: snap(StateAuthenticating),
+			in:        AuthResult{Err: deniedErr("UpdateAuthSessionWithSteamGuardCode", 88)},
+			wantState: StateBackoff, wantReason: auth.ReasonTOTPMismatch, wantActs: []string{"timer(backoff)"},
+			check: func(t *testing.T, s Snapshot) {
+				if s.Retries != 1 {
+					t.Errorf("Retries = %d", s.Retries)
+				}
+			}},
+		{name: "auth totp mismatch twice more alerts", s: snap(StateAuthenticating, func(s *Snapshot) { s.Retries = 2 }),
+			in:        AuthResult{Err: deniedErr("UpdateAuthSessionWithSteamGuardCode", 88)},
+			wantState: StateNeedsAttention, wantReason: auth.ReasonTOTPMismatch, wantActs: []string{}},
+		{name: "auth steam unavailable backs off", s: snap(StateAuthenticating),
+			in:        AuthResult{Err: deniedErr("GetPasswordRSAPublicKey", 20)},
+			wantState: StateBackoff, wantReason: auth.ReasonTransient, wantActs: []string{"timer(backoff)"}},
+		{name: "auth steam fail backs off", s: snap(StateAuthenticating),
+			in:        AuthResult{Err: deniedErr("BeginAuthSessionViaCredentials", 2)},
+			wantState: StateBackoff, wantReason: auth.ReasonTransient, wantActs: []string{"timer(backoff)"}},
 		{name: "auth agreement", s: snap(StateAuthenticating), in: AuthResult{Err: &gc.AuthError{State: "agreement"}},
 			wantState: StateNeedsAttention, wantReason: ReasonAgreementRequired, wantActs: []string{}},
 		{name: "auth transport error backs off", s: snap(StateAuthenticating), in: AuthResult{Err: &gc.AuthError{State: "transport", Err: errDial}},
@@ -375,6 +406,58 @@ func TestNext(t *testing.T) {
 			wantState: StateNeedsAttention, wantReason: ReasonNoCredentials, wantActs: []string{}},
 		{name: "auth result after stop ignored", s: snap(StateStopped), in: AuthResult{},
 			wantState: StateStopped, wantActs: []string{}},
+
+		// --- draining: our Disconnect is pending ---
+		// go-dota2's SetPlaying(false) reports HAVE_SESSION -> NO_SESSION
+		// synchronously; it must not restart the hello loop.
+		{name: "own NO_SESSION while draining ignored", s: snap(StateGCReady),
+			in:        Event{gc.PlayingSession{Blocked: true}},
+			in2:       func(Snapshot) Input { return Event{gc.GCStatus{Old: gc.GCHaveSession, New: gc.GCNoSession}} },
+			wantState: StateGCReady, wantActs: []string{}, check: drainingCheck},
+		{name: "welcome while draining ignored", s: snap(StateGCHello),
+			in:        Event{gc.LoggedOff{Result: gc.EResultLoggedInElsewhere}},
+			in2:       func(Snapshot) Input { return Event{gc.GCWelcomed{}} },
+			wantState: StateGCHello, wantActs: []string{}, check: drainingCheck},
+		{name: "queue status while draining ignored", s: snap(StateGCReady),
+			in:        Event{gc.LoggedOff{Result: gc.EResultLoggedInElsewhere}},
+			in2:       func(Snapshot) Input { return Event{gc.GCStatus{New: gc.GCNoSessionInLogonQueue, QueuePosition: 4}} },
+			wantState: StateGCReady, wantActs: []string{}, check: drainingCheck},
+		{name: "logon after logon timeout ignored", s: snap(StateLoggingOn),
+			in:        TimerFired{Kind: TimerLogon, Gen: 10},
+			in2:       func(Snapshot) Input { return Event{gc.LoggedOn{SteamID: 1}} },
+			wantState: StateLoggingOn, wantActs: []string{}, check: drainingCheck},
+		{name: "second LoggedOff while draining only updates pending", s: snap(StateGCReady),
+			in:        Event{gc.PlayingSession{Blocked: true}},
+			in2:       func(Snapshot) Input { return Event{gc.LoggedOff{Result: gc.EResultLogonSessionReplaced}} },
+			wantState: StateGCReady, wantActs: []string{},
+			check: func(t *testing.T, s Snapshot) {
+				drainingCheck(t, s)
+				if s.Pending.Reason != auth.ReasonElsewhere {
+					t.Errorf("pending = %+v", s.Pending)
+				}
+			}},
+		{name: "disconnected after draining decides", s: snap(StateGCReady),
+			in:        Event{gc.PlayingSession{Blocked: true}},
+			in2:       func(Snapshot) Input { return Event{gc.Disconnected{}} },
+			wantState: StateCoolingDown, wantReason: ReasonBlockedElsewhere, wantActs: []string{"stop_timer", "timer(cooldown,10m0s)"},
+			check: func(t *testing.T, s Snapshot) {
+				if s.Draining || s.Conn {
+					t.Errorf("Draining/Conn = %t/%t", s.Draining, s.Conn)
+				}
+			}},
+
+		// --- connection numbering ---
+		{name: "old connection's Disconnected ignored", s: snap(StateLoggingOn, func(s *Snapshot) { s.ConnSeq = 3 }),
+			in:        Event{gc.Disconnected{Conn: 2}},
+			wantState: StateLoggingOn, wantActs: []string{},
+			check: func(t *testing.T, s Snapshot) {
+				if !s.Conn {
+					t.Error("current connection marked closed")
+				}
+			}},
+		{name: "current connection's Disconnected decides", s: snap(StateLoggingOn, func(s *Snapshot) { s.ConnSeq = 3 }),
+			in:        Event{gc.Disconnected{Conn: 3}},
+			wantState: StateBackoff, wantReason: ReasonDisconnected, wantActs: []string{"stop_timer", "timer(backoff)"}},
 
 		// --- stop and retry ---
 		{name: "stop while ready", s: snap(StateGCReady), in: Stop{},
@@ -417,6 +500,60 @@ func TestNext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func drainingCheck(t *testing.T, s Snapshot) {
+	t.Helper()
+	if !s.Draining || s.Timer != TimerDisconnect || s.Ready() {
+		t.Errorf("Draining/Timer/Ready = %t/%s/%t, want true/disconnect/false", s.Draining, s.Timer, s.Ready())
+	}
+}
+
+// TestAbandonedConnection: TimerDisconnect gives up on a connection, the
+// next attempt connects, and only then does the old Disconnected arrive. It
+// must neither decide again nor tear down the new connection.
+func TestAbandonedConnection(t *testing.T) {
+	s := snap(StateGCReady, func(s *Snapshot) { s.ConnSeq = 3 })
+	s, _ = next(s, Event{gc.LoggedOff{Result: gc.EResultFail}})
+	s, _ = next(s, TimerFired{Kind: TimerDisconnect, Gen: s.TimerGen})
+	if s.State != StateBackoff || !s.Conn || s.Abandoned != 3 {
+		t.Fatalf("after disconnect timeout: %s Conn=%t Abandoned=%d", s.State, s.Conn, s.Abandoned)
+	}
+
+	t.Run("late Disconnected before the next connect", func(t *testing.T) {
+		got, acts := next(s, Event{gc.Disconnected{Conn: 3}})
+		if got.State != StateBackoff || got.Conn || len(acts) != 0 {
+			t.Errorf("state %s Conn=%t acts %v", got.State, got.Conn, describe(acts))
+		}
+	})
+
+	t.Run("late Disconnected after the next connect", func(t *testing.T) {
+		got, _ := next(s, TimerFired{Kind: TimerBackoff, Gen: s.TimerGen})
+		got, _ = next(got, TimerFired{Kind: TimerSlot, Gen: got.TimerGen})
+		got, _ = next(got, ConnectResult{})
+		if got.ConnSeq != 4 || !got.Conn {
+			t.Fatalf("after reconnect: ConnSeq=%d Conn=%t", got.ConnSeq, got.Conn)
+		}
+		got, acts := next(got, Event{gc.Disconnected{Conn: 3}})
+		if got.State != StateConnecting || !got.Conn || len(acts) != 0 {
+			t.Errorf("old Disconnected acted: %s Conn=%t %v", got.State, got.Conn, describe(acts))
+		}
+		got, _ = next(got, Event{gc.Connected{}})
+		got, _ = next(got, Event{gc.LoggedOn{SteamID: 1}})
+		if got.State != StateSteamOnline {
+			t.Errorf("new connection's logon ignored: %s", got.State)
+		}
+	})
+
+	t.Run("already connected drops it again and waits for it", func(t *testing.T) {
+		got, _ := next(s, TimerFired{Kind: TimerBackoff, Gen: s.TimerGen})
+		got, _ = next(got, TimerFired{Kind: TimerSlot, Gen: got.TimerGen})
+		got, _ = next(got, ConnectResult{Err: gc.ErrAlreadyConnected})
+		got, _ = next(got, Event{gc.Disconnected{Conn: 3}})
+		if got.State != StateBackoff || got.Reason != ReasonAlreadyConnected || got.Conn {
+			t.Errorf("state %s/%s Conn=%t", got.State, got.Reason, got.Conn)
+		}
+	})
 }
 
 // TestSingleReconnectOwner walks LogOnFailed then Disconnected: only the

@@ -71,6 +71,9 @@ type SupervisorOptions struct {
 	AuthTimeout    time.Duration
 	RenewBefore    time.Duration
 	RenewCheck     time.Duration
+	// TOTPSkew is Steam time minus local time, added before computing a
+	// Steam Guard code (steam.totp_skew).
+	TOTPSkew time.Duration
 	// Seed seeds the backoff jitter; 0 picks a random seed.
 	Seed uint64
 }
@@ -94,13 +97,16 @@ type Supervisor struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 
-	// Owned by the run goroutine.
-	snap       Snapshot
-	timer      Timer
-	renewTimer Timer
-	authCancel context.CancelFunc
-	renewing   bool
-	beatTimer  Timer
+	// Owned by the run goroutine. authGen and renewGen tag the background
+	// Authenticate calls so a superseded one's result is dropped.
+	snap        Snapshot
+	timer       Timer
+	renewTimer  Timer
+	authCancel  context.CancelFunc
+	authGen     uint64
+	renewCancel context.CancelFunc
+	renewGen    uint64
+	beatTimer   Timer
 
 	// lastBeat is when the run loop last finished an input (unix nanos on
 	// clock); beatArmed is set while a heartbeat timer is pending.
@@ -112,14 +118,20 @@ type Supervisor struct {
 }
 
 // Internal inputs the supervisor handles itself; next never sees them.
+// authDone becomes an AuthResult once its token is saved.
 type (
 	renewTick struct{}
-	renewDone struct{ err error }
+	authDone  struct {
+		gen   uint64
+		renew bool
+		tok   auth.Token
+		err   error
+	}
 	heartbeat struct{}
 )
 
 func (renewTick) isInput() {}
-func (renewDone) isInput() {}
+func (authDone) isInput()  {}
 func (heartbeat) isInput() {}
 
 // NewSupervisor builds a stopped supervisor for b. Call Start to run it.
@@ -227,7 +239,13 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 			s.worker.Close()
 			return
 		}
-		s.push(Stop{})
+		// A wedged loop with a full input queue must not hold Stop past
+		// ctx, so the push races ctx too.
+		select {
+		case s.inputs <- Stop{}:
+		case <-s.done:
+		case <-ctx.Done():
+		}
 		select {
 		case <-s.done:
 		case <-ctx.Done():
@@ -325,13 +343,16 @@ func (s *Supervisor) cleanup() {
 	if s.authCancel != nil {
 		s.authCancel()
 	}
+	if s.renewCancel != nil {
+		s.renewCancel()
+	}
 }
 
 // handle runs one input through next and executes the actions. Actions
 // that complete at once (Connect's result, a free logon slot) feed their
 // result back in before the status is published.
 func (s *Supervisor) handle(in Input) {
-	switch in := in.(type) {
+	switch v := in.(type) {
 	case heartbeat:
 		s.beatArmed.Store(false)
 		return
@@ -339,12 +360,27 @@ func (s *Supervisor) handle(in Input) {
 		s.maybeRenew()
 		s.scheduleRenew()
 		return
-	case renewDone:
-		s.renewing = false
-		if in.err != nil {
-			s.log.Warn("token renewal failed; will retry", "err", in.err)
+	case authDone:
+		fb, ok := s.authFinished(v)
+		if !ok {
+			return
 		}
-		return
+		in = fb
+	case TimerFired:
+		// A rate-limit pause can start after this slot was booked; the
+		// slot then waits out the pause like a fresh Reserve would.
+		if v.Kind == TimerSlot && v.Gen == s.snap.TimerGen && s.snap.Timer == TimerSlot {
+			if d := s.gate.Recheck(s.clock.Now()); d > 0 {
+				s.armTimer(TimerSlot, d, v.Gen)
+				return
+			}
+		}
+	case Retry:
+		// An operator may have put a new token in place (auth --bot).
+		switch s.snap.State {
+		case StateNeedsAttention, StateBackoff, StateCoolingDown:
+			s.snap.HasToken = s.loadToken()
+		}
 	}
 	queue := []Input{in}
 	for len(queue) > 0 {
@@ -483,35 +519,86 @@ func (s *Supervisor) connect() error {
 }
 
 // startAuth runs Authenticate off the run goroutine (it is HTTP and may
-// take a while) and reports back with an AuthResult.
+// take a while); an authDone reports back. An in-flight renewal is
+// cancelled first: two auth sessions would submit the same TOTP code, and
+// Steam rejects the second (88).
 func (s *Supervisor) startAuth() {
+	s.cancelRenew()
 	if s.authCancel != nil {
 		s.authCancel()
 	}
+	s.authGen++
+	gen := s.authGen
 	ctx, cancel := context.WithTimeout(s.ctx, s.opts.AuthTimeout)
 	s.authCancel = cancel
 	go func() {
 		defer cancel()
-		s.push(AuthResult{Err: s.authenticate(ctx)})
+		tok, err := s.authenticate(ctx)
+		s.push(authDone{gen: gen, tok: tok, err: err})
 	}()
 }
 
-// authenticate exchanges password + TOTP for a refresh token and saves it.
-// Renewed tokens go to the store only, never back to the secrets source.
-func (s *Supervisor) authenticate(ctx context.Context) error {
+func (s *Supervisor) cancelRenew() {
+	if s.renewCancel != nil {
+		s.renewCancel()
+		s.renewCancel = nil
+	}
+	s.renewGen++
+}
+
+// authFinished saves the token of a current authDone on the run goroutine,
+// so a save can never interleave with DeleteToken. For a startAuth result
+// it returns the AuthResult to feed to next.
+func (s *Supervisor) authFinished(d authDone) (Input, bool) {
+	if d.renew {
+		if d.gen != s.renewGen {
+			return nil, false
+		}
+		s.renewCancel = nil
+		s.renewGen++
+		if d.err == nil {
+			d.err = s.saveToken(d.tok)
+		}
+		if d.err != nil {
+			s.log.Warn("token renewal failed; will retry", "err", d.err)
+		}
+		return nil, false
+	}
+	if d.gen != s.authGen {
+		return nil, false
+	}
+	s.authCancel = nil
+	if d.err == nil {
+		d.err = s.saveToken(d.tok)
+	}
+	return AuthResult{Err: d.err}, true
+}
+
+func (s *Supervisor) saveToken(tok auth.Token) error {
+	if err := s.store.Save(tok); err != nil {
+		return fmt.Errorf("save token: %w", err)
+	}
+	s.setTokenExpiry(tok.ExpiresAt)
+	s.log.Info("refresh token saved", "token", tok)
+	return nil
+}
+
+// authenticate exchanges password + TOTP for a refresh token. The caller
+// saves it, to the store only, never back to the secrets source.
+func (s *Supervisor) authenticate(ctx context.Context) (auth.Token, error) {
 	c := s.bot.Credentials
 	creds := gc.Credentials{Username: s.bot.Username, Password: c.Password, DeviceName: c.DeviceName}
 	if c.SharedSecret.IsSet() {
-		code, err := auth.TOTP{SharedSecret: c.SharedSecret, Now: s.clock.Now}.Code()
+		code, err := auth.TOTP{SharedSecret: c.SharedSecret, Skew: s.opts.TOTPSkew, Now: s.clock.Now}.Code()
 		if err != nil {
 			// A broken shared_secret will not fix itself.
-			return fmt.Errorf("%w: shared_secret: %w", gc.ErrNoCredentials, err)
+			return auth.Token{}, fmt.Errorf("%w: shared_secret: %w", gc.ErrNoCredentials, err)
 		}
 		creds.TwoFactorCode = code
 	}
 	raw, err := s.client.Authenticate(ctx, creds)
 	if err != nil {
-		return err
+		return auth.Token{}, err
 	}
 	now := s.clock.Now()
 	tok, err := auth.NewToken(raw, now, auth.SourceAuthenticate)
@@ -519,14 +606,9 @@ func (s *Supervisor) authenticate(ctx context.Context) error {
 		// Still usable for logon; only the expiry is unknown.
 		tok = auth.Token{RefreshToken: strings.TrimSpace(raw), ObtainedAt: now.UTC(), Source: auth.SourceAuthenticate}
 	} else if err != nil {
-		return err
+		return auth.Token{}, err
 	}
-	if err := s.store.Save(tok); err != nil {
-		return fmt.Errorf("save token: %w", err)
-	}
-	s.setTokenExpiry(tok.ExpiresAt)
-	s.log.Info("refresh token saved", "token", tok)
-	return nil
+	return tok, nil
 }
 
 func (s *Supervisor) scheduleRenew() {
@@ -541,7 +623,7 @@ func (s *Supervisor) scheduleRenew() {
 // next logon.
 func (s *Supervisor) maybeRenew() {
 	switch {
-	case s.renewing, !s.bot.Credentials.Headless():
+	case s.renewCancel != nil, !s.bot.Credentials.Headless():
 		return
 	case s.snap.State == StateAuthenticating, s.snap.State == StateStopped:
 		return
@@ -551,10 +633,13 @@ func (s *Supervisor) maybeRenew() {
 		return
 	}
 	s.log.Info("refresh token expires soon; renewing", "token", tok)
-	s.renewing = true
+	s.renewGen++
+	gen := s.renewGen
 	ctx, cancel := context.WithTimeout(s.ctx, s.opts.AuthTimeout)
+	s.renewCancel = cancel
 	go func() {
 		defer cancel()
-		s.push(renewDone{err: s.authenticate(ctx)})
+		tok, err := s.authenticate(ctx)
+		s.push(authDone{gen: gen, renew: true, tok: tok, err: err})
 	}()
 }

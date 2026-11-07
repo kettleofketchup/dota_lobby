@@ -84,6 +84,7 @@ func NewManager(cfg *config.Config, opts ManagerOptions) *Manager {
 			Clock:          opts.Clock,
 			Logger:         opts.Logger,
 			RequestTimeout: cfg.GC.RequestTimeout,
+			TOTPSkew:       cfg.Steam.TOTPSkew,
 		}
 		if opts.Seed != nil {
 			so.Seed = opts.Seed(b)
@@ -155,6 +156,16 @@ func (m *Manager) Statuses() []Status {
 func (m *Manager) Supervisor(name string) (*Supervisor, bool) {
 	s, ok := m.byName[strings.ToLower(name)]
 	return s, ok
+}
+
+// Retry asks the named bot to try again now (see Supervisor.Retry). It
+// reports false when there is no such bot.
+func (m *Manager) Retry(name string) bool {
+	s, ok := m.Supervisor(name)
+	if ok {
+		s.Retry()
+	}
+	return ok
 }
 
 // Stalled returns the names of bots whose run loop has not made progress

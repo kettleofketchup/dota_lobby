@@ -112,6 +112,7 @@ type harness struct {
 	clk   *fakeClock
 	fc    *fake.Client
 	store *auth.Store
+	gate  *Gate // optional, set in setup
 	sup   *Supervisor
 }
 
@@ -131,6 +132,7 @@ func newHarness(t *testing.T, b config.BotConfig, setup func(h *harness)) *harne
 	}
 	h.sup = NewSupervisor(b, h.fc, SupervisorOptions{
 		Store:  h.store,
+		Gate:   h.gate,
 		Clock:  h.clk,
 		Logger: testLogger(t),
 		Seed:   1,
