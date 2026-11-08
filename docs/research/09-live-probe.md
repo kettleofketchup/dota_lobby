@@ -23,7 +23,7 @@ Every result below comes from the probe's JSONL report (one line per event, tagg
 | Invites | Invite to a non-friend works; there is no GC message to cancel a lobby invite |
 | Lobby chat | `Lobby_<lobby_id>` works; the join reply does not echo the job ID; `!` commands arrive, `/` text never leaves the client |
 
-Still open after this run: Q3, Q5, Q8, Q12, Q19, Q22, and seat enforcement by kick-from-team (section 9).
+Still open after this run: Q3, Q5, Q8, Q12, Q19, Q22, and seat enforcement by kick-from-team (section 10).
 
 ---
 
