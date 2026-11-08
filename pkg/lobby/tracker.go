@@ -11,6 +11,7 @@ import (
 
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
+	"github.com/kettleofketchup/dota_lobby/pkg/pool"
 )
 
 // seatPoll is how often a host seat attempt re-reads the snapshot.
@@ -319,8 +320,13 @@ func (m *Manager) step(ctx context.Context, e *entry, h bot.Handle) {
 		in.MissingFor = now.Sub(e.missingSince)
 	}
 	res := derive(l, in)
+	// A lobby that ends here keeps its bot until the destroy or leave that
+	// goes with the end is sent: released earlier, the bot could take a new
+	// create that the old destroy would then hit.
+	var lease *pool.Lease
+	defer func() { m.release(lease) }()
 	if len(memberEvs) > 0 || len(res.Events) > 0 || changed(l, res.Lobby) {
-		next, err := m.commit(e, func(cur *Lobby) ([]newEvent, error) {
+		next, held, err := m.commitHold(e, func(cur *Lobby) ([]newEvent, error) {
 			if cur.Version != l.Version {
 				return nil, errors.New("lobby changed during the step")
 			}
@@ -333,7 +339,7 @@ func (m *Manager) step(ctx context.Context, e *entry, h bot.Handle) {
 			m.log.Warn("lobby step not saved", "lobby", l.ID, "err", err)
 			return
 		}
-		l = next
+		l, lease = next, held
 	}
 	for _, a := range res.Actions {
 		m.act(ctx, e, h, a)

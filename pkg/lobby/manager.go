@@ -267,13 +267,30 @@ func (m *Manager) kickScheduler() {
 // ended_at; the lease is released when the lobby ends. Hooks hear about
 // the events after the write.
 func (m *Manager) commit(e *entry, change func(l *Lobby) ([]newEvent, error)) (Lobby, error) {
+	l, lease, err := m.commitHold(e, change)
+	m.release(lease)
+	return l, err
+}
+
+// release gives an ended lobby's lease back and wakes the scheduler.
+func (m *Manager) release(lease *pool.Lease) {
+	if lease != nil {
+		m.opts.Pool.Release(lease)
+		m.kickScheduler()
+	}
+}
+
+// commitHold is commit, except that the lease of a lobby it ends is
+// returned for the caller to release once it is done with the bot, such as
+// after the destroy that goes with the end.
+func (m *Manager) commitHold(e *entry, change func(l *Lobby) ([]newEvent, error)) (Lobby, *pool.Lease, error) {
 	e.mu.Lock()
 	old := e.lobby
 	l := old.clone()
 	evs, err := change(&l)
 	if err != nil {
 		e.mu.Unlock()
-		return old, err
+		return old, nil, err
 	}
 	now := m.now()
 	if l.State != old.State {
@@ -298,20 +315,20 @@ func (m *Manager) commit(e *entry, change func(l *Lobby) ([]newEvent, error)) (L
 		events[i] = Event{ID: "evt_" + m.ids.next(now), LobbyID: l.ID, Seq: l.Seq, Type: ev.Type, OccurredAt: now, Data: ev.Data}
 		if rows[i], err = eventRow(events[i]); err != nil {
 			e.mu.Unlock()
-			return old, err
+			return old, nil, err
 		}
 	}
 	row, players, err := toRow(l)
 	if err != nil {
 		e.mu.Unlock()
-		return old, err
+		return old, nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	err = m.opts.Store.Transition(ctx, old.Version, row, players, rows)
 	cancel()
 	if err != nil {
 		e.mu.Unlock()
-		return old, fmt.Errorf("save lobby %s: %w", l.ID, err)
+		return old, nil, fmt.Errorf("save lobby %s: %w", l.ID, err)
 	}
 	e.lobby = l
 	ended := l.State.Terminal() && !old.State.Terminal()
@@ -335,15 +352,11 @@ func (m *Manager) commit(e *entry, change func(l *Lobby) ([]newEvent, error)) (L
 		if cancelTracker != nil {
 			cancelTracker()
 		}
-		if lease != nil {
-			m.opts.Pool.Release(lease)
-			m.kickScheduler()
-		}
 	}
 	for _, ev := range events {
 		m.opts.Hooks.OnEvent(l, ev)
 	}
-	return l.clone(), nil
+	return l.clone(), lease, nil
 }
 
 // --- pending queue ---

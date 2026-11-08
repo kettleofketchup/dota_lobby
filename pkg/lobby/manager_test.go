@@ -231,26 +231,43 @@ func (f *flakyStore) Transition(ctx context.Context, expected int64, row store.L
 	return f.Store.Transition(ctx, expected, row, players, events)
 }
 
-// heldBot is a bot whose worker queue never gets to the create: Do waits
-// for its ctx without running it.
-type heldBot struct{ *bottest.Bot }
+// hookedBot runs before ahead of every Do; a true answer stands in for
+// the call, which is then not run.
+type hookedBot struct {
+	*bottest.Bot
+	before func(ctx context.Context, op string) (bool, error)
+}
 
-func (b heldBot) Do(ctx context.Context, op string, fn func(ctx context.Context, c gc.Client) error) error {
-	if op == "create lobby" {
-		<-ctx.Done()
-		return ctx.Err()
+func (b hookedBot) Do(ctx context.Context, op string, fn func(ctx context.Context, c gc.Client) error) error {
+	if done, err := b.before(ctx, op); done {
+		return err
 	}
 	return b.Bot.Do(ctx, op, fn)
 }
 
-type heldSource struct{ *bottest.Source }
+type hookedSource struct {
+	*bottest.Source
+	before func(ctx context.Context, op string) (bool, error)
+}
 
-func (s heldSource) Bot(name string) (bot.Handle, bool) {
+func (s hookedSource) Bot(name string) (bot.Handle, bool) {
 	b, ok := s.Source.Bot(name)
 	if !ok {
 		return nil, false
 	}
-	return heldBot{b.(*bottest.Bot)}, true
+	return hookedBot{b.(*bottest.Bot), s.before}, true
+}
+
+// heldSource is a source whose bots' queues never get to a create: Do
+// waits for its ctx without running it.
+func heldSource(src *bottest.Source) hookedSource {
+	return hookedSource{src, func(ctx context.Context, op string) (bool, error) {
+		if op != "create lobby" {
+			return false, nil
+		}
+		<-ctx.Done()
+		return true, ctx.Err()
+	}}
 }
 
 // react plays the GC: the host seat ops move the host, kicks move or drop
@@ -511,7 +528,7 @@ func TestCreateNotStoredIsAdopted(t *testing.T) {
 // lobby back in the queue rather than failing it at the next start.
 func TestDrainBeforeTheCreateIsSent(t *testing.T) {
 	h := newHarness(t, 1, nil)
-	h.bots2 = heldSource{h.source}
+	h.bots2 = heldSource(h.source)
 	h.restart()
 	l := h.create(spec("game-1"))
 	h.waitState(l.ID, StateCreating)
@@ -712,6 +729,32 @@ func TestAutoLaunch(t *testing.T) {
 	l = h.waitState(l.ID, StateLaunching)
 	if l.StateReason != TriggerAuto {
 		t.Errorf("reason %q", l.StateReason)
+	}
+}
+
+// The bot of a lobby that times out stays leased until its lobby is
+// destroyed, so a new create cannot run before the old destroy.
+func TestIdleTimeoutDestroysBeforeRelease(t *testing.T) {
+	h := newHarness(t, 1, func(c *config.LobbyConfig) { c.IdleTimeout = 300 * time.Millisecond })
+	var leased []string
+	var mu sync.Mutex
+	h.bots2 = hookedSource{h.source, func(_ context.Context, op string) (bool, error) {
+		if op == actDestroy.String() {
+			mu.Lock()
+			defer mu.Unlock()
+			leased = append(leased, h.pool.Leases()["bot1"])
+		}
+		return false, nil
+	}}
+	h.restart()
+	l, b := h.toWaiting(spec("game-1"))
+	l = h.waitState(l.ID, StateTimedOut)
+	h.waitCalls(b, "Destroy", 1)
+	h.waitFor(l.ID, "the lease back", func(Lobby) bool { return len(h.pool.Leases()) == 0 })
+	mu.Lock()
+	defer mu.Unlock()
+	if len(leased) != 1 || leased[0] != l.ID {
+		t.Errorf("lease during the destroy: %q", leased)
 	}
 }
 
