@@ -317,14 +317,14 @@ func TestStoreLoadOrSeed(t *testing.T) {
 		{name: "stored token wins over seed", existing: &stored, seed: config.Secret(seed), wantID: 5},
 		{name: "stored token without seed", existing: &stored, wantID: 5},
 		{name: "nothing at all", wantErr: ErrNoToken},
-		{name: "seed is not a JWT", seed: "plain-old-string", anyErr: true},
+		{name: "seed is a corrupt JWT", seed: "a.!!!.c", anyErr: true},
 		// An operator shipped a fresh token through sops.
 		{name: "seed replaces an expired token", existing: &expired, seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
 		{name: "seed replaces an unreadable file", raw: "{not json", seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
 		{name: "newer seed replaces a valid token", existing: &older, seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
 		{name: "renewed token beats the original seed", existing: &renewed, seed: config.Secret(seed), wantID: 7},
 		{name: "expired seed does not replace an expired token", existing: &expired, seed: config.Secret(expiredSeed), wantID: 6},
-		{name: "bad seed leaves a stored token alone", existing: &older, seed: "plain-old-string", wantID: 8},
+		{name: "bad seed leaves a stored token alone", existing: &older, seed: "a.!!!.c", wantID: 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -375,6 +375,68 @@ func TestStoreLoadOrSeed(t *testing.T) {
 				if err != nil || seeded2 || again.RefreshToken != seed {
 					t.Errorf("second LoadOrSeed = %v, %v, %v", again, seeded2, err)
 				}
+			}
+		})
+	}
+}
+
+// A configured STEAM_REFRESH_TOKEN that is not a JWT is accepted like one
+// Authenticate minted: stored with the expiry unknown.
+func TestStoreLoadOrSeedOpaqueToken(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	jwtStored := Token{RefreshToken: fakeJWT(t, map[string]any{"sub": "5", "exp": now.Add(24 * time.Hour).Unix()}), SteamID: 5}
+	tests := []struct {
+		name       string
+		existing   *Token
+		wantSeeded bool
+		wantRaw    string
+	}{
+		{name: "empty store", wantSeeded: true, wantRaw: "plain-old-string"},
+		{name: "valid stored token is kept", existing: &jwtStored, wantRaw: jwtStored.RefreshToken},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewStore(filepath.Join(t.TempDir(), "bot"))
+			if tt.existing != nil {
+				if err := s.Save(*tt.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tok, seeded, err := s.LoadOrSeed(" plain-old-string\n", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if seeded != tt.wantSeeded || tok.RefreshToken != tt.wantRaw {
+				t.Fatalf("LoadOrSeed = %v seeded=%v", tok, seeded)
+			}
+			if seeded && (!tok.ExpiresAt.IsZero() || tok.Source != SourceSeed || tok.Expired(now.Add(1000*time.Hour))) {
+				t.Errorf("opaque seed fields: %+v", tok)
+			}
+		})
+	}
+}
+
+func TestFromMinted(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	jwt := fakeJWT(t, map[string]any{"sub": "76561198000000009", "exp": 1_800_000_000})
+	tests := []struct {
+		name      string
+		raw       string
+		wantRaw   string
+		wantID    uint64
+		wantKnown bool
+	}{
+		{"jwt", jwt, jwt, 76561198000000009, true},
+		{"jwt with padding whitespace", " " + jwt + "\n", jwt, 76561198000000009, true},
+		{"opaque", " opaque-token\n", "opaque-token", 0, false},
+		{"corrupt payload", "a.!!!.c", "a.!!!.c", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FromMinted(tt.raw, now)
+			if got.RefreshToken != tt.wantRaw || got.SteamID != tt.wantID || !got.ExpiresAt.IsZero() != tt.wantKnown ||
+				got.Source != SourceAuthenticate || !got.ObtainedAt.Equal(now) {
+				t.Errorf("FromMinted = %+v", got)
 			}
 		})
 	}

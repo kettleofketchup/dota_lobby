@@ -100,13 +100,7 @@ func (c cli) auth(ctx context.Context, args []string) error {
 	}
 
 	now := time.Now()
-	tok, err := auth.NewToken(raw, now, auth.SourceAuthenticate)
-	if errors.Is(err, auth.ErrNotJWT) {
-		// Still usable for logon; only the expiry is unknown.
-		tok = auth.Token{RefreshToken: strings.TrimSpace(raw), ObtainedAt: now.UTC(), Source: auth.SourceAuthenticate}
-	} else if err != nil {
-		return err
-	}
+	tok := auth.FromMinted(raw, now)
 	store := auth.NewStore(cfg.BotStateDir(b))
 	if err := store.Save(tok); err != nil {
 		return fmt.Errorf("save token: %w", err)

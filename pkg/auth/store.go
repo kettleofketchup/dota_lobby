@@ -111,6 +111,10 @@ func (s *Store) LoadOrSeed(seed config.Secret, now time.Time) (t Token, seeded b
 		return t, false, err
 	}
 	st, serr := NewToken(seed.Reveal(), now, SourceSeed)
+	if errors.Is(serr, ErrNotJWT) {
+		// Same as a token Authenticate minted: usable at logon, expiry unknown.
+		st, serr = opaqueToken(seed.Reveal(), now, SourceSeed), nil
+	}
 	if serr != nil {
 		if errors.Is(err, ErrNoToken) {
 			return Token{}, false, fmt.Errorf("auth: seed refresh token: %w", serr)

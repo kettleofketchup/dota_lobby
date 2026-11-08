@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -600,15 +599,7 @@ func (s *Supervisor) authenticate(ctx context.Context) (auth.Token, error) {
 	if err != nil {
 		return auth.Token{}, err
 	}
-	now := s.clock.Now()
-	tok, err := auth.NewToken(raw, now, auth.SourceAuthenticate)
-	if errors.Is(err, auth.ErrNotJWT) {
-		// Still usable for logon; only the expiry is unknown.
-		tok = auth.Token{RefreshToken: strings.TrimSpace(raw), ObtainedAt: now.UTC(), Source: auth.SourceAuthenticate}
-	} else if err != nil {
-		return auth.Token{}, err
-	}
-	return tok, nil
+	return auth.FromMinted(raw, s.clock.Now()), nil
 }
 
 func (s *Supervisor) scheduleRenew() {

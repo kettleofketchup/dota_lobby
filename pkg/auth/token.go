@@ -64,6 +64,23 @@ func NewToken(raw string, obtainedAt time.Time, source string) (Token, error) {
 	return t, nil
 }
 
+// FromMinted builds the Token for a refresh token that Steam just minted
+// through Authenticate. Steam's token is used as-is at logon, so one whose
+// claims cannot be decoded is still kept, with the expiry unknown.
+func FromMinted(raw string, now time.Time) Token {
+	tok, err := NewToken(raw, now, SourceAuthenticate)
+	if err != nil {
+		return opaqueToken(raw, now, SourceAuthenticate)
+	}
+	return tok
+}
+
+// opaqueToken wraps a refresh token whose claims are not read: the SteamID
+// and expiry stay unknown and Steam is left to judge it at logon.
+func opaqueToken(raw string, now time.Time, source string) Token {
+	return Token{RefreshToken: strings.TrimSpace(raw), ObtainedAt: now.UTC(), Source: source}
+}
+
 type jwtClaims struct {
 	Sub string  `json:"sub"`
 	Iat float64 `json:"iat"`
