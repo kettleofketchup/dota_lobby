@@ -158,7 +158,7 @@ func (c Classifier) Classify(eresult int32, wasTokenLogon bool) Policy {
 		p.Cooldown = orDefault(c.CooldownRateLimited, DefaultCooldownRateLimited)
 	case EResultLoggedInElsewhere, EResultLogonSessionReplaced:
 		p.Action, p.Reason = ActionCoolDown, ReasonElsewhere
-		p.Cooldown = orDefault(c.CooldownElsewhere, DefaultCooldownElsewhere)
+		p.Cooldown = c.ElsewhereCooldown()
 	case EResultTwoFactorCodeMismatch:
 		p.Action, p.Reason = ActionRetryThenAlert, ReasonTOTPMismatch
 		p.MaxRetries = totpMaxRetries
@@ -177,6 +177,12 @@ func GuardPrompt(hasSharedSecret bool) Policy {
 		return Policy{Action: ActionRetryThenAlert, MaxRetries: totpMaxRetries, Reason: ReasonTOTPMismatch}
 	}
 	return Policy{Action: ActionNeedsAttention, Reason: ReasonGuardRequired}
+}
+
+// ElsewhereCooldown is how long to stay off an account another session
+// holds: the configured cooldown, or the default.
+func (c Classifier) ElsewhereCooldown() time.Duration {
+	return orDefault(c.CooldownElsewhere, DefaultCooldownElsewhere)
 }
 
 func orDefault(d, def time.Duration) time.Duration {

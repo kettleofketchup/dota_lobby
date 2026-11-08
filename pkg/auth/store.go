@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +18,10 @@ import (
 
 // TokenFile is the token's file name inside a bot's state dir.
 const TokenFile = "token.json"
+
+// RejectedFile holds the SHA-256 of the last token Steam refused, next to
+// the token file. It is never the token itself.
+const RejectedFile = "rejected.sha256"
 
 // ErrNoToken is returned by Load when the bot has no stored token.
 var ErrNoToken = errors.New("auth: no stored token")
@@ -94,6 +101,47 @@ func (s *Store) Delete() error {
 	return syncDir(s.dir)
 }
 
+// DeleteRejected removes the stored token because Steam refused it. Unlike
+// Delete it remembers the token's fingerprint, so LoadOrSeed will not put the
+// same token back from the configured seed; a different seed is still
+// accepted.
+func (s *Store) DeleteRejected() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, err := s.load(); err == nil {
+		if err := s.saveRejected(t.RefreshToken); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(s.Path()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("auth: delete token: %w", err)
+	}
+	return syncDir(s.dir)
+}
+
+func fingerprint(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Store) rejectedPath() string { return filepath.Join(s.dir, RejectedFile) }
+
+func (s *Store) saveRejected(raw string) error {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return fmt.Errorf("auth: create state dir: %w", err)
+	}
+	return writeFileAtomic(s.rejectedPath(), []byte(fingerprint(raw)+"\n"))
+}
+
+// isRejected reports whether raw is the token last passed to DeleteRejected.
+func (s *Store) isRejected(raw string) bool {
+	b, err := os.ReadFile(s.rejectedPath())
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == fingerprint(raw)
+}
+
 // LoadOrSeed returns the stored token, replacing it with seed (the
 // STEAM_REFRESH_TOKEN from the bot's credentials) when the seed is the
 // better token: nothing usable is stored (missing, unreadable or expired),
@@ -107,7 +155,9 @@ func (s *Store) LoadOrSeed(seed config.Secret, now time.Time) (t Token, seeded b
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, err = s.load()
-	if !seed.IsSet() {
+	if !seed.IsSet() || s.isRejected(seed.Reveal()) {
+		// A seed Steam already refused stays out until the configured one
+		// changes.
 		return t, false, err
 	}
 	st, serr := NewToken(seed.Reveal(), now, SourceSeed)

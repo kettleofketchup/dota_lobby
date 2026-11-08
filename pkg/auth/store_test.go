@@ -461,3 +461,57 @@ func TestStoreConcurrent(t *testing.T) {
 		t.Errorf("final Load = %v, %v", got, err)
 	}
 }
+
+// A token Steam refused is deleted, and the same configured seed must not
+// bring it back, across a store re-open, until the seed itself changes.
+func TestStoreRejectedSeedStaysOut(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	mk := func(sub string) config.Secret {
+		return config.Secret(fakeJWT(t, map[string]any{"sub": sub, "exp": now.Add(100 * 24 * time.Hour).Unix()}))
+	}
+	dead, fresh := mk("76561198000000001"), mk("76561198000000002")
+
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if _, seeded, err := s.LoadOrSeed(dead, now); err != nil || !seeded {
+		t.Fatalf("first seed = %v, %v", seeded, err)
+	}
+	if err := s.DeleteRejected(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		reopen     bool
+		seed       config.Secret
+		wantSeeded bool
+	}{
+		{"same store, same seed", false, dead, false},
+		{"re-opened store, same seed", true, dead, false},
+		{"changed seed is accepted", true, fresh, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := s
+			if tt.reopen {
+				st = NewStore(dir)
+			}
+			_, seeded, err := st.LoadOrSeed(tt.seed, now)
+			if seeded != tt.wantSeeded {
+				t.Fatalf("seeded = %v, want %v (err %v)", seeded, tt.wantSeeded, err)
+			}
+			if !tt.wantSeeded && !errors.Is(err, ErrNoToken) {
+				t.Errorf("err = %v, want ErrNoToken", err)
+			}
+		})
+	}
+
+	// Only a fingerprint is persisted, never the token.
+	b, err := os.ReadFile(filepath.Join(dir, RejectedFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), dead.Reveal()) {
+		t.Error("rejected file holds the token")
+	}
+}
