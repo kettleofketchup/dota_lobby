@@ -98,8 +98,9 @@ func (t Token) Expired(now time.Time) bool {
 	return !t.ExpiresAt.IsZero() && !now.Before(t.ExpiresAt)
 }
 
-// ExpiresWithin reports whether exp is less than d away, which is when the
-// plan re-authenticates (14 days) and alerts.
+// ExpiresWithin reports whether exp is less than d away. The supervisor
+// re-authenticates once the token is inside its RenewBefore window (14 days
+// by default).
 func (t Token) ExpiresWithin(now time.Time, d time.Duration) bool {
 	return !t.ExpiresAt.IsZero() && t.ExpiresAt.Sub(now) < d
 }

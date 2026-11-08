@@ -146,7 +146,8 @@ func cmdCreate(ctx context.Context, c *config, rep *reporter) error {
 	return s.leaveCurrentLobby(ctx)
 }
 
-// reportLobby logs the fields the plan relies on and captures the raw SO.
+// reportLobby logs the lobby fields the service depends on and captures the
+// raw SO.
 func (s *session) reportLobby(q, event string, l *protocol.CSODOTALobby) {
 	raw, _ := l.MarshalVT()
 	members := make([]map[string]any, 0, len(l.GetAllMembers()))
