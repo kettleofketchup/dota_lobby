@@ -393,6 +393,10 @@ func (m *Manager) schedulePending() {
 	sort.Slice(pending, func(i, j int) bool { return pending[i].id < pending[j].id })
 
 	for _, e := range pending {
+		// A tracker may hold op for seconds; only pending lobbies need it.
+		if e.snapshot().State != StatePending {
+			continue
+		}
 		e.op.Lock()
 		m.schedulePendingOne(e)
 		e.op.Unlock()

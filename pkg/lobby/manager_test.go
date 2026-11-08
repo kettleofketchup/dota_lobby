@@ -675,6 +675,22 @@ func TestPendingQueue(t *testing.T) {
 	}
 }
 
+// A lobby whose tracker is busy does not hold up the pending queue.
+func TestPendingQueueSkipsBusyLobbies(t *testing.T) {
+	h := newHarness(t, 2, nil)
+	busy, _ := h.toWaiting(spec("game-1"))
+	e, ok := h.m.entry(busy.ID)
+	if !ok {
+		t.Fatal("no entry")
+	}
+	e.op.Lock()
+	defer e.op.Unlock()
+	next := h.create(spec("game-2"))
+	if l := h.waitState(next.ID, StateWaiting); l.Bot == busy.Bot {
+		t.Errorf("both lobbies on %s", l.Bot)
+	}
+}
+
 func TestInvitePolicy(t *testing.T) {
 	h := newHarness(t, 1, func(c *config.LobbyConfig) { c.Invite.MinResend = 200 * time.Millisecond })
 	l, b := h.toWaiting(spec("game-1"))
