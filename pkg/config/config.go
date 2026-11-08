@@ -136,9 +136,17 @@ type InviteConfig struct {
 	MaxPerPlayer int           `mapstructure:"max_per_player"`
 }
 
-// ChatConfig toggles lobby chat.
+// ChatConfig is lobby chat: the bot joins each lobby's chat channel and
+// answers commands.
 type ChatConfig struct {
 	Enabled bool `mapstructure:"enabled"`
+	// Prefix starts every command. The Dota client handles text starting
+	// with "/" itself and never sends it, so "/" cannot be used.
+	Prefix string `mapstructure:"prefix"`
+	// SendInterval spaces the bot's messages in one lobby.
+	SendInterval time.Duration `mapstructure:"send_interval"`
+	// StartCountdown is the time between a start command and the launch.
+	StartCountdown time.Duration `mapstructure:"start_countdown"`
 }
 
 // MatchConfig configures the result resolver ladder.
@@ -291,6 +299,9 @@ func defaults() map[string]any {
 		"lobby::invite::min_resend":        "30s",
 		"lobby::invite::max_per_player":    5,
 		"lobby::chat::enabled":             false,
+		"lobby::chat::prefix":              "!",
+		"lobby::chat::send_interval":       "1s",
+		"lobby::chat::start_countdown":     "10s",
 		// Region and series values are UNCERTAIN (01 §7.10, §7.11); operators
 		// maintain them.
 		"lobby::regions":      map[string]any{"us_west": 1, "us_east": 2, "europe": 3, "sea": 5},

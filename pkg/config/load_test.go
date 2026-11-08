@@ -92,6 +92,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Store.Retention != 720*time.Hour {
 		t.Errorf("store.retention = %s", cfg.Store.Retention)
 	}
+	if c := l.Chat; c.Enabled || c.Prefix != "!" || c.SendInterval != time.Second || c.StartCountdown != 10*time.Second {
+		t.Errorf("lobby.chat defaults: %+v", c)
+	}
 }
 
 const fullConfig = `
@@ -403,6 +406,10 @@ lobby:
   admins: [0]
 store: { retention: 0s }
 `, "", []string{"\"caster\" listed twice", "unknown value \"sideways\"", "max_launch_attempts 11", "lobby.pending_timeout", "lobby.host_seat_confirm_timeout", "lobby.admins", "store.retention"}},
+		{"chat slash prefix", "lobby: { chat: { prefix: \"/\", send_interval: 0s, start_countdown: -1s } }\n", "", []string{"lobby.chat.prefix \"/\"", "lobby.chat.send_interval", "lobby.chat.start_countdown"}},
+		{"chat empty prefix", "lobby: { chat: { prefix: \"\" } }\n", "", []string{"lobby.chat.prefix \"\""}},
+		{"chat long prefix", "lobby: { chat: { prefix: \"!bot!\" } }\n", "", []string{"lobby.chat.prefix"}},
+		{"chat prefix with space", "lobby: { chat: { prefix: \"! \" } }\n", "", []string{"lobby.chat.prefix"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
