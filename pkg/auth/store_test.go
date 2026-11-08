@@ -515,3 +515,50 @@ func TestStoreRejectedSeedStaysOut(t *testing.T) {
 		t.Error("rejected file holds the token")
 	}
 }
+
+func TestStoreRejectedSeedWithWhitespace(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	raw := fakeJWT(t, map[string]any{"sub": "76561198000000001", "exp": now.Add(100 * 24 * time.Hour).Unix()})
+	// A YAML block scalar or a sops value can end in a newline; the stored
+	// token is trimmed, so the fingerprint must match either way.
+	seed := config.Secret(raw + "\n")
+
+	s := NewStore(t.TempDir())
+	if _, seeded, err := s.LoadOrSeed(seed, now); err != nil || !seeded {
+		t.Fatalf("first seed = %v, %v", seeded, err)
+	}
+	if err := s.DeleteRejected(); err != nil {
+		t.Fatal(err)
+	}
+	for _, sd := range []config.Secret{seed, config.Secret(raw), config.Secret("  " + raw)} {
+		if _, seeded, _ := s.LoadOrSeed(sd, now); seeded {
+			t.Fatalf("refused token re-seeded from a seed padded by %d bytes", len(sd.Reveal())-len(raw))
+		}
+	}
+}
+
+func TestStoreRejectedKeepsEarlierTokens(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	mk := func(sub string) config.Secret {
+		return config.Secret(fakeJWT(t, map[string]any{"sub": sub, "exp": now.Add(100 * 24 * time.Hour).Unix()}))
+	}
+	seed, minted := mk("76561198000000001"), mk("76561198000000002")
+
+	s := NewStore(t.TempDir())
+	if _, seeded, err := s.LoadOrSeed(seed, now); err != nil || !seeded {
+		t.Fatalf("first seed = %v, %v", seeded, err)
+	}
+	if err := s.DeleteRejected(); err != nil {
+		t.Fatal(err)
+	}
+	// The bot re-authenticates, and later that token is refused as well.
+	if err := s.Save(Token{RefreshToken: minted.Reveal()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRejected(); err != nil {
+		t.Fatal(err)
+	}
+	if _, seeded, _ := s.LoadOrSeed(seed, now); seeded {
+		t.Fatal("the first refused seed came back after a second token was refused")
+	}
+}

@@ -119,27 +119,51 @@ func (s *Store) DeleteRejected() error {
 	return syncDir(s.dir)
 }
 
+// maxRejected bounds rejected.sha256. A few entries are enough to keep both
+// a refused seed and the refused tokens minted after it out.
+const maxRejected = 8
+
+// fingerprint hashes the token as it is stored: tokens are kept trimmed, and
+// a seed from YAML or sops can carry a trailing newline.
 func fingerprint(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
+	sum := sha256.Sum256([]byte(strings.TrimSpace(raw)))
 	return hex.EncodeToString(sum[:])
 }
 
 func (s *Store) rejectedPath() string { return filepath.Join(s.dir, RejectedFile) }
 
+func (s *Store) rejectedSet() []string {
+	b, err := os.ReadFile(s.rejectedPath())
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(string(b))
+}
+
 func (s *Store) saveRejected(raw string) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("auth: create state dir: %w", err)
 	}
-	return writeFileAtomic(s.rejectedPath(), []byte(fingerprint(raw)+"\n"))
+	fp := fingerprint(raw)
+	set := []string{fp}
+	for _, old := range s.rejectedSet() {
+		if old != fp && len(set) < maxRejected {
+			set = append(set, old)
+		}
+	}
+	return writeFileAtomic(s.rejectedPath(), []byte(strings.Join(set, "\n")+"\n"))
 }
 
-// isRejected reports whether raw is the token last passed to DeleteRejected.
+// isRejected reports whether raw is one of the tokens recently passed to
+// DeleteRejected.
 func (s *Store) isRejected(raw string) bool {
-	b, err := os.ReadFile(s.rejectedPath())
-	if err != nil {
-		return false
+	fp := fingerprint(raw)
+	for _, old := range s.rejectedSet() {
+		if old == fp {
+			return true
+		}
 	}
-	return strings.TrimSpace(string(b)) == fingerprint(raw)
+	return false
 }
 
 // LoadOrSeed returns the stored token, replacing it with seed (the
