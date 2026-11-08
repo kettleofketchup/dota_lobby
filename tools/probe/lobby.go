@@ -48,6 +48,14 @@ func cmdCreate(ctx context.Context, c *config, rep *reporter) error {
 	if c.tvWire >= 0 {
 		details.DotaTvDelay = protocol.LobbyDotaTVDelay(c.tvWire).Enum()
 	}
+	if c.gameMode != "" {
+		mode, err := parseGameMode(c.gameMode)
+		if err != nil {
+			return err
+		}
+		details.GameMode = new(mode)
+	}
+	s.details = details
 
 	lobbyEvents, unsub, err := s.d.GetCache().SubscribeType(cso.Lobby)
 	if err != nil {
@@ -153,6 +161,7 @@ func (s *session) reportLobby(q, event string, l *protocol.CSODOTALobby) {
 		"state":          l.GetState().String(),
 		"game_state":     l.GetGameState().String(),
 		"lobby_type":     l.GetLobbyType().String(),
+		"game_mode":      protocol.DOTA_GameMode(l.GetGameMode()).String(),
 		"leader_id":      l.GetLeaderId(),
 		"leagueid":       l.GetLeagueid(),
 		"league_node_id": l.GetLeagueNodeId(),
@@ -216,6 +225,7 @@ const consoleHelp = `commands:
   team <radiant|dire> <n>   move the bot into a player slot
   seat <strategy>           self_kick | player_pool | spectator | caster | unassigned (Q5)
   tv <wire>                 set dota_tv_delay raw wire value (Q6)
+  mode <name|id>            set the game mode: ap cm rd sd ar cd ad 1v1 turbo, or a number
   launch                    launch with an empty body (nonce check)
   leave | destroy           leave the lobby / destroy and leave
   quit                      leave and exit`
@@ -326,11 +336,24 @@ func (s *session) consoleCmd(ctx context.Context, f []string) error {
 		if err != nil {
 			return fmt.Errorf("bad wire value: %w", err)
 		}
-		s.d.SetLobbyDetails(&protocol.CMsgPracticeLobbySetDetails{
-			LobbyId:     new(lobby.GetLobbyId()),
-			DotaTvDelay: protocol.LobbyDotaTVDelay(int32(w)).Enum(),
+		s.setDetails(lobby.GetLobbyId(), func(d *protocol.CMsgPracticeLobbySetDetails) {
+			d.DotaTvDelay = protocol.LobbyDotaTVDelay(int32(w)).Enum()
 		})
 		s.rep.emit("Q6", "tv_set_sent", map[string]any{"wire": w})
+	case "mode":
+		if len(f) != 2 || lobby == nil {
+			return fmt.Errorf("usage: mode <name|id> (in a lobby)")
+		}
+		mode, err := parseGameMode(f[1])
+		if err != nil {
+			return err
+		}
+		s.setDetails(lobby.GetLobbyId(), func(d *protocol.CMsgPracticeLobbySetDetails) { d.GameMode = new(mode) })
+		s.rep.emit("", "mode_set_sent", map[string]any{"game_mode": protocol.DOTA_GameMode(mode).String()})
+		time.Sleep(2 * time.Second)
+		if l := s.currentLobby(); l != nil {
+			s.reportLobby("", "mode_result", l)
+		}
 	case "launch":
 		s.d.LaunchLobby()
 		s.rep.emit("Q5", "launch_sent", map[string]any{"empty_body": true})
@@ -380,4 +403,32 @@ func (s *session) watchLobby(ctx context.Context, events <-chan *socache.CacheEv
 			}
 		}
 	}
+}
+
+// setDetails changes the details the lobby was created with and sends the
+// whole set. The GC treats SetLobbyDetails as a full replacement, so sending
+// only the changed field could reset the rest (plan §5.1).
+func (s *session) setDetails(lobbyID uint64, change func(*protocol.CMsgPracticeLobbySetDetails)) {
+	if s.details == nil {
+		s.details = &protocol.CMsgPracticeLobbySetDetails{}
+	}
+	change(s.details)
+	s.details.LobbyId = new(lobbyID)
+	s.d.SetLobbyDetails(s.details)
+}
+
+var gameModes = map[string]uint32{
+	"ap": 1, "cm": 2, "rd": 3, "sd": 4, "ar": 5, "cd": 16, "1v1": 21, "ad": 22, "turbo": 23,
+}
+
+// parseGameMode accepts a short name or a raw DOTA_GameMode number.
+func parseGameMode(v string) (uint32, error) {
+	if m, ok := gameModes[strings.ToLower(v)]; ok {
+		return m, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("unknown game mode %q", v)
+	}
+	return uint32(n), nil
 }

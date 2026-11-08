@@ -34,10 +34,12 @@ type session struct {
 	sc  *steam.Client
 	d   *dota2.Dota2
 
-	welcomed  chan struct{}
-	welcome   sync.Once
-	failed    chan error
-	popups    chan *protocol.CMsgDOTAPopup
+	welcomed chan struct{}
+	welcome  sync.Once
+	failed   chan error
+	popups   chan *protocol.CMsgDOTAPopup
+	// details is the last full set of lobby details sent, for merged updates.
+	details   *protocol.CMsgPracticeLobbySetDetails
 	captureNo atomic.Uint64
 	nextJob   atomic.Uint64
 
