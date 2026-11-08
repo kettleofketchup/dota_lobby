@@ -35,21 +35,25 @@ type Deliveries struct{ db *sql.DB }
 func (s *Store) Deliveries() *Deliveries { return &Deliveries{db: s.db} }
 
 // Due returns pending deliveries whose next attempt is at or before now,
-// earliest first, at most limit (0 means 100). Only the lowest pending seq
-// of each (URL, lobby) is ever returned, so a lobby's events reach a
-// receiver in order; a delivered or dead row no longer holds the next one
-// back.
+// earliest first, at most limit for each URL (0 means 100), so one
+// receiver's backlog cannot crowd another's rows out of the result. Only
+// the lowest pending seq of each (URL, lobby) is ever returned, so a
+// lobby's events reach a receiver in order; a delivered or dead row no
+// longer holds the next one back.
 func (d *Deliveries) Due(ctx context.Context, now time.Time, limit int) ([]Delivery, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := d.db.QueryContext(ctx, `SELECT e.id, e.lobby_id, e.seq, e.type, e.occurred_at, e.data, e.lobby,
-		w.url, w.attempts, w.next_at
-		FROM webhook_deliveries w JOIN lobby_events e ON e.id = w.event_id
-		WHERE w.status = ? AND w.next_at <= ?
-		AND NOT EXISTS (SELECT 1 FROM webhook_deliveries p WHERE p.url = w.url AND p.lobby_id = w.lobby_id
-			AND p.status = ? AND p.seq < w.seq)
-		ORDER BY w.next_at, w.lobby_id, w.seq LIMIT ?`,
+	rows, err := d.db.QueryContext(ctx, `SELECT id, lobby_id, seq, type, occurred_at, data, lobby, url, attempts, next_at
+		FROM (SELECT e.id, e.lobby_id, e.seq, e.type, e.occurred_at, e.data, e.lobby,
+			w.url, w.attempts, w.next_at,
+			ROW_NUMBER() OVER (PARTITION BY lower(w.url) ORDER BY w.next_at, w.lobby_id, w.seq) AS n
+			FROM webhook_deliveries w JOIN lobby_events e ON e.id = w.event_id
+			WHERE w.status = ? AND w.next_at <= ?
+			AND NOT EXISTS (SELECT 1 FROM webhook_deliveries p WHERE p.url = w.url AND p.lobby_id = w.lobby_id
+				AND p.status = ? AND p.seq < w.seq))
+		WHERE n <= ?
+		ORDER BY next_at, lobby_id, seq`,
 		DeliveryPending, formatTime(now), DeliveryPending, limit)
 	if err != nil {
 		return nil, fmt.Errorf("due deliveries: %w", err)

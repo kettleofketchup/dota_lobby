@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -151,5 +152,88 @@ func TestSweepDeletesDeliveries(t *testing.T) {
 	}
 	if c, _ := s.Deliveries().Counts(ctx); c != (DeliveryCounts{}) {
 		t.Errorf("deliveries left: %+v", c)
+	}
+}
+
+// The limit applies per URL: a backlog for one receiver leaves room for
+// the others.
+func TestDeliveriesDueLimitPerURL(t *testing.T) {
+	ctx := context.Background()
+	s, repo := queueRig(t, "https://a/h", "https://b/h")
+	d := s.Deliveries()
+	for i := 1; i <= 3; i++ {
+		insertWithEvents(t, repo, fmt.Sprintf("lob_%d", i), 1)
+	}
+	// b's rows are due later than all of a's, so a global limit would
+	// return only a's.
+	for i := 1; i <= 3; i++ {
+		if err := d.MarkRetry(ctx, fmt.Sprintf("evt_lob_%d_1", i), "https://b/h", 1, 500, "x", t0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := d.Due(ctx, t0.Add(time.Minute), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, dl := range due {
+		got = append(got, fmt.Sprintf("%s#%d@%s", dl.Event.LobbyID, dl.Event.Seq, dl.URL))
+	}
+	want := "[lob_1#1@https://a/h lob_2#1@https://a/h lob_1#1@https://b/h lob_2#1@https://b/h]"
+	if fmt.Sprint(got) != want {
+		t.Errorf("due = %v, want %s", got, want)
+	}
+}
+
+// Stored times sort as text in time order, also when the fraction has
+// trailing zeros: a row due at 10.12 s is due at 10.123 s.
+func TestDueWithTrailingZeroFraction(t *testing.T) {
+	ctx := context.Background()
+	s, repo := queueRig(t, "https://a/h")
+	d := s.Deliveries()
+	insertWithEvents(t, repo, "lob_1", 1)
+	at := t0.Add(10*time.Second + 120*time.Millisecond)
+	if err := d.MarkRetry(ctx, "evt_lob_1_1", "https://a/h", 1, 500, "x", at); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		now  time.Time
+		want int
+	}{
+		{at.Add(-time.Nanosecond), 0},
+		{at, 1},
+		{at.Add(3 * time.Millisecond), 1},
+		{at.Add(time.Second), 1},
+	} {
+		due, err := d.Due(ctx, tc.now, 0)
+		if err != nil || len(due) != tc.want {
+			t.Errorf("due at %s = %d rows, %v; want %d", tc.now.Format(time.RFC3339Nano), len(due), err, tc.want)
+			continue
+		}
+		if tc.want == 1 && !due[0].NextAt.Equal(at) {
+			t.Errorf("next_at = %s, want %s", due[0].NextAt, at)
+		}
+	}
+}
+
+func TestFormatTimeSortsAsText(t *testing.T) {
+	times := []time.Time{
+		t0,
+		t0.Add(100 * time.Millisecond),
+		t0.Add(100*time.Millisecond + 10*time.Microsecond),
+		t0.Add(120 * time.Millisecond),
+		t0.Add(123 * time.Millisecond),
+		t0.Add(time.Second),
+	}
+	for i := 1; i < len(times); i++ {
+		a, b := formatTime(times[i-1]), formatTime(times[i])
+		if a >= b {
+			t.Errorf("%q does not sort before %q", a, b)
+		}
+	}
+	// A time written before the fixed width still reads back.
+	old := t0.Add(100 * time.Millisecond).Format(time.RFC3339Nano)
+	if got, err := parseTime(sql.NullString{String: old, Valid: true}); err != nil || !got.Equal(t0.Add(100*time.Millisecond)) {
+		t.Errorf("parse %q = %v, %v", old, got, err)
 	}
 }
