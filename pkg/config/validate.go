@@ -22,7 +22,7 @@ var (
 	logLevels          = []string{"debug", "info", "warn", "error"}
 	logFormats         = []string{"json", "text"}
 	leagueSources      = []string{"gc", "config", "web"}
-	hostSeatStrategies = []string{"self_kick", "player_pool", "spectator", "caster"}
+	hostSeatStrategies = []string{"caster", "self_kick", "player_pool", "spectator", "no_team"}
 )
 
 func validateBotName(name string) error {
@@ -85,6 +85,22 @@ func (c *Config) Validate() error {
 	positive("lobby.launch_settle_timeout", c.Lobby.LaunchSettleTimeout)
 	positive("lobby.server_stall_timeout", c.Lobby.ServerStallTimeout)
 	positive("lobby.ingame_backstop", c.Lobby.IngameBackstop)
+	positive("lobby.host_seat_confirm_timeout", c.Lobby.HostSeatConfirmTimeout)
+	positive("lobby.pending_timeout", c.Lobby.PendingTimeout)
+	positive("lobby.auto_launch_delay", c.Lobby.AutoLaunchDelay)
+	positive("lobby.postgame_linger", c.Lobby.PostgameLinger)
+	positive("lobby.enforce_cooldown", c.Lobby.EnforceCooldown)
+	positive("lobby.readopt_timeout", c.Lobby.ReadoptTimeout)
+	positive("lobby.drain_timeout", c.Lobby.DrainTimeout)
+	if c.Lobby.MaxLaunchAttempts < 1 || c.Lobby.MaxLaunchAttempts > 10 {
+		add("lobby.max_launch_attempts %d out of range 1-10", c.Lobby.MaxLaunchAttempts)
+	}
+	for _, id := range c.Lobby.Admins {
+		if id == 0 {
+			add("lobby.admins: 0 is not an account ID")
+		}
+	}
+	positive("store.retention", c.Store.Retention)
 	positive("match.settle_after", c.Match.SettleAfter)
 	if c.Lobby.Invite.MinResend < 0 {
 		add("lobby.invite.min_resend must not be negative")

@@ -25,9 +25,10 @@ func openTemp(t *testing.T, opts ...Option) (*Store, string) {
 func TestOpenMigratesAndReopens(t *testing.T) {
 	ctx := context.Background()
 	s, path := openTemp(t)
+	want := len(mustMigrations(t))
 	v, err := s.SchemaVersion(ctx)
-	if err != nil || v != 1 {
-		t.Fatalf("schema version = %d, %v; want 1", v, err)
+	if err != nil || v != want {
+		t.Fatalf("schema version = %d, %v; want %d", v, err, want)
 	}
 	if err := s.Leagues().ReplaceBotLeagues(ctx, "bot1", "gc", []uint32{7}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -43,7 +44,7 @@ func TestOpenMigratesAndReopens(t *testing.T) {
 	}
 	defer func() { _ = s2.Close() }()
 	var n int
-	if err := s2.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 1 {
+	if err := s2.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != want {
 		t.Fatalf("schema_migrations rows = %d, %v", n, err)
 	}
 	sets, err := s2.Leagues().BotLeagues(ctx)
@@ -343,4 +344,13 @@ func TestLeagues(t *testing.T) {
 	if len(got["bot1"].Sources) != 2 || got["bot1"].Sources["gc"].IDs[0] != 40 {
 		t.Errorf("sources = %+v", got["bot1"].Sources)
 	}
+}
+
+func mustMigrations(t *testing.T) []migration {
+	t.Helper()
+	ms, err := loadMigrations(mustSub(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ms
 }
