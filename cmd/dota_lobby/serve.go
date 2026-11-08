@@ -12,10 +12,12 @@ import (
 
 	"github.com/kettleofketchup/dota_lobby/pkg/api"
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
+	"github.com/kettleofketchup/dota_lobby/pkg/events"
 	"github.com/kettleofketchup/dota_lobby/pkg/league"
 	"github.com/kettleofketchup/dota_lobby/pkg/lobby"
 	"github.com/kettleofketchup/dota_lobby/pkg/pool"
 	"github.com/kettleofketchup/dota_lobby/pkg/store"
+	"github.com/kettleofketchup/dota_lobby/pkg/webhook"
 )
 
 // httpShutdownTimeout bounds in-flight requests at shutdown; the
@@ -24,8 +26,8 @@ const httpShutdownTimeout = 5 * time.Second
 
 // serve runs the service until ctx ends (SIGINT/SIGTERM) or the listener
 // fails, then shuts down in this order: fail /readyz, stop HTTP, drain the
-// lobbies, stop the league registry, stop the bots (releasing the
-// state-dir lock), close the database.
+// lobbies, stop webhook delivery, stop the league registry, stop the bots
+// (releasing the state-dir lock), close the database.
 func (c cli) serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cf configFlags
@@ -70,9 +72,12 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	regDone := make(chan struct{})
 	go func() { defer close(regDone); reg.Run(regCtx) }()
 	bots := pool.New(mgr, reg, pool.Options{})
+	bus := events.New(log)
 	lobbies := lobby.New(lobby.Options{
-		Store: db.Lobbies(), Pool: bots, Holders: reg, Bots: mgr,
-		Lobby: cfg.Lobby, GC: cfg.GC, Retention: cfg.Store.Retention, Logger: log,
+		// Each event is queued for its webhooks in the transaction that
+		// stores it, so a crash cannot lose a delivery.
+		Store: db.Lobbies().WithWebhooks(webhook.Route(cfg.Webhooks)), Pool: bots, Holders: reg, Bots: mgr,
+		Lobby: cfg.Lobby, GC: cfg.GC, Retention: cfg.Store.Retention, Logger: log, Hooks: bus,
 	})
 	// Re-adopts the lobbies a previous run left; their bots are leased
 	// again before any new lobby can take them.
@@ -82,6 +87,17 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		stopReg()
 		<-regDone
 		return errors.Join(err, stopBots(mgr, log))
+	}
+	wake, unsubscribe := bus.Subscribe(nil)
+	deliverer := webhook.New(webhook.Options{
+		Queue: db.Deliveries(), Webhooks: cfg.Webhooks, Secrets: cfg.Secrets, Delivery: cfg.WebhookDelivery,
+		Wake: wake, Version: version, Logger: log,
+	})
+	hookCtx, stopHooks := context.WithCancel(context.WithoutCancel(ctx))
+	hooksDone := make(chan struct{})
+	go func() { defer close(hooksDone); deliverer.Run(hookCtx) }()
+	if len(cfg.Webhooks) > 0 {
+		log.Info("webhooks enabled", "webhooks", len(cfg.Webhooks))
 	}
 
 	srv := api.New(api.Options{
@@ -119,6 +135,12 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		log.Warn("http shutdown incomplete", "err", err)
 	}
 	drainLobbies(lobbies, cfg.Lobby.DrainTimeout, log)
+	// After the drain, so the events it writes are queued first; whatever
+	// is still pending goes out on the next start.
+	stopHooks()
+	<-hooksDone
+	unsubscribe()
+	log.Info("webhook delivery stopped")
 	stopReg()
 	<-regDone
 	if err := stopBots(mgr, log); err != nil {

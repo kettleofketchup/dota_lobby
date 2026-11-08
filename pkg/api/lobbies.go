@@ -32,6 +32,7 @@ type Lobbies interface {
 	Launch(ctx context.Context, id string, req lobby.LaunchRequest) (lobby.Lobby, error)
 	FlipTeams(ctx context.Context, id string) (lobby.Lobby, error)
 	Shuffle(ctx context.Context, id string) (lobby.Lobby, error)
+	Events(ctx context.Context, id string, after int64, limit int) ([]lobby.Envelope, error)
 }
 
 // maxListLimit caps GET /v1/lobbies?limit=.
@@ -733,6 +734,41 @@ func (s *Server) handleLobbyShuffle(w http.ResponseWriter, r *http.Request) {
 	s.writeLobby(w, http.StatusAccepted, l, false)
 }
 
+func (s *Server) handleLobbyEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var after int64
+	if raw := q.Get("after"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 0 {
+			s.writeLobbyError(w, r, badRequest("after must be a non-negative seq"))
+			return
+		}
+		after = n
+	}
+	limit := 100
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > lobby.MaxEventsPage {
+			s.writeLobbyError(w, r, badRequest("limit must be 1-%d", lobby.MaxEventsPage))
+			return
+		}
+		limit = n
+	}
+	evs, err := s.opts.Lobbies.Events(r.Context(), r.PathValue("id"), after, limit)
+	if err != nil {
+		s.writeLobbyError(w, r, err)
+		return
+	}
+	if evs == nil {
+		evs = []lobby.Envelope{}
+	}
+	next := after
+	if len(evs) > 0 {
+		next = evs[len(evs)-1].Seq
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": evs, "next_after": next})
+}
+
 // noLobbies stands in when no lobby manager is wired.
 type noLobbies struct{}
 
@@ -770,4 +806,7 @@ func (noLobbies) FlipTeams(context.Context, string) (lobby.Lobby, error) {
 }
 func (noLobbies) Shuffle(context.Context, string) (lobby.Lobby, error) {
 	return lobby.Lobby{}, errNoLobbies
+}
+func (noLobbies) Events(context.Context, string, int64, int) ([]lobby.Envelope, error) {
+	return nil, errNoLobbies
 }
