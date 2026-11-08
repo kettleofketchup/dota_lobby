@@ -255,7 +255,7 @@ func TestReadiness(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, missing := readiness(tt.lobby, view(gc.LobbyUI, tt.members...), hostID)
+			ready, missing := readiness(tt.lobby, view(gc.LobbyUI, tt.members...), hostID, false)
 			if ready != tt.ready || !slices.Equal(missing, tt.missing) {
 				t.Errorf("readiness = %v %v, want %v %v", ready, missing, tt.ready, tt.missing)
 			}

@@ -126,6 +126,10 @@ type entry struct {
 	membersInit  bool
 	seen         []uint32
 
+	// chat is nil with lobby chat off. It belongs to the tracker
+	// goroutine, not to op holders.
+	chat *chatSession
+
 	// cancel stops the tracker; guarded by mu.
 	cancel context.CancelFunc
 	poke   chan struct{}
@@ -1155,13 +1159,23 @@ func (m *Manager) Launch(ctx context.Context, id string, req LaunchRequest) (Lob
 	}
 	e.op.Lock()
 	defer e.op.Unlock()
+	out, err := m.launchHeld(e, req)
+	if err != nil {
+		return Lobby{}, err
+	}
+	e.wakeUp()
+	return out, nil
+}
+
+// launchHeld is Launch for a caller that holds op.
+func (m *Manager) launchHeld(e *entry, req LaunchRequest) (Lobby, error) {
 	l := e.snapshot()
 	h, v, err := m.handle(l)
 	switch {
 	case l.State == StateWaiting && !req.Force:
 		missing := []string{}
 		if err == nil && v != nil {
-			_, missing = readiness(l, v, h.Status().SteamID)
+			_, missing = readiness(l, v, h.Status().SteamID, readyCheckOn(l, m.opts.Lobby))
 		}
 		return Lobby{}, fmt.Errorf("%w: missing %v", ErrNotReady, missing)
 	case l.State != StateReady && l.State != StateWaiting:
@@ -1175,17 +1189,12 @@ func (m *Manager) Launch(ctx context.Context, id string, req LaunchRequest) (Lob
 	case !hostGate(v, h.Status().SteamID, l.HostSeat):
 		return Lobby{}, fmt.Errorf("%w: host is not out of the player slots", ErrHostNotSeated)
 	}
-	out, err := m.commit(e, func(cur *Lobby) ([]newEvent, error) {
+	return m.commit(e, func(cur *Lobby) ([]newEvent, error) {
 		r := result{Lobby: *cur}
 		startLaunch(&r, req.Trigger, req.By, m.now())
 		*cur = r.Lobby
 		return r.Events, nil
 	})
-	if err != nil {
-		return Lobby{}, err
-	}
-	e.wakeUp()
-	return out, nil
 }
 
 // flipWatch is how long a flip the lobby has not shown yet is waited for

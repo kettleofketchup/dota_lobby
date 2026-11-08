@@ -37,7 +37,10 @@ type inputs struct {
 	// MissingFor is how long View has been nil while BotReady.
 	MissingFor time.Duration
 	LostGrace  time.Duration
-	Cfg        config.LobbyConfig
+	// Flipping means a flip was sent that the lobby has not shown yet:
+	// players are moving sides with their team, so ready flags stay.
+	Flipping bool
+	Cfg      config.LobbyConfig
 }
 
 // newEvent is an event before it gets an ID and a sequence number.
@@ -201,7 +204,10 @@ func deriveSeating(r *result, v *gc.LobbyView, in inputs) {
 		deriveLaunching(r, v, in)
 		return
 	}
-	ready, missing := readiness(*l, v, in.Host)
+	if !in.Flipping {
+		resetReady(r, v, in.Host)
+	}
+	ready, missing := readiness(*l, v, in.Host, readyCheckOn(*l, in.Cfg))
 	switch {
 	case l.State == StateWaiting && ready:
 		r.to(StateReady, "", in.Now)
@@ -374,11 +380,48 @@ func player(m gc.Member, host uint64) bool {
 	return m.SteamID != host && m.TeamKnown && !m.Coach()
 }
 
+// readyCheckOn reports whether players must also say they are ready in
+// lobby chat. It needs chat, and a roster: an open lobby has nobody whose
+// ready flag could count.
+func readyCheckOn(l Lobby, cfg config.LobbyConfig) bool {
+	return cfg.Chat.Enabled && l.Spec.ReadyCheck && !l.Spec.Teams.Empty()
+}
+
+// resetReady clears the ready flag of rostered players who left or are
+// no longer on their side. A member whose team the snapshot omits keeps
+// the flag: that is not a move.
+func resetReady(r *result, v *gc.LobbyView, host uint64) {
+	byAccount := map[uint32]gc.Member{}
+	for _, m := range v.Members {
+		byAccount[gc.AccountID(m.SteamID)] = m
+	}
+	for _, e := range r.Lobby.Spec.Teams.All() {
+		if !e.Ready {
+			continue
+		}
+		reason := ""
+		m, ok := byAccount[e.AccountID]
+		switch {
+		case !ok:
+			reason = "left"
+		case !m.TeamKnown:
+			continue
+		case !player(m, host) || m.Team != e.Side.team():
+			reason = "moved"
+		default:
+			continue
+		}
+		r.Lobby.Spec.Teams.Player(e.AccountID).Ready = false
+		r.emit("lobby.player_unready", map[string]any{"account_id": e.AccountID, "reason": reason})
+	}
+}
+
 // readiness reports whether the lobby may launch and, if not, what is
 // missing: account IDs of rostered players not seated on their side,
-// "stranger:<id>" for others on a side, or "radiant"/"dire" for an open
-// lobby's empty side.
-func readiness(l Lobby, v *gc.LobbyView, host uint64) (bool, []string) {
+// "unready:<id>" for seated players who have not said they are ready
+// (with readyCheck), "stranger:<id>" for others on a side, or
+// "radiant"/"dire" for an open lobby's empty side.
+func readiness(l Lobby, v *gc.LobbyView, host uint64, readyCheck bool) (bool, []string) {
 	missing := []string{}
 	roster := l.Spec.Teams
 	if roster.Empty() {
@@ -406,6 +449,9 @@ func readiness(l Lobby, v *gc.LobbyView, host uint64) (bool, []string) {
 		switch {
 		case ok && player(m, host) && m.Team == e.Side.team():
 			seated[e.Side]++
+			if readyCheck && !e.Ready {
+				missing = append(missing, "unready:"+strconv.FormatUint(uint64(e.AccountID), 10))
+			}
 		case !ok && l.Spec.AllowShortHanded:
 			// Absent players do not block a short-handed lobby.
 		default:

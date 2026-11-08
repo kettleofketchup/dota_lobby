@@ -40,6 +40,9 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 	defer stopLobbies()
 	invites, stopInvites := h.SubscribeInvites()
 	defer stopInvites()
+	chats, stopChat := m.startChat(ctx, e, h)
+	defer stopChat()
+	defer m.leaveChat(ctx, e, h)
 
 	e.op.Lock()
 	needCreate := !e.readopt && l.State == StateCreating && l.GCLobbyID == 0
@@ -62,6 +65,10 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 		case <-lobbies:
 		case inv := <-invites:
 			m.confirmInvite(e, inv)
+		case msg := <-chats:
+			m.onChat(e, h, msg)
+		case <-e.chat.countdownC():
+			m.fireCountdown(e)
 		}
 	}
 }
@@ -328,7 +335,7 @@ func (m *Manager) step(ctx context.Context, e *entry, h bot.Handle) {
 	}
 	in := inputs{
 		Now: now, View: view, Host: host, BotReady: botReady, BotLost: botLost,
-		LostGrace: m.opts.LostGrace, Cfg: m.opts.Lobby,
+		LostGrace: m.opts.LostGrace, Flipping: e.flip != nil, Cfg: m.opts.Lobby,
 	}
 	if !e.missingSince.IsZero() {
 		in.MissingFor = now.Sub(e.missingSince)
@@ -361,6 +368,7 @@ func (m *Manager) step(ctx context.Context, e *entry, h bot.Handle) {
 	if l.State.Terminal() || !botReady || view == nil {
 		return
 	}
+	m.chatStep(ctx, e, h, l, st, res.Events)
 	switch l.State {
 	case StateWaiting, StateReady:
 		m.prepare(ctx, e, h, l, view, host)
@@ -550,6 +558,9 @@ func (m *Manager) enforceSeating(ctx context.Context, e *entry, h bot.Handle, v 
 			from = "lobby"
 		}
 		evs = append(evs, newEvent{Type: "lobby.player_kicked", Data: map[string]any{"account_id": a.Account, "from": from, "reason": a.Reason}})
+		if side, ok := l.Spec.Teams.Side(a.Account); ok && a.Reason == "wrong_side" {
+			e.say(displayName(e.chatNames(), a.Account) + ": your seat is " + sideName(side) + ".")
+		}
 		if hist.Count == maxEnforcements {
 			m.log.Warn("stopped enforcing a seat", "lobby", l.ID, "account_id", a.Account, "kicks", hist.Count)
 			evs = append(evs, newEvent{Type: "lobby.enforcement_stopped", Data: map[string]any{"account_id": a.Account, "kicks": hist.Count}})
