@@ -39,9 +39,11 @@ type session struct {
 	failed   chan error
 	popups   chan *protocol.CMsgDOTAPopup
 	// details is the last full set of lobby details sent, for merged updates.
-	details   *protocol.CMsgPracticeLobbySetDetails
-	captureNo atomic.Uint64
-	nextJob   atomic.Uint64
+	details *protocol.CMsgPracticeLobbySetDetails
+	// chatChannel is the joined lobby chat channel ID, 0 until joined.
+	chatChannel atomic.Uint64
+	captureNo   atomic.Uint64
+	nextJob     atomic.Uint64
 
 	mu      sync.Mutex
 	waiters []*packetWaiter
@@ -253,6 +255,10 @@ func (s *session) eventLoop(ctx context.Context, token string) {
 			})
 		case *devents.GCConnectionStatusChanged:
 			s.rep.emit("", "gc_status", map[string]any{"old": e.OldState.String(), "new": e.NewState.String()})
+		case *devents.JoinedChatChannel:
+			s.rep.emit("D10", "chat_joined_event", chatJoinFields(&e.CMsgDOTAJoinChatChannelResponse))
+		case *devents.ChatMessage:
+			go s.onChat(&e.CMsgDOTAChatMessage)
 		case *devents.Popup:
 			s.rep.emit("Q4", "popup", map[string]any{
 				"id": e.GetId().String(), "id_code": int32(e.GetId()), "custom_text": e.GetCustomText(), "int_data": e.GetIntData(),
