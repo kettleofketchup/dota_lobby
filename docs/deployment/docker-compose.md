@@ -2,17 +2,47 @@
 
 Docker Compose on a single Linux machine is the recommended way to run Dota Lobby. The
 [Quick start](../getting-started/quick-start.md) walks through the first run; this page explains
-the setup in more detail: the compose file, file permissions per runtime, upgrades, logs and
-exposing the API.
+the setup in more detail: the compose file, how credentials reach the container, the state
+volume, health checks, upgrades, logs and exposing the API.
 
 !!! danger "Run one instance per set of Steam accounts"
 
     Never run two copies of the service with the same bot accounts, and never log in to a bot
-    account in the Steam client while the service is running. Each login kicks the other off,
-    and they keep doing so forever (`[<username>] Logged off: EResult_LoggedInElsewhere` or
-    `EResult_LogonSessionReplaced` in the logs). `compose.yaml` sets a fixed `container_name`
-    so Compose cannot start a second copy by accident, but it cannot stop a second copy on
-    another machine.
+    account in the Steam client (or run `just probe` for it) while the service is running. Each
+    login kicks the other off. The bot then logs `bot state changed` with
+    `eresult=LoggedInElsewhere` or `LogonSessionReplaced` and cools down for 10 minutes.
+    `compose.yaml` sets a fixed `container_name`, and the service holds a lock on its state
+    volume, so a second copy cannot start on the same machine by accident. Nothing stops a
+    second copy on another machine.
+
+## How the pieces fit
+
+```mermaid
+flowchart LR
+    subgraph host[Host]
+        sops["secrets/*.sops.yaml<br/>(encrypted, in your clone)"]
+        tmpfs["$XDG_RUNTIME_DIR/dota_lobby<br/>(tmpfs, decrypted)"]
+        config["config/config.yaml"]
+    end
+    subgraph container[Container, read-only root]
+        creds["/run/secrets/dota_lobby (ro)"]
+        cfg["/app/config (ro)"]
+        state["/app/state (volume, rw)"]
+    end
+    sops -- "just docker up<br/>(sops decrypt)" --> tmpfs
+    tmpfs --> creds
+    config --> cfg
+    vol[(dota_lobby_state)] --- state
+```
+
+- The **image** holds only the binary. It contains no config, no credentials and no sops or
+  age keys.
+- **`config/config.yaml`** holds settings and the bot list, nothing secret. It is mounted
+  read-only.
+- **Credentials** are decrypted on the host, at start, into a tmpfs directory, and mounted
+  read-only. See [Credentials](#credentials).
+- **State** (the token store and the `LOCK` file) lives in the named volume
+  `dota_lobby_state`, the only writable path. See [The state volume](#the-state-volume).
 
 ## The compose file
 
@@ -20,47 +50,210 @@ This is `compose.yaml` from the repository, unchanged:
 
 ```yaml
 # Single-machine deployment. See https://kettleofketchup.github.io/dota_lobby/deployment/docker-compose/
-# DOTA_LOBBY_TAG is a Compose variable (image tag, no leading "v"), not an app setting.
+# Start and stop it with `just docker up` and `just docker down`: they decrypt
+# the sops bot credentials into a tmpfs directory on the host and remove them
+# again. DOTA_LOBBY_TAG and DOTA_LOBBY_SECRETS_HOST_DIR are Compose variables,
+# not app settings.
+name: dota_lobby
+
 services:
   dota_lobby:
     image: ghcr.io/kettleofketchup/dota_lobby:${DOTA_LOBBY_TAG:-latest}
     container_name: dota_lobby # also blocks accidental --scale
+    command: ["serve"]
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      # One decrypted credentials file per bot, written by `just docker up`.
+      DOTA_LOBBY_CREDENTIALS_DIR: /run/secrets/dota_lobby/creds
     volumes:
       - ./config:/app/config:ro
+      # Decrypted secrets on a host tmpfs: creds/<bot>.yaml and an optional
+      # secrets.yaml. Read-only; the image holds no sops keys.
+      - ${DOTA_LOBBY_SECRETS_HOST_DIR:-${XDG_RUNTIME_DIR:?set XDG_RUNTIME_DIR or DOTA_LOBBY_SECRETS_HOST_DIR}/dota_lobby}:/run/secrets/dota_lobby:ro
+      # Token store and LOCK file. Renewed tokens are kept here, so keep the
+      # volume across upgrades.
+      - state:/app/state
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - "no-new-privileges:true"
+    # Shutdown takes up to 5s for HTTP plus 15s for the bots to disconnect.
     stop_grace_period: 30s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-```
 
-Line by line:
+volumes:
+  state:
+```
 
 | Line | What it does |
 |---|---|
-| `image: ghcr.io/kettleofketchup/dota_lobby:${DOTA_LOBBY_TAG:-latest}` | The published image. The tag comes from the `DOTA_LOBBY_TAG` Compose variable and falls back to `latest` when it is unset. There is no `build:` key; see [Using a local build](#using-a-local-build) |
-| `container_name: dota_lobby` | A fixed name, so `docker compose up --scale` cannot start a second copy (see the one-instance rule above) |
+| `name: dota_lobby` | A fixed project name, so the volume is always `dota_lobby_state`, whatever your clone's directory is called |
+| `image: ...:${DOTA_LOBBY_TAG:-latest}` | The published image. The tag comes from the `DOTA_LOBBY_TAG` Compose variable and falls back to `latest`. See [Choosing the image tag](#choosing-the-image-tag) |
+| `container_name: dota_lobby` | A fixed name, so `docker compose up --scale` cannot start a second copy |
+| `command: ["serve"]` | Runs the service. It is also the image's default |
 | `restart: unless-stopped` | Restarts the container if the process exits, until you stop it yourself |
 | `ports: "127.0.0.1:8080:8080"` | Publishes the API on localhost only. See [Changing the port](#changing-the-port) and [Exposing it beyond localhost](#exposing-it-beyond-localhost) |
-| `volumes: ./config:/app/config:ro` | Mounts your `config/` directory read-only at `/app/config`, the only path the image reads its config from. The directory must be traversable by the container user; see [File permissions](#file-permissions) |
-| `read_only: true` | The container's root filesystem is read-only. The service writes nothing to disk, so it needs no writable volume |
-| `cap_drop: ALL` | Drops all Linux capabilities |
-| `no-new-privileges:true` | The process can never gain privileges (for example through setuid binaries) |
-| `stop_grace_period: 30s` | On `docker compose stop` the service gets SIGTERM and 30 seconds to shut down the HTTP server (it allows itself 10s) and disconnect the bots before it is killed |
-| `logging:` | The `json-file` log driver, rotated at 10 MB, keeping 3 files |
+| `DOTA_LOBBY_CREDENTIALS_DIR` | Points `credentials_dir` at the decrypted bot files |
+| `./config:/app/config:ro` | Your `config/` directory, read-only |
+| `...:/run/secrets/dota_lobby:ro` | The decrypted secrets directory on the host, read-only. `DOTA_LOBBY_SECRETS_HOST_DIR` overrides the default `$XDG_RUNTIME_DIR/dota_lobby` |
+| `state:/app/state` | The named volume with the token store and `LOCK` file |
+| `read_only: true` | The root filesystem is read-only; only `/app/state` is writable |
+| `cap_drop: ALL`, `no-new-privileges` | No Linux capabilities, no privilege gain |
+| `stop_grace_period: 30s` | Time between SIGTERM and SIGKILL. The service needs up to 20 seconds: 5 for in-flight HTTP requests, then 15 for every bot to leave the game coordinator and disconnect |
+| `logging:` | `json-file`, rotated at 10 MB, keeping 3 files |
 
-The image runs as the non-root user UID/GID `65532`. There is no `.env` file and the
-service reads no environment variables: everything it needs comes from the two files in
-`config/` (see the [Configuration reference](../configuration/index.md)).
+The image runs as UID/GID `65532`, sets `DOTA_LOBBY_STATE_DIR=/app/state` and has a
+[healthcheck](#health-checks).
+
+## Credentials
+
+### Recommended: `just docker up`
+
+Keep each bot's credentials in `secrets/bots/<bot>.sops.yaml`, set up as described in
+[Bot accounts](../configuration/bot-accounts.md). Then start and stop the stack with the just
+recipes instead of plain `docker compose`:
+
+```bash
+just docker up      # decrypt, then docker compose up -d
+just docker down    # docker compose down, then delete the decrypted files
+```
+
+`just docker up`:
+
+1. checks that the parent directory (`$XDG_RUNTIME_DIR`, normally `/run/user/<uid>`) is yours,
+   mode `0700`, and on tmpfs (it warns if it is not tmpfs);
+2. recreates `$XDG_RUNTIME_DIR/dota_lobby/creds/` and runs `sops decrypt` for every
+   `secrets/bots/*.sops.yaml` into `creds/<bot>.yaml`;
+3. if `secrets/service.sops.yaml` exists, decrypts it to `$XDG_RUNTIME_DIR/dota_lobby/secrets.yaml`,
+   which the service reads as its secrets file (use it for `secrets.api_key`);
+4. runs `docker compose up -d`.
+
+The decrypted files are mode `0644` so that the container user can read them however your
+runtime maps UID 65532 (rootful Docker, rootless Docker, rootless Podman). Other local users
+cannot reach them, because `$XDG_RUNTIME_DIR` itself is `0700` and owned by you. Root on the
+host can read them, as it can read anything.
+
+The files stay on the tmpfs while the stack runs, so `restart: unless-stopped` can restart the
+container. They disappear on `just docker down` and on reboot.
+
+!!! warning "After a reboot, run `just docker up` again"
+
+    The tmpfs is empty after a reboot, so the container cannot start until the files are back:
+    Docker fails the bind mount, or the service exits with `read credentials_dir: ...`. Run
+    `just docker up` again after every reboot.
+
+To keep the API key in sops too, create the service secrets file once:
+
+```bash
+sops edit secrets/service.sops.yaml
+```
+
+```yaml
+secrets:
+  api_key: "<long random value, for example from: openssl rand -hex 32>"
+```
+
+| Recipe | What it does |
+|---|---|
+| `just docker up` | Decrypt, then `docker compose up -d` |
+| `just docker down` | `docker compose down`, then `just docker wipe`. The state volume is kept |
+| `just docker restart` | Decrypt again, then restart the container so it re-reads them |
+| `just docker decrypt` | Only decrypt |
+| `just docker wipe` | Only delete the decrypted files |
+| `just docker logs` | `docker compose logs -f` |
+| `just docker ps` | `docker compose ps`, including the health status |
+| `just docker auth <bot>` | Run `dota_lobby auth --bot <bot> --force` in the running container, see [Re-authenticating a bot](#re-authenticating-a-bot) |
+| `just docker build [tag]` | Build the image locally as `ghcr.io/kettleofketchup/dota_lobby:local` |
+
+The recipes call `docker`; set `DOCKER=podman` to use Podman directly. `DOTA_LOBBY_TAG` must
+be set for them just as for `docker compose`.
+
+### Alternative: Compose secrets and `*_FILE`
+
+If you do not use sops, any file can become a secret. Put one value per file in a directory
+only you can read, and add a `compose.override.yaml` next to `compose.yaml`:
+
+```yaml
+services:
+  dota_lobby:
+    environment:
+      DOTA_LOBBY_SECRETS_API_KEY_FILE: /run/secrets/api_key
+      DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_PASSWORD_FILE: /run/secrets/league_bot_1_password
+      DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_SHARED_SECRET_FILE: /run/secrets/league_bot_1_shared_secret
+    secrets:
+      - api_key
+      - league_bot_1_password
+      - league_bot_1_shared_secret
+
+secrets:
+  api_key:
+    file: ./private/api_key
+  league_bot_1_password:
+    file: ./private/league_bot_1_password
+  league_bot_1_shared_secret:
+    file: ./private/league_bot_1_shared_secret
+```
+
+Without Swarm, Compose bind-mounts these files as they are, so the container user must be
+able to read them: apply the [file permission](#file-permissions) recipe for your runtime to
+them. The `/run/secrets/dota_lobby` mount from `compose.yaml` is still there; point
+`DOTA_LOBBY_SECRETS_HOST_DIR` at an empty directory (with an empty `creds/` inside) if you do
+not use it.
+
+Do not pass passwords as plain `environment:` values: they show up in `docker inspect`.
+
+## The state volume
+
+`/app/state` holds:
+
+| Path | Content |
+|---|---|
+| `LOCK` | `flock` lock, held while `serve` runs. A second process on the same volume refuses to start |
+| `bots/<username>/token.json` | The bot's refresh token, mode `0600`, written atomically |
+
+The image ships `/app/state` empty and owned by UID 65532, and Docker and Podman copy that
+ownership into a new named volume, so no `chown` is needed.
+
+**Seeding:** on first start the token store is empty. A bot whose credentials file has a
+`STEAM_REFRESH_TOKEN` (put there by `just probe auth`) copies it into the store. Otherwise it
+logs in with password and Steam Guard code and stores the new token. From then on the token in
+the volume is used and renewed in place. A newer `STEAM_REFRESH_TOKEN` in the sops file
+replaces a stored token that expires earlier.
+
+**Keep the volume.** `just docker down` and `docker compose down` keep it. `docker compose down
+-v` or `docker volume rm dota_lobby_state` delete every stored token; bots with a
+`shared_secret` then mint new ones, the others need [re-authenticating](#re-authenticating-a-bot).
+
+Back it up with any volume backup tool, for example:
+
+```bash
+docker run --rm -v dota_lobby_state:/s:ro -v "$PWD:/b" busybox tar czf /b/state.tgz -C /s .
+```
+
+The archive holds live refresh tokens; protect it like the sops files.
+
+## Re-authenticating a bot
+
+A bot without a `shared_secret`, or one whose password changed, ends up in
+`needs_attention`. Fix the credentials, then:
+
+```bash
+just docker restart                  # only if you changed a sops file
+just docker auth <bot>               # password + code, stores the token in the volume
+curl -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/<bot>/retry
+```
+
+`just docker auth` runs `dota_lobby auth --bot <bot> --force` inside the running container
+(`--force` because `serve` holds the lock). Without a `shared_secret` it asks for a Steam
+Guard code on the terminal; pass `--code 12345` after the bot name instead if you prefer. See
+[Recovering a bot](../operations/troubleshooting.md#recovering-a-bot-in-needs_attention).
 
 ## Choosing the image tag
 
@@ -77,27 +270,22 @@ full version. The full list is under [Image tags](docker.md#image-tags).
 
 !!! warning "Set the Compose variables in every shell that runs `docker compose`"
 
-    `DOTA_LOBBY_TAG`, and for the rootful `user:` variant below also `DOTA_LOBBY_UID` and
-    `DOTA_LOBBY_GID`, must be set in **every shell that runs `docker compose`**: `pull`, `up`,
-    `restart`, `logs`, `stop`, all of them. Either put them in front of each command:
+    `DOTA_LOBBY_TAG` must be set in **every shell that runs `docker compose` or `just docker`**:
+    `pull`, `up`, `restart`, `logs`, `stop`, all of them. Either put it in front of each
+    command:
 
     ```bash
-    DOTA_LOBBY_TAG=1.2.3 docker compose up -d
+    DOTA_LOBBY_TAG=1.2.3 just docker up
     ```
 
-    or persist them in your shell profile:
+    or persist it in your shell profile:
 
     ```bash
     echo 'export DOTA_LOBBY_TAG=1.2.3' >> ~/.bashrc
     ```
 
-    This project does not use a `.env` file. What goes wrong when a variable is unset:
-
-    - unset `DOTA_LOBBY_TAG` silently means `latest`, and `docker compose up -d` recreates the
-      container on that image;
-    - unset `DOTA_LOBBY_UID` or `DOTA_LOBBY_GID` (only if you added the `user:` line) makes
-      every compose command, `restart` included, fail with a
-      `required variable DOTA_LOBBY_UID is missing a value` error.
+    This project does not use a `.env` file. An unset `DOTA_LOBBY_TAG` silently means
+    `latest`, and `up -d` recreates the container on that image.
 
 ### Using a local build
 
@@ -105,215 +293,98 @@ Before the first release, or to run your own changes, build the image yourself a
 `DOTA_LOBBY_TAG` at it:
 
 ```bash
-docker build -t ghcr.io/kettleofketchup/dota_lobby:local .
-DOTA_LOBBY_TAG=local docker compose up -d
+just docker build
+DOTA_LOBBY_TAG=local just docker up
 ```
 
 See [Build the image locally](docker.md#build-the-image-locally) for build options.
 
 ## File permissions
 
-The container runs as UID/GID `65532` and must be able to read both files in `config/`.
-Whether it can depends on how your container runtime maps that UID onto your host, so there is
-one recipe per runtime below.
+With the recommended setup there is little to do:
 
-Every recipe starts the same way: the `config/` directory itself must be traversable, mode
-`755`:
+- `config/` must be traversable by the container user: `chmod 755 config`.
+- `config/config.yaml` holds no secrets, so `chmod 644 config/config.yaml` is fine.
+- The decrypted credentials are handled by `just docker up`.
 
-```bash
-chmod 755 config
-```
-
-A `700` directory, or an SELinux denial, does **not** produce an error. The service treats
-the files as missing and starts with defaults: API key authentication off and no bots. If
-you see `WARNING: secrets.yaml not found - no bots will be configured` (followed by
-`WARNING: No bots configured in secrets.yaml`) or
-`WARNING: API key authentication disabled - all endpoints are public` while both files exist,
-this is the cause. Do not edit `secrets.yaml` in response to the `No bots configured` line
-here: the file is fine, the container just cannot see it.
-
-A readable directory with an unreadable file is fatal instead. `config.yaml` is read first, so
-the line you usually see is:
+If `config/` is mode `700` (or SELinux blocks the mount), the service cannot see
+`config.yaml`: it starts with defaults and the bots from `credentials_dir`, and logs
+`no bots configured` if there are none. A readable directory with an unreadable `config.yaml`
+is fatal instead:
 
 ```text
-Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied
+dota_lobby serve: load config: read config /app/config/config.yaml: open /app/config/config.yaml: permission denied
 ```
 
-and the container restarts in a loop until the files are fixed.
+The recipes below are only needed for **secret files you keep yourself**: a
+`config/secrets.yaml` from the old setup, or Compose secrets files. The container runs as
+UID/GID `65532` and must be able to read them; how depends on how your runtime maps that UID.
 
 !!! warning "Pick exactly one tab. The recipes must not be combined"
 
-    The recipes are alternatives. Mixing them breaks the result. The two easy mistakes:
-
-    - a host `chown 65532` (the rootful recipe) with a **rootless** runtime: under rootless
-      Podman or rootless Docker, host UID 65532 is not the container's UID 65532, so the
-      container cannot read the files, and you cannot either;
-    - the rootful `DOTA_LOBBY_UID` override on **rootless Docker**: it runs the container as a
-      UID that maps into your subuid range, which cannot read your files.
+    The two easy mistakes: a host `chown 65532` (the rootful recipe) with a **rootless**
+    runtime, where host UID 65532 is not the container's UID 65532; and a `user:` override
+    on **rootless Docker**, which runs the container as a UID in your subuid range. A `user:`
+    override also changes who owns new files in the state volume.
 
 ### Which runtime do I have?
 
 The `docker` command is not always Docker: on many distributions it is Podman behind a
-compatibility wrapper. Run these checks before picking a tab:
+compatibility wrapper.
 
 | Check | Result | Tab |
 |---|---|---|
-| `docker version` | the `Client:` line says `Podman Engine`, or `docker` is not installed and you use `podman` | **Rootless Podman** if `podman info --format '{{.Host.Security.Rootless}}'` prints `true`. If it prints `false` (Podman run as root), use **Rootful Docker** |
+| `docker version` | the `Client:` line says `Podman Engine`, or you use `podman` | **Rootless Podman** if `podman info --format '{{.Host.Security.Rootless}}'` prints `true`, otherwise **Rootful Docker** |
 | `docker info --format '{{.SecurityOptions}}'` | contains `name=rootless` | **Rootless Docker** |
-| `docker context ls` | the active context (marked `*`) is `desktop-linux`, or you are on macOS or Windows | **Docker Desktop** |
-| none of the above | Docker Engine, run as root (you usually need `sudo` or the `docker` group) | **Rootful Docker** |
+| `docker context ls` | the active context is `desktop-linux`, or you are on macOS or Windows | **Docker Desktop** |
+| none of the above | Docker Engine run as root | **Rootful Docker** |
 
-Work down the table and stop at the first match. The second check only works on real Docker;
-under Podman it fails with a template error, which is why the `docker version` check comes
-first. If `docker version` says Podman, do not use
-the Rootful Docker tab just because the command is called `docker`: its `sudo chown 65532`
-recipe locks you out of the files and the container still cannot read them.
-
-The optional lines below (`user:`, `userns_mode:`, the SELinux `:Z` mount) go in a file named
-`compose.override.yaml` next to `compose.yaml`. Compose merges it in automatically, and
-keeping it separate means `compose.yaml` stays exactly as released, so
-[upgrading](#upgrading) with `git checkout` never conflicts with your changes.
+Work down the table and stop at the first match.
 
 === "Rootful Docker"
 
-    The default Docker Engine install (no userns-remap). Pick one of the two variants.
-
-    **Variant 1: give the files to UID 65532.**
-
     ```bash
-    chmod 755 config
-    sudo chown 65532:65532 config/secrets.yaml config/config.yaml && sudo chmod 600 config/*.yaml
+    sudo chown 65532:65532 config/secrets.yaml && sudo chmod 600 config/secrets.yaml
     ```
 
-    **Variant 2: keep the files owned by you and run the container as you.**
-
-    ```bash
-    chmod 755 config
-    chmod 600 config/*.yaml
-    export DOTA_LOBBY_UID=$(id -u) DOTA_LOBBY_GID=$(id -g)
-    ```
-
-    and in `compose.override.yaml`:
-
-    ```yaml
-    services:
-      dota_lobby:
-        user: "${DOTA_LOBBY_UID:?}:${DOTA_LOBBY_GID:?}"
-    ```
-
-    `DOTA_LOBBY_UID` and `DOTA_LOBBY_GID` are Compose variables like `DOTA_LOBBY_TAG`, not app
-    settings, and they must be set in every shell that runs `docker compose` (no `.env` file).
-    The `:?` makes Compose fail loudly when they are unset instead of starting the container
-    as the wrong user. Do not use `${UID}` and `${GID}` here: in bash `UID` is a read-only,
-    unexported shell variable and `GID` does not exist, and in zsh assigning `UID` tries to
-    change your process's UID, so Compose would get an empty or partial `user:` value.
-
-    **Editing later:** after variant 1, edit with `sudo -e config/secrets.yaml` (or
-    `sudo -e config/config.yaml`); ownership and mode are kept. Variant 2 keeps the files
-    owned by you, so edit them normally. Then run `docker compose restart` (for variant 2, in
-    a shell where `DOTA_LOBBY_UID`, `DOTA_LOBBY_GID` and `DOTA_LOBBY_TAG` are set; otherwise
-    compose fails on the missing variable).
+    Edit later with `sudo -e config/secrets.yaml`, then `just docker restart`.
 
 === "Rootless Podman"
 
-    Podman running as your user, with `docker compose` or `podman compose`. This is the setup
-    the project is tested on. Pick one of the two variants.
-
-    **Variant 1 (tested by this project): chown inside your user namespace.**
+    This is the setup the project is tested on.
 
     ```bash
-    chmod 755 config
-    chmod 600 config/*.yaml
-    podman unshare chown 65532:65532 config/*.yaml
+    chmod 600 config/secrets.yaml
+    podman unshare chown 65532:65532 config/secrets.yaml
     ```
 
-    `podman unshare` runs `chown` inside your rootless user namespace, so the files end up
-    owned by whatever host UID the container's 65532 maps to.
-
-    **Variant 2: keep the files owned by you and map your user onto 65532.**
-
-    ```bash
-    chmod 755 config
-    chmod 600 config/*.yaml
-    ```
-
-    and in `compose.override.yaml`:
-
-    ```yaml
-    services:
-      dota_lobby:
-        userns_mode: "keep-id:uid=65532,gid=65532"
-    ```
-
-    Plain `keep-id` is not enough: it maps your user onto your own UID inside the container,
-    not onto 65532.
-
-    **Editing later:** after variant 1, edit inside the user namespace, for example
-    `podman unshare vi config/secrets.yaml` (any editor works; ownership is kept). Variant 2
-    keeps the files owned by you, so edit them normally. Then run `docker compose restart`
-    (or `podman compose restart`).
+    `podman unshare` runs `chown` inside your user namespace, so the file ends up owned by the
+    host UID that the container's 65532 maps to. Edit later with
+    `podman unshare vi config/secrets.yaml`, then `just docker restart`.
 
 === "Rootless Docker (untested)"
 
-    Docker Engine in rootless mode. This tab is **untested**: the project's test host only has
-    rootless Podman. Under rootless Docker only container UID 0 maps to your host user. Pick
-    one of the two variants.
-
-    **Variant 1: chown through a throwaway container.** Its root is your user, so it can chown
-    the files into the subuid range:
+    Under rootless Docker only container UID 0 maps to your host user. Chown through a
+    throwaway container:
 
     ```bash
-    chmod 755 config
-    chmod 600 config/*.yaml
-    docker run --rm -v "$PWD/config:/c" busybox chown 65532:65532 /c/config.yaml /c/secrets.yaml
+    chmod 600 config/secrets.yaml
+    docker run --rm -v "$PWD/config:/c" busybox chown 65532:65532 /c/secrets.yaml
     ```
 
-    **Variant 2: run as container root**, which is your unprivileged host user. Keep the files
-    owned by you at `0600` and add to `compose.override.yaml`:
-
-    ```yaml
-    services:
-      dota_lobby:
-        user: "0:0"
-    ```
-
-    `cap_drop: ALL`, `read_only` and `no-new-privileges` still apply.
-
-    Never use the rootful `DOTA_LOBBY_UID` override here. It runs the container as a UID in
-    your subuid range, which cannot read your `0600` files, and the service exits with
-    `Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied`
-    (config.yaml is read first).
-
-    **Editing later:** after variant 1, hand the files back to yourself with
-    `docker run --rm -v "$PWD/config:/c" busybox chown 0:0 /c/config.yaml /c/secrets.yaml`
-    (container root is your host user), edit them, then run the
-    `chown 65532:65532` command from variant 1 again. Variant 2 keeps the files owned by you,
-    so edit them normally. Then run `docker compose restart`.
+    To edit, hand it back with the same command and `chown 0:0`, edit, then chown it to
+    `65532:65532` again and run `just docker restart`.
 
 === "Docker Desktop (unverified)"
 
-    Docker Desktop on macOS or Windows. This tab is **unverified**. Bind mounts go through
-    Docker Desktop's file sharing, so no `chown` is needed. Do not run `sudo chown 65532`: it
-    only locks you out of your own files.
+    Bind mounts go through Docker Desktop's file sharing, so no `chown` is needed; keep the
+    file owned by you at `chmod 600`. Do not run `sudo chown 65532`: it only locks you out.
+    On Windows, use WSL2 and follow the Linux tab for the runtime inside it.
 
-    ```bash
-    chmod 755 config
-    chmod 600 config/*.yaml
-    ```
+Never fall back to `chmod 644` on a file that holds a password.
 
-    Keep the files owned by you; on macOS keep them at `chmod 600`. On Windows, use WSL2 and
-    follow the Linux tab for the runtime you run inside it.
-
-    **Editing later:** the files stay owned by you; edit them, then run
-    `docker compose restart`.
-
-Never fall back to `chmod 644` to make editing easier. It is not recommended: it makes the
-Steam passwords readable by every local user on the machine. Use the "Editing later" line of
-your tab instead.
-
-**SELinux hosts** (Fedora, RHEL and similar, including Podman on them) also need the `Z`
-option on the mount, or SELinux blocks the container from reading `config/` (which looks like
-missing files, see above). Add to `compose.override.yaml`:
+**SELinux hosts** (Fedora, RHEL and similar) also need the `Z` option on the bind mounts, or
+SELinux blocks the container from reading them. In `compose.override.yaml`:
 
 ```yaml
 services:
@@ -323,70 +394,89 @@ services:
 ```
 
 Compose merges volumes by their container path, so this replaces the mount from
-`compose.yaml` instead of adding a second one. If the override file already has a
-`dota_lobby:` section (for a `user:` or `userns_mode:` line), add `volumes:` to it rather than
-writing a second section.
+`compose.yaml` instead of adding a second one.
+
+## Health checks
+
+The image has a Docker `HEALTHCHECK` that runs `dota_lobby healthcheck` every 30 seconds. The
+subcommand needs no shell or curl: it does `GET http://127.0.0.1:8080/livez` (the port follows
+`DOTA_LOBBY_SERVER_PORT` if you set it) and exits `0` only on `200`. `just docker ps` shows the
+result.
+
+| Endpoint | Meaning | Use it for |
+|---|---|---|
+| `/livez` | The process serves and no bot's run loop has been stuck for 30 seconds. **Does not depend on Steam** | The container healthcheck. A Steam outage never marks the container unhealthy, so it never turns into a restart loop and a login storm |
+| `/readyz` | At least `readiness.min_ready_bots` bots are `gc_ready`, and the service is not shutting down | A load balancer or monitor deciding whether to send work |
+| `/health` | Always `200`, with counts per bot state | Dashboards and old monitors |
+
+Docker marks the container `unhealthy` but does not restart it on its own; `restart:` only
+reacts to the process exiting.
+
+!!! note "Podman and the healthcheck"
+
+    Podman keeps `HEALTHCHECK` only in images in Docker format. The published images are built
+    by Docker and keep it. When you build locally with Podman, use `just docker build`, which
+    adds `--format docker`; a plain `podman build` drops the healthcheck with a warning.
+
+From outside the container:
+
+```bash
+curl -fsS http://127.0.0.1:8080/livez
+curl -s http://127.0.0.1:8080/readyz
+```
 
 ## Upgrading
 
-The quick start clones one release with `--depth 1`. To move to a new release, check out the
-new tag so `compose.yaml` and the example files stay in step with the image, then pull and
-recreate:
+Check out the new release so `compose.yaml` and the example files match the image, then pull
+and recreate:
 
 ```bash
 git fetch --depth 1 origin tag v1.2.4
 git checkout v1.2.4
 export DOTA_LOBBY_TAG=1.2.4   # and update your shell profile if you persisted it there
 docker compose pull
-docker compose up -d
+just docker up
 ```
 
-- `DOTA_LOBBY_TAG=1.2.4` has no leading `v`, as always.
-- `docker compose pull` and `docker compose up -d` with an **unchanged** `DOTA_LOBBY_TAG`
-  change nothing: a pinned full-version tag never moves. Changing the variable is what
-  upgrades.
-- The checkout leaves your `config/` files alone: git ignores them. It also leaves
-  `compose.override.yaml` alone if you created one: the file is not part of the repository
-  (git lists it as untracked), so no release overwrites it.
-- Check the release notes for config changes, and compare `config.yaml.example` and
-  `secrets.yaml.example` with your files.
+- `docker compose pull` and `up` with an **unchanged** `DOTA_LOBBY_TAG` change nothing: a
+  pinned full-version tag never moves.
+- `config/`, `secrets/` and `compose.override.yaml` are ignored by git, so the checkout leaves
+  them alone. The `dota_lobby_state` volume is kept, and with it the stored tokens.
+- Compare `config.yaml.example` and `secrets.yaml.example` with your files. Unknown keys are
+  an error now, so a stale key stops startup with a clear message.
+
+### Upgrading from the password-only version
+
+Releases before the headless bot work logged in with username and password only, kept no
+state and read only `config/config.yaml` and `config/secrets.yaml`. Those files still load:
+
+- the old `secrets.bots` list is accepted with the warning
+  `secrets.bots as a list is deprecated; key it by bot name`, and each entry becomes a bot;
+- `server.api_key` is moved to `secrets.api_key` with a deprecation warning;
+- `sentry_hash` is ignored with a warning.
+
+But the new `compose.yaml` mounts the decrypted secrets directory, so start it with
+`just docker up` (it works with no sops files and warns about it), and the old accounts have
+Steam Guard turned off. Plan to move each bot to the headless setup: link an authenticator
+and create its sops file as described in [Bot accounts](../configuration/bot-accounts.md),
+then remove it from `config/secrets.yaml`.
 
 ## Logs
 
 ```bash
-docker compose logs -f
+just docker logs
 docker compose logs --tail 100
 ```
 
-The service logs to stdout only. Compose keeps the logs with the `json-file` driver, rotated
-at 10 MB and keeping 3 files, so they cannot fill the disk. Podman accepts `json-file` as an
-alias for its own `k8s-file` driver.
-
-## Health checks
-
-There is no healthcheck, neither in the image nor in `compose.yaml`, on purpose:
-
-- `/health` always answers `{"status":"healthy",...}` while the process runs, whatever the
-  bots are doing, so a healthcheck on it proves only that the HTTP listener is up;
-- the image is distroless: it has no shell and no HTTP client to run a check with;
-- `restart: unless-stopped` already restarts the container if the process dies.
-
-For a liveness check from outside the container (for example from a monitoring system on the
-same host):
-
-```bash
-curl -fsS http://127.0.0.1:8080/health
-```
-
-Real readiness means checking `GET /bots` (every bot `true`) together with the logs. Even
-`true` only means "logged on to Steam", not "connected to the Dota 2 game coordinator" or
-"ready to host a lobby"; lobby creation is not implemented yet (see
-[Known limitations](../known-limitations.md)).
+The service logs JSON lines to stdout (`log.format: text` in `config.yaml` for plain text).
+Each bot's lines carry `"bot":"<name>"`; state changes are `bot state changed` with `from`,
+`to`, `reason` and `eresult`. Compose keeps the logs with the `json-file` driver, rotated at
+10 MB and keeping 3 files. Podman accepts `json-file` as an alias for its `k8s-file` driver.
 
 ## Changing the port
 
-Leave `server.port` at `8080` in `config.yaml` and change only the **host** side of the
-mapping. For example, to serve on port 9000 in `compose.override.yaml`:
+Leave `server.port` at `8080` and change only the **host** side of the mapping, in
+`compose.override.yaml`:
 
 ```yaml
 services:
@@ -396,25 +486,23 @@ services:
 ```
 
 `!override` replaces the port list from `compose.yaml` instead of adding to it (Docker
-Compose 2.24.4 or newer). You can also edit the line in `compose.yaml` directly, at the cost
-of a conflict on the next `git checkout` during an upgrade.
+Compose 2.24.4 or newer).
 
-If you change `server.port` anyway, the container side of the mapping must match it
-(`127.0.0.1:9000:9000` for `port: 9000`). Otherwise the container starts cleanly but nothing
-answers.
+If you change `server.port` anyway, the container side of the mapping must match, and the
+healthcheck needs `DOTA_LOBBY_SERVER_PORT` set to the same value (it does not read
+`config.yaml`). Setting only `DOTA_LOBBY_SERVER_PORT` in `environment:` covers both.
 
 ## Exposing it beyond localhost
 
 By default the API is reachable only from the machine itself. The service speaks plain HTTP
 with no TLS. Before anything else can reach it:
 
-1. set `server.api_key` in `config.yaml` (and check for `API key authentication enabled` in
-   the logs after a restart);
+1. set `secrets.api_key` (in `secrets/service.sops.yaml`, see [Credentials](#credentials)) and
+   check that the startup log no longer says `API key authentication disabled`;
 2. put a reverse proxy with TLS in front of it.
 
-If the reverse proxy runs on the same machine, keep the localhost binding: the proxy reaches
-the service on `127.0.0.1:8080`. A minimal [Caddy](https://caddyserver.com/) `Caddyfile`,
-which gets a TLS certificate for the name automatically:
+If the proxy runs on the same machine, keep the localhost binding. A minimal
+[Caddy](https://caddyserver.com/) `Caddyfile`:
 
 ```text
 league.example.com {
@@ -423,16 +511,14 @@ league.example.com {
 ```
 
 Only change the mapping to `8080:8080` (all interfaces) if the proxy runs on another machine,
-and only with `server.api_key` set. Without it, every endpoint is public.
+and only with an API key set. Without it, everything under `/v1` is public.
 
 ## Hardening already in place
 
-The image and `compose.yaml` already apply:
-
 - a non-root user, UID/GID `65532`, in a distroless image with no shell;
-- a read-only root filesystem (`read_only: true`), with config mounted read-only;
-- all Linux capabilities dropped (`cap_drop: ALL`);
-- `no-new-privileges`;
+- no sops or age key in the image or the container; secrets mounted read-only from a tmpfs;
+- a read-only root filesystem, with config mounted read-only and one writable volume;
+- all Linux capabilities dropped (`cap_drop: ALL`) and `no-new-privileges`;
 - the API published on localhost only.
 
 The [`docker run`](docker.md) page has the same settings as `docker run` flags.

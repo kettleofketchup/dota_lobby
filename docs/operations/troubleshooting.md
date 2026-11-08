@@ -2,60 +2,127 @@
 
 ## First checks
 
-1. Is the container running, or restarting in a loop?
+1. Is the container running and healthy, or restarting in a loop?
 
     ```bash
-    docker compose ps
+    just docker ps
     ```
 
-2. What did it log? Most problems show up in the first few lines after startup.
+2. What does each bot say?
 
     ```bash
-    docker compose logs
+    curl -s -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots
     ```
 
-3. Run the startup check. With `api_key` set and both files in `config/`, a healthy start
-   logs `API key authentication enabled` and one `Added bot: <username>` line per bot, and
-   does **not** log `WARNING: secrets.yaml not found`. If you see either warning below while
-   the files exist, the container cannot see into `config/`.
+    `state`, `reason`, `last_error` (an EResult name) and `last_error_message` usually tell you
+    what is wrong. The states are listed in the [API reference](../api/index.md#bot-states).
 
-Lines printed through Go's `log` package start with a `YYYY/MM/DD HH:MM:SS` timestamp, which
-the table leaves out. Lines from a bot start with the bot's Steam username in brackets, shown
-here as `[user]`.
+3. What did it log?
 
-!!! danger "Stop at the first failed login"
+    ```bash
+    docker compose logs --tail 200
+    ```
 
-    A failed login is retried about every 5 seconds per bot, forever. If you see a
-    `Failed to log on:` line, run `docker compose stop` before you investigate, so the
-    retries do not get your IP rate limited or the account restricted.
+    Logs are JSON lines (`log.format: text` for plain text). Lines about one bot carry
+    `"bot":"<name>"`. Every state change is a `bot state changed` line with `from`, `to`,
+    `reason` and `eresult`; entering `needs_attention` is logged at error level as
+    `bot needs attention`.
 
-## Log lines and symptoms
+## Startup failures
 
-| Log line / symptom | Meaning | Fix |
+These stop the process before any bot logs on. The container exits and restarts in a loop;
+the reason is the last log line, prefixed with `dota_lobby serve:`.
+
+| Message | Cause | Fix |
 |---|---|---|
-| `WARNING: secrets.yaml not found - no bots will be configured` (no timestamp) **while `config/secrets.yaml` exists** | The container user (UID 65532) cannot traverse `config/` (mode `700`), or SELinux blocks the mount. Both look exactly like missing files | `chmod 755 config`. On SELinux hosts (Fedora, RHEL) add the `:Z` mount option, see [File permissions](../deployment/docker-compose.md#file-permissions). Then `docker compose restart` |
-| `WARNING: API key authentication disabled - all endpoints are public` **while `api_key` is set in `config/config.yaml`** | Same cause: `config.yaml` is not visible, so defaults are used and every endpoint is public | Same fix as the row above. Do not expose the port until the startup log says `API key authentication enabled` |
-| `WARNING: secrets.yaml not found - no bots will be configured` when there really is no file | No `secrets.yaml` in any search path | `cp secrets.yaml.example config/secrets.yaml`, edit it, apply the permission recipe |
-| `WARNING: No bots configured in secrets.yaml` (with a timestamp) | The service has no bots. This line is also printed right after `secrets.yaml not found`, so check for that line first: if both appear, the file was not seen at all and the problem is one of the `not found` rows above (missing file, `config/` mode, or SELinux), not the file's contents. Only when it appears **alone** was `secrets.yaml` read with no entries under `secrets.bots` (all commented out, or a misspelled `secrets:` / `bots:` key) | If it appears with `secrets.yaml not found`: follow the matching `not found` row above. If it appears alone: add one bot entry, see [Configuration](../configuration/index.md#secretsbots) |
-| `Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied`, container restarting | `config/` is traversable but UID 65532 cannot read `config.yaml`. It is read first, so this is the line you usually see | Apply the permission recipe for your runtime under [File permissions](../deployment/docker-compose.md#file-permissions) (exactly one recipe) |
-| `Failed to load configuration: error reading secrets file: ... permission denied`, container restarting | `config.yaml` is readable but `secrets.yaml` is not | Same fix as the row above |
-| `Failed to load configuration: ...` with any other reason | Usually malformed YAML in one of the files | Fix the YAML (indentation, quotes) and restart |
-| A panic with `Username must be set!` or `Password or LoginKey must be set!`, container restarting | A bot entry has an empty or misspelled `username` / `password` key (for example `user:`). The Steam library panics and the whole process exits | Fix the entry in `config/secrets.yaml`. Every entry needs both keys |
-| `[user] Failed to log on: EResult_InvalidPassword` | Wrong password, **or** Steam rejecting this library's legacy password logon even with correct credentials (reported upstream, not verified by this project; see [Known limitations](../known-limitations.md)) | Stop the container. Check the password by logging in once with a Steam client, then log that client out. If the password is right, this is the library limitation and cannot be fixed by configuration |
-| `[user] Failed to log on: EResult_AccountLogonDenied` | Steam Guard email codes are on for the account | Stop the container, turn Steam Guard off for the bot account, see [Bot accounts](../configuration/bot-accounts.md#steam-guard-must-be-off) |
-| `[user] Failed to log on: EResult_AccountLogonDeniedNeedTwoFactorCode` | The Steam mobile authenticator is on for the account | Stop the container, remove the mobile authenticator from the bot account |
-| `[user] Failed to log on: EResult_RateLimitExceeded` | Too many login attempts from your IP | Stop the container now and wait (an hour or more) before trying again. Fix the underlying failure first |
-| `[user] Logged off: EResult_LoggedInElsewhere` or `[user] Logged off: EResult_LogonSessionReplaced` | The account was logged in somewhere else: a second instance of this service, or a desktop, web or phone client. These appear on the `Logged off:` line, not on `Failed to log on:` | Run only one instance per set of accounts and never log in to a bot account yourself while the service runs, see [One instance per account](../configuration/bot-accounts.md#one-instance-per-account) |
-| `Added bot: user` or `[user] Disconnected from Steam`, then no `[user] Connected to Steam`, and `/bots` stays `false` | The TCP connection to Steam failed (network problem, Steam maintenance, or a stale built-in server list). This stops the bot silently: no further log line and no retry | `docker compose restart`. If it keeps happening at startup, check outbound TCP 27017 and DNS, see [Prerequisites](../getting-started/prerequisites.md) |
-| Port unreachable (`curl` cannot connect) | `server.host` is not `0.0.0.0`, the port is published on `127.0.0.1` only and you are connecting from another machine, or `server.port` no longer matches the container side of the port mapping | Keep `host: "0.0.0.0"` and `port: 8080` in the container, remap the host side instead, see [Changing the port](../deployment/docker-compose.md#changing-the-port) |
-| `Failed to start API server: ...` | The listener could not start, for example the port is already in use when running from source | Free the port or change `server.port` |
-| `manifest unknown` on `docker compose pull` / `up` | The image tag does not exist. Most often `DOTA_LOBBY_TAG` (a Compose variable, not an app setting) has a leading `v` (`v1.2.3` instead of `1.2.3`) | Use the tag without `v`. If it still fails, no public image exists for that version yet: [build it locally](../deployment/docker.md#build-the-image-locally) |
+| Docker cannot mount `.../dota_lobby` (no such file or directory), or `read credentials_dir: ...` | The decrypted credentials are not on the host tmpfs, typically after a reboot | `just docker up` |
+| `load config: decode config: ... has invalid keys: ...` | A misspelled or removed key in `config.yaml` or the secrets file | Fix the key; see the [Configuration reference](../configuration/index.md#keys) |
+| `secret must be a quoted string` or `key STEAM_PASS: quote the value` | An unquoted secret that YAML read as a number or boolean | Quote it: `STEAM_PASS: "0123"` |
+| `still sops-encrypted; decrypt it first` | The service was given an encrypted file | Use `just docker up` (or `sops decrypt`) |
+| `bot <name>: shared_secret is not valid base64` | A wrong value in `STEAM_SHARED_SECRET` | Re-run `just secrets import-mafile` |
+| `username ... differs from STEAM_USER` | `bots[].username` and the credentials file disagree | Remove `username` from `config.yaml` or fix it |
+| `bots "a" and "b" use the same Steam account` | Two bots point at one account | One bot per account |
+| `start bots: auth: lock ...: state dir is locked by another process` | Another `serve` is running on the same state directory | Stop the other copy. Only one instance per set of accounts |
+| `start bots: auth: open lock: ... permission denied` | The state directory is not writable | With Compose, use the named volume from `compose.yaml`; do not bind-mount a host directory there unless UID 65532 owns it |
+| `listen: ... address already in use` | Port taken | Free the port or change the host side of the mapping |
+| `read config /app/config/config.yaml: ... permission denied` | `config.yaml` is not readable by UID 65532 | `chmod 644 config/config.yaml` (it holds no secrets) |
+
+## Logon results
+
+How the service reacts to each Steam result. The bot's `reason` in `/v1/bots` is shown in
+brackets.
+
+| EResult | Meaning | What the bot does | What you do |
+|---|---|---|---|
+| 2 `Fail`, 20 `ServiceUnavailable`, 48 `TryAnotherCM`, network errors | Steam-side trouble | `backoff`: reconnects after a jittered delay, 5 s doubling up to 5 min (`transient`) | Nothing. During Steam's weekly maintenance (usually Tuesday, US Pacific time) this is normal |
+| 5 `InvalidPassword`, 15, 26, 27, 121 on a **token** logon | The stored token is dead | Deletes it and authenticates once with password and code (`dead_token`). A second failure goes to `needs_attention` | Nothing, unless it ends in `needs_attention` |
+| 5 `InvalidPassword` on a **password** logon | Wrong password | `needs_attention` (`bad_credentials`). Never retried, because retrying a bad password is what gets an IP throttled | Fix `STEAM_PASS`, `just docker restart`, then [retry](#recovering-a-bot-in-needs_attention) |
+| 84 `RateLimitExceeded`, 87 `AccountLoginDeniedThrottle` | Too many logins from this IP or account | `cooling_down` for 30 min (`steam.cooldown_rate_limited`), and **logons pause for every bot** (`pausing logons for every bot`) (`rate_limited`) | Wait. Do not restart or retry to get around it |
+| 6 `LoggedInElsewhere`, 34 `LogonSessionReplaced` | Another session took the account | `cooling_down` for 10 min (`logged_in_elsewhere`), without kicking the other session | Find the other session: a second instance, `just probe`, or a person in the Steam client. See [One instance per account](../configuration/bot-accounts.md#one-instance-per-account) |
+| 88 `TwoFactorCodeMismatch` | The computed Steam Guard code was refused, almost always a clock problem | Retries twice, each in a new 30-second code window, then `needs_attention` (`totp_mismatch`) | See [Clock skew](#clock-skew-eresult-88) |
+| Steam Guard prompt, no `shared_secret` | The bot cannot answer the prompt | `needs_attention` (`guard_required`) | Add the `shared_secret` ([Bot accounts](../configuration/bot-accounts.md)), or run `auth` with `--code`, then retry |
+| Agreement URL | Steam wants a new Subscriber Agreement acceptance | `needs_attention` (`agreement_required`) | Log in once in a browser (`just probe code <bot>` for the code), accept, then retry |
+| No password and no usable token | Nothing to log in with | `needs_attention` (`no_credentials`) | Add `STEAM_PASS` or a token |
+
+The game coordinator can also put the bot in `gc_queued` (its logon queue; the position is in
+`gc_queue_position`) or `suspended` (the account is suspended from Dota 2). Neither needs a
+fix on this side; a suspension needs Steam Support.
+
+## Recovering a bot in `needs_attention`
+
+A bot in `needs_attention` stays there until you act; it never retries on its own. Fix the
+cause first (table above), then:
+
+1. If you changed a sops file: `just docker restart`, which re-decrypts and restarts. This
+   also restarts every other bot.
+2. If the bot needs a new token and has no `shared_secret`:
+
+    ```bash
+    just docker auth <bot>                  # asks for a Steam Guard code
+    just docker auth <bot> --code 12345     # or pass it
+    ```
+
+    This runs `dota_lobby auth --bot <bot> --force` in the running container and stores the
+    token in the state volume.
+3. Tell the bot to try again:
+
+    ```bash
+    curl -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/<bot>/retry
+    ```
+
+    The bot re-reads its token store and logs on. `retry` also ends a `backoff` or
+    `cooling_down` early.
+
+## Clock skew (EResult 88)
+
+Steam Guard codes change every 30 seconds and are computed from the host clock. Steam
+tolerates about a minute of difference. When the code is refused (`TwoFactorCodeMismatch`,
+88), the bot retries twice in fresh code windows and then goes to `needs_attention`.
+
+1. Check the host clock: `timedatectl` should say `System clock synchronized: yes`. Install or
+   fix NTP (`systemd-timesyncd`, `chrony`). The container uses the host clock.
+2. Compare against a code you know is right: `just probe code <bot>` on a workstation with a
+   good clock prints the same code the service should compute at that moment.
+3. Only if the host clock cannot be fixed, set `steam.totp_skew` to Steam's time minus the
+   host's (for example `-45s`). Values beyond ±10 minutes are refused.
+
+Then [retry](#recovering-a-bot-in-needs_attention) the bot.
+
+## Other symptoms
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `/readyz` stays `503` with `bots_ready: 0` | No bot has reached `gc_ready` yet, or none is configured | Check `/v1/bots`. Bots log on `steam.login_stagger` (10 s) apart, so several bots take a while. With no bots it stays `503` unless `readiness.min_ready_bots` is `0` |
+| `/livez` answers `503` with `stalled_bots` | A bot's run loop has not moved for 30 s; the names are in the `bot run loop stalled` log line | Collect the logs and restart the container. This is a bug; please report it |
+| Warning `no bots configured` | No `bots:` list, no files in `credentials_dir`, no old-style secrets | Check `just docker up` found `secrets/bots/*.sops.yaml`, and that `config/` is mode `755` |
+| Warning `API key authentication disabled; /v1 endpoints are public` | No `secrets.api_key` | Create `secrets/service.sops.yaml` (see [Credentials](../deployment/docker-compose.md#credentials)) and `just docker restart` |
+| Warning `secrets.bots entry matches no configured bot` | Credentials for a bot name that is not in `bots:` | Fix the name, or remove the entry |
+| Warning `stored token unusable; will authenticate` or `stored token has expired` | The token in the state volume cannot be used | Nothing, if the bot has a password and `shared_secret` |
+| Warning `token renewal failed; will retry` | Background renewal (under 14 days left) failed | Nothing at first. If `token_expires_at` keeps getting closer, check the password and `shared_secret` |
+| Container `unhealthy` but running | `/livez` failing: see above, or `server.port` changed without `DOTA_LOBBY_SERVER_PORT` | See [Changing the port](../deployment/docker-compose.md#changing-the-port) |
+| No health status under Podman | The image was built in OCI format, which drops `HEALTHCHECK` | Build with `just docker build` |
+| Port unreachable | `server.host` is not `0.0.0.0` in the container, or you connect from another machine to a `127.0.0.1` binding | Keep `host: 0.0.0.0`, change the host side of the mapping |
+| `manifest unknown` on `pull` / `up` | `DOTA_LOBBY_TAG` has a leading `v`, or no image exists for that version | Use `1.2.3`, not `v1.2.3`. If it still fails, [build locally](../deployment/docker.md#build-the-image-locally) |
 | `unauthorized` (or `denied`) on pull | The image package is not public yet | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
-| `401` with `Unauthorized: Invalid or missing API key` | The API key header is missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>`, see [API](../api/index.md#authentication) |
-
-!!! note "`/health` is not a readiness signal"
-
-    `GET /health` answers `healthy` whenever the process is running, even with no bot logged
-    on. To see whether bots are logged on, use `GET /bots` together with the logs. Even
-    `true` there only means "logged on to Steam", not "ready to host a lobby"; see
-    [Known limitations](../known-limitations.md).
+| `401` with `missing or invalid API key` | Key header missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` |
+| `410 gone` on `/bots` or `/lobby/...` | The old endpoints were removed | Use `/v1/bots` |

@@ -1,187 +1,214 @@
 # Configuration reference
 
-The service reads two YAML files at startup:
+Settings and secrets are kept apart:
 
-- `config.yaml` holds the server settings. It contains nothing secret apart from the
-  optional API key.
-- `secrets.yaml` holds the Steam bot credentials. Never commit it.
+- **`config.yaml`** holds settings and the list of bots. It contains nothing secret, so it can
+  be world-readable or live in a Kubernetes ConfigMap.
+- **Secrets** (the API key and the bots' Steam credentials) come from a secrets file, from one
+  decrypted credentials file per bot, or from environment variables. In the recommended
+  [Docker Compose](../deployment/docker-compose.md) setup they come from the sops files in
+  `secrets/`, decrypted onto a tmpfs at start.
 
-Both files are optional as far as startup goes, but without `secrets.yaml` no bots are
-started.
+Configuration is read **once, at startup**. Restart the service after a change
+(`just docker restart` with Compose).
 
-## Keys
+## Layers
 
-| Key | File | Type | Default | Required |
-|---|---|---|---|---|
-| `server.host` | `config.yaml` | string | `0.0.0.0` | No |
-| `server.port` | `config.yaml` | int | `8080` | No |
-| `server.api_key` | `config.yaml` | string | unset (authentication off) | No, but strongly recommended |
-| `secrets.bots[].username` | `secrets.yaml` | string | none | **Yes, for every bot entry** |
-| `secrets.bots[].password` | `secrets.yaml` | string | none | **Yes, for every bot entry** |
+Each layer overrides the ones before it:
 
-There are no other keys. In particular:
+1. built-in defaults (the [table below](#keys));
+2. `config.yaml`;
+3. the secrets file (`secrets.yaml`);
+4. per-bot credentials files (`credentials_dir`, or `bots[].credentials_file`);
+5. `DOTA_LOBBY_*` environment variables;
+6. `DOTA_LOBBY_*_FILE` environment variables, which read the value from a file.
 
-- **`sentry_hash` is not supported.** Older examples listed a `sentry_hash` field per bot.
-  The service never loads it and never sends it to Steam, so setting it has no effect. Steam
-  Guard must be off instead; see [Bot accounts](bot-accounts.md).
-- **No environment variables and no command-line flags.** Everything comes from the two
-  files. (`DOTA_LOBBY_TAG` in the Compose docs is a Compose variable that picks the image
-  tag, not an app setting.)
+**Unknown keys are an error.** A typo such as `stem:` or `hello_intervall:` stops the service
+at startup with a `decode config` error instead of being ignored. All problems found by
+validation are reported together.
 
-### `server.host`
+### Environment variables
 
-The address the HTTP API listens on. Inside a container it **must** be `0.0.0.0`; any other
-value (such as `127.0.0.1`) makes the API unreachable from outside the container, even
-through a published port. To keep the API private, restrict the host side of the port
-mapping instead (the default `compose.yaml` publishes `127.0.0.1:8080:8080`).
+Every key has an environment name: `DOTA_LOBBY_`, then the key path joined with `_`,
+uppercased, with `-` turned into `_`.
 
-### `server.port`
+| Key | Environment variable |
+|---|---|
+| `server.port` | `DOTA_LOBBY_SERVER_PORT` |
+| `state_dir` | `DOTA_LOBBY_STATE_DIR` |
+| `steam.totp_skew` | `DOTA_LOBBY_STEAM_TOTP_SKEW` |
+| `secrets.api_key` | `DOTA_LOBBY_SECRETS_API_KEY` |
+| password of bot `league-bot-1` | `DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_PASSWORD` |
 
-The port the HTTP API listens on. In a container, leave it at `8080` and change the **host**
-side of the port mapping to use another port, for example `127.0.0.1:9000:8080`. If you do
-change `server.port`, the container side of the mapping must be changed to match, or the
-port is unreachable.
+Append `_FILE` to read the value from a file, the Docker and Kubernetes secrets convention:
+`DOTA_LOBBY_SECRETS_API_KEY_FILE=/run/secrets/api_key`. A trailing newline is stripped.
+Setting both `FOO` and `FOO_FILE` is an error.
 
-### `server.api_key`
-
-When set, `GET /bots`, `POST /lobby/create` and `/lobby/info` require the key, sent as either
-header:
-
-```text
-X-API-Key: <your api_key>
-Authorization: Bearer <your api_key>
-```
-
-`GET /health` never needs the key. When `api_key` is unset or empty, every endpoint is public
-and the service logs `WARNING: API key authentication disabled - all endpoints are public`
-at startup. Set a long random value, for example the output of `openssl rand -hex 32`. See
-the [API reference](../api/index.md) for the endpoints.
-
-### `secrets.bots[]`
-
-A list with one entry per Steam account. Each entry needs **both** `username` and
-`password`.
-
-!!! danger "An empty or misspelled key crashes the whole service"
-
-    If any entry has an empty `username` or `password`, or the key is misspelled (for example
-    `user:` instead of `username:`), the Steam library panics with `Username must be set!` or
-    `Password or LoginKey must be set!` and the whole process exits. In a container this
-    shows up as a restart loop.
-
-Listing the same `username` twice starts it once and logs
-`Failed to add bot <n> (<username>): bot with username <username> already exists` for the
-duplicate.
-
-`api_key` and `password` values are stored as redacted secrets: if they are ever printed or
-encoded to JSON they appear as `***REDACTED***`.
-
-## Example files
-
-The repository ships both files as examples. Copy them into `config/` and edit the copies.
-
-```yaml title="config.yaml.example"
-server:
-  # Keep "0.0.0.0" when running in a container, or the API is unreachable
-  # from outside the container.
-  host: "0.0.0.0"
-  # Leave 8080 in a container. To use another port, change the HOST side of the
-  # port mapping instead (for example 127.0.0.1:9000:8080). If you change this
-  # value anyway, the container side of the mapping must match it.
-  port: 8080
-  # API key for the protected endpoints. Strongly recommended whenever the port
-  # is reachable beyond localhost. Send it as "X-API-Key: <key>" or
-  # "Authorization: Bearer <key>".
-  # api_key: "your-secret-api-key-here"
-```
-
-```yaml title="secrets.yaml.example"
-# Steam bot credentials for dota_lobby. Copy this file to config/secrets.yaml
-# and never commit it. In the container it is read from /app/config/secrets.yaml.
-#
-# Every bot entry needs BOTH username and password. An empty or misspelled key
-# crashes the whole service at startup.
-#
-# Steam Guard must be OFF on every bot account (email codes and the mobile
-# authenticator both block login). dota_lobby cannot answer Steam Guard prompts.
-#
-# Start with one bot: a failed login is retried about every 5 seconds, forever.
-secrets:
-  bots:
-    - username: "your_steam_username_1"
-      password: "your_steam_password_1"
-    # To add another bot, uncomment and fill in (one entry per Steam account):
-    # - username: "another_bot_username"
-    #   password: "another_bot_password"
-```
+The container image sets `DOTA_LOBBY_STATE_DIR=/app/state`, which overrides `state_dir` from
+`config.yaml`. `compose.yaml` sets `DOTA_LOBBY_CREDENTIALS_DIR`.
 
 ## Where the files are found
 
-Each file is searched for in these directories, in order, and the first match wins:
+| File | Looked up in, first match wins |
+|---|---|
+| `config.yaml` (or `.yml`) | `--config FILE`, then `$DOTA_LOBBY_CONFIG_FILE`, then the search path: `$DOTA_LOBBY_CONFIG_DIR`, `/etc/dota_lobby`, `.`, `./config`, `~/.config/dota_lobby` |
+| `secrets.yaml` (or `.yml`) | `--secrets FILE`, then `$DOTA_LOBBY_SECRETS_FILE`, then `$DOTA_LOBBY_SECRETS_DIR` (default `/run/secrets/dota_lobby`), then the same search path |
 
-1. `.` (the current working directory)
-2. `./config` (relative to the current working directory)
-3. `$HOME/.config/dota_lobby`
+`.` and `./config` are relative to the working directory. In the container that is `/app`, so
+`config.yaml` is read from `/app/config/config.yaml` and the secrets file from
+`/run/secrets/dota_lobby/secrets.yaml` (written by `just docker up`) or, if that does not
+exist, `/app/config/secrets.yaml`. Only one secrets file is read.
 
-The two files are looked up independently, so they can come from different directories.
+A missing file found through the search path is fine (defaults apply). A file named
+explicitly (flag or `*_FILE` variable) must exist. A file that exists but cannot be read is a
+fatal error. A secrets file that is still sops-encrypted is refused with
+`... is still sops-encrypted; decrypt it first`.
 
-**In the container**, the working directory is `/app`, and the only supported location is
-`/app/config/` (mount your `config/` directory with `./config:/app/config:ro`). The
-directory must be traversable by the container user (UID 65532), so keep it at mode `755`.
-The files themselves must be readable by that user; how to arrange that depends on your
-runtime, see [File permissions](../deployment/docker-compose.md#file-permissions).
+## Keys
 
-**From source**, run `./bin/dota_lobby` from a directory that contains the two files or a
-`config/` subdirectory with them; see [Build from source](../deployment/from-source.md).
+`config.yaml` keys. Durations use Go syntax (`10s`, `5m`, `3h`).
 
-## Applying changes
+### Used now
 
-The files are read **once, at startup**. After editing them, restart the service:
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `server.host` | string | `0.0.0.0` | Listen address. Must stay `0.0.0.0` in a container |
+| `server.port` | int | `8080` | Listen port. In a container, change the host side of the port mapping instead |
+| `server.max_body_bytes` | int | `65536` | Largest accepted request body |
+| `state_dir` | path | `/var/lib/dota_lobby` | Token store and `LOCK` file. Must be writable and persistent. `/app/state` in the image |
+| `credentials_dir` | path | empty | Directory with one decrypted credentials file per bot, see [Bot credentials](#bot-credentials) |
+| `log.level` | string | `info` | `debug`, `info`, `warn` or `error` |
+| `log.format` | string | `json` | `json` or `text` |
+| `readiness.min_ready_bots` | int | `1` | `/readyz` answers `200` once this many bots are `gc_ready`. `0` makes it ready with no bots |
+| `steam.login_stagger` | duration | `10s` | Gap between two bots' logons |
+| `steam.reconnect_backoff_min` | duration | `5s` | First reconnect delay (full jitter, doubling) |
+| `steam.reconnect_backoff_max` | duration | `5m` | Largest reconnect delay |
+| `steam.cooldown_rate_limited` | duration | `30m` | Pause after `RateLimitExceeded` (84) or `AccountLoginDeniedThrottle` (87); logons pause for every bot |
+| `steam.cooldown_elsewhere` | duration | `10m` | Pause after `LoggedInElsewhere` (6) or `LogonSessionReplaced` (34) |
+| `steam.totp_skew` | duration | `0s` | Steam's clock minus the host clock, added before computing Steam Guard codes. At most ±10m. Keep the host on NTP instead whenever you can |
+| `gc.hello_interval` | duration | `10s` | How often the game coordinator hello is repeated until the welcome |
+| `gc.request_timeout` | duration | `10s` | Default timeout of a game coordinator request |
+| `bots` | list | empty | The bots, see below |
 
-```bash
-docker compose restart
+### `bots[]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | required | Identifies the bot in the API, the logs, environment names and credentials file names. 1-64 letters, digits, `_` or `-`. `bot-a` and `bot_a` count as the same name |
+| `username` | string | `STEAM_USER` from the credentials file, then `name` | The Steam account name. It names the token store directory |
+| `enabled` | bool | `true` | A disabled bot is not started |
+| `credentials_file` | path | `<credentials_dir>/<name>.yaml` | This bot's credentials file, if it is not in `credentials_dir` |
+| `leagues` | list of int | empty | Static league fallback; used from Phase 2 |
+| `tags` | list of string | empty | Free-form labels |
+
+With no `bots:` list, every file in `credentials_dir` becomes an enabled bot named after the
+file. Two bots may not use the same Steam account.
+
+### Accepted, not used yet
+
+These keys are validated so a config written now keeps working, but nothing reads them in this
+version: `metrics.addr` (no metrics listener yet), `gc.create_timeout`, `league.*`, `lobby.*`,
+`match.*`, `store.path` and `webhooks`. Their defaults are in
+[`config.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/config.yaml.example).
+
+## Secrets
+
+| Key | Meaning |
+|---|---|
+| `secrets.api_key` | API key for everything under `/v1`. Without it `/v1` is public and the service logs `API key authentication disabled; /v1 endpoints are public` |
+| `secrets.webapi_key`, `secrets.opendota_key`, `secrets.webhook_secrets` | Accepted, used from later phases |
+| `secrets.bots.<name>.password` | The bot's Steam password |
+| `secrets.bots.<name>.shared_secret` | The authenticator's base64 `shared_secret`. With it the bot re-authenticates on its own |
+| `secrets.bots.<name>.refresh_token` | Seeds the token store, see [Bot accounts](bot-accounts.md#how-the-service-uses-the-credentials) |
+| `secrets.bots.<name>.device_name` | Device name shown in the account's authorised devices |
+
+Every secret is a `Secret` value: it prints as `***REDACTED***` in logs, `fmt` output and JSON,
+and never appears in an API response. **Quote every secret value** in YAML: an unquoted value
+that YAML reads as a number or boolean is rejected at startup rather than rewritten (the
+message names the key, never the value).
+
+`server.api_key` from older configs still works: it is moved to `secrets.api_key` with the
+warning `server.api_key is deprecated; move it to secrets.api_key`.
+
+## Bot credentials
+
+A bot's credentials can come from any of these. Later sources override earlier ones, key by
+key:
+
+1. **The secrets file**, under `secrets.bots.<name>`:
+
+    ```yaml
+    secrets:
+      api_key: "..."
+      bots:
+        league_bot_1:
+          password: "..."
+          shared_secret: "..."
+    ```
+
+2. **A credentials file** per bot: `<credentials_dir>/<name>.yaml` (or `.yml`, `.json`,
+   `.env`, or `<name>.sops.yaml` decrypted in place), or the path in `bots[].credentials_file`.
+   It uses the same keys as the sops files in `secrets/bots/`:
+
+    | Key | Field |
+    |---|---|
+    | `STEAM_USER` | Steam account name (`username`) |
+    | `STEAM_PASS` | `password` |
+    | `STEAM_SHARED_SECRET` | `shared_secret` |
+    | `STEAM_REFRESH_TOKEN` | `refresh_token` |
+    | `STEAM_DEVICE_NAME` | `device_name` |
+
+    The lowercase field names work too. YAML (what `sops decrypt` writes for a `.sops.yaml` file), JSON and dotenv
+    (`sops decrypt --output-type dotenv`) are all accepted. Unknown keys are ignored, so the
+    file can carry notes. If `bots[].username` is set it must match `STEAM_USER`.
+
+3. **Environment variables**: `DOTA_LOBBY_SECRETS_BOTS_<NAME>_PASSWORD`, `..._SHARED_SECRET`,
+   `..._REFRESH_TOKEN`, or the same with `_FILE`.
+
+The service never decrypts anything itself; a file that still has a `sops:` block is refused.
+
+### The old `secrets.yaml` format
+
+The pre-1.0 format, a list of `username`/`password` pairs, still loads:
+
+```yaml
+secrets:
+  bots:
+    - username: "my_league_bot"
+      password: "..."
 ```
 
-If the permission recipe for your runtime made the files unwritable by you, follow the
-"Editing later" line for your runtime under
-[File permissions](../deployment/docker-compose.md#file-permissions) to edit them, then
-restart.
+The service logs `secrets.bots as a list is deprecated; key it by bot name` and, if
+`config.yaml` has no `bots:` list, runs one bot per entry, named after the username. A
+`sentry_hash` key is accepted and ignored with a warning. Such a bot has no `shared_secret`,
+so it can only log in if Steam does not ask for a Steam Guard code; set up an authenticator as
+described in [Bot accounts](bot-accounts.md).
+
+## Example files
+
+The repository ships
+[`config.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/config.yaml.example)
+with every key and its default, and
+[`secrets.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/secrets.yaml.example).
+A minimal `config.yaml` for one bot:
+
+```yaml
+bots:
+  - name: league_bot_1
+```
 
 ## What happens when something is wrong
 
 | Situation | Result |
 |---|---|
-| `config.yaml` missing | Defaults are used: `0.0.0.0:8080`, API key authentication **off** |
-| `secrets.yaml` missing | Two warnings: `WARNING: secrets.yaml not found - no bots will be configured` (printed without a timestamp), then `WARNING: No bots configured in secrets.yaml`. The service runs with no bots |
-| `secrets.yaml` present but with no bot entries | Only `WARNING: No bots configured in secrets.yaml`, without the `not found` line |
-| Malformed YAML in either file | Fatal: the process exits with `Failed to load configuration: ...` |
-| Config **directory** not traversable by the service (mode `700`, or an SELinux denial) | Looks exactly like both files are missing: defaults, authentication off, no bots. Nothing says permission denied |
-| Directory traversable, but a **file** not readable by the service | Fatal, see below; the container restarts in a loop |
-| Empty or misspelled `username` / `password` | The process panics and exits; the container restarts in a loop |
-
-!!! warning "Check the startup log every time"
-
-    If the files exist but the log shows `WARNING: secrets.yaml not found` (usually followed
-    by `WARNING: No bots configured in secrets.yaml`) or
-    `WARNING: API key authentication disabled`, the service could not see into the config
-    directory. That is a directory permission or SELinux mount problem, not a missing file.
-    A healthy start logs `API key authentication enabled` (when `api_key` is set) and one
-    `Added bot: <username>` line per bot.
-
-An unreadable file in a traversable directory gives a fatal error. `config.yaml` is read
-first, so this is the line you usually see:
-
-```text
-Failed to load configuration: error reading config file: open /app/config/config.yaml: permission denied
-```
-
-Only when `config.yaml` is readable but `secrets.yaml` is not does it say:
-
-```text
-Failed to load configuration: error reading secrets file: ... permission denied
-```
-
-Both lines carry the usual `YYYY/MM/DD HH:MM:SS` log timestamp in front. The fix is the
-permission recipe for your runtime under
-[File permissions](../deployment/docker-compose.md#file-permissions). More log lines and
-their fixes are on [Troubleshooting](../operations/troubleshooting.md).
+| `config.yaml` not found | Defaults, and no bots unless `credentials_dir` or a secrets file supplies them |
+| Unknown key, bad value or bad duration | Fatal at startup: `dota_lobby serve: load config: ...`, listing every problem |
+| Unquoted numeric secret | Fatal: `secret must be a quoted string` (or `key STEAM_PASS: quote the value`) |
+| Encrypted sops file given to the service | Fatal: `still sops-encrypted; decrypt it first` |
+| `credentials_dir` set but missing | Fatal: `read credentials_dir: ...` |
+| `shared_secret` not base64 | Fatal: `bot <name>: shared_secret is not valid base64` |
+| Bot with neither password nor refresh token | Warning; the bot can only use a token already in `state_dir` |
+| `secrets.bots` entry that matches no bot | Warning `secrets.bots entry matches no configured bot` |
+| No bots at all | Warning `no bots configured`; the service runs and `/readyz` stays `503` unless `min_ready_bots` is `0` |
+| `state_dir` locked by another process | Fatal: `start bots: auth: lock <state_dir>/LOCK: auth: state dir is locked by another process` |
+| `state_dir` not writable | Fatal: `start bots: auth: open lock: ... permission denied` (or `create state dir`) |

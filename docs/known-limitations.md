@@ -1,67 +1,57 @@
 # Known limitations
 
-This is an early version. The service runs, loads its configuration and logs bots on to
-Steam, but it does not create lobbies yet. Read this list before you use real accounts.
+This version keeps a set of Steam bot accounts logged in to Steam and the Dota 2 game
+coordinator without anyone at a keyboard, and reports their state. It does not host lobbies
+yet. Read this list before you use real accounts.
 
-1. **Lobbies are not created.** `POST /lobby/create` returns `201` with `"status":"success"`
-   but creates nothing, and `server_region` and `game_mode` are ignored. `/lobby/info` only
-   echoes the lobby ID back. See the [API reference](api/index.md).
-2. **The Dota 2 game coordinator session is never started.** `true` in `GET /bots` means the
-   bot is logged on to Steam only, not that it is connected to Dota 2 or can host a lobby.
-3. **`/health` is always healthy.** It answers `healthy` while the process runs, whatever the
-   bots are doing.
-4. **Steam Guard is not supported**, and the `sentry_hash` field is ignored. Every bot
-   account needs Steam Guard turned off (no email codes, no mobile authenticator). See
-   [Bot accounts](configuration/bot-accounts.md).
-5. **Login may fail for every account.** The pinned go-steam library uses the legacy password
-   logon. Upstream reports say current Steam rejects it, answering `EResult_InvalidPassword`
-   even for correct credentials
-   ([go-dota2#78](https://github.com/paralin/go-dota2/issues/78),
-   [go-steam#11](https://github.com/paralin/go-steam/pull/11)). This is reported, not verified
-   by this project with a real account. What has been checked: the container reaches a Steam
-   CM and completes the logon exchange (a test with a non-existent account got
-   `EResult_InvalidPassword` back), so the network path works. That answer looks the same as
-   the reported rejection, so a correct password that still gets `InvalidPassword` is most
-   likely this limitation. No configuration change helps; it needs a library upgrade (see the
-   roadmap).
-6. **Failed logins are retried forever.** A failed login (wrong password, Steam Guard, or the
-   legacy-logon rejection) is retried about **every 5 seconds per bot, forever**. A 5 second
-   and a 30 second timer both fire, so attempts can pile up. There is no backoff and no
-   distinction between failures that can and cannot succeed on retry. This risks rate
-   limiting (`EResult_RateLimitExceeded`) or an account lock. Start with one bot and run
-   `docker compose stop` at the first `Failed to log on:` line.
-7. **A connection failure stops a bot silently.** Any TCP-level connection failure, at
-   startup **or on any reconnect** (a network blip, weekly Steam maintenance, a stale built-in
-   server list), stops that bot permanently with **no log line**. It stays `false` in
-   `GET /bots` until the container is restarted.
-8. **A bad bot entry crashes the whole service.** An empty or missing `username` or
-   `password` in any bot entry makes the Steam library panic, and the process exits. Compose
-   then restarts it in a loop.
-9. **An unreadable config directory is not reported.** If the container cannot traverse
-   `config/` (permissions or SELinux), the files are treated as missing: the service starts
-   with defaults, API key authentication **off**, and no bots, without an error. The only
-   signs are the `secrets.yaml not found`, `No bots configured in secrets.yaml` and
-   `API key authentication disabled` warnings. Check the
-   startup log before exposing the port; see
-   [Troubleshooting](operations/troubleshooting.md).
-10. **Configuration comes from files only.** There are no environment variables, no
-    command-line flags and no hot reload; restart after every change.
-11. **One instance per set of accounts.** Nothing stops you from running two instances with
-    the same accounts, and if you do they keep kicking each other off Steam.
-12. **No lobby or league logic, no persistence, no TLS and no metrics.** Errors from the API
-    are plain text, not JSON.
-13. **Go 1.24 is past upstream support.** Moving to a supported Go toolchain is a follow-up.
+1. **Not yet run against live Steam.** The headless login (password plus a computed Steam
+   Guard code, then a stored refresh token) and the game coordinator session are built and
+   tested against fakes of Steam and the game coordinator, not against a real account. The
+   open questions are listed under
+   [What is still unverified](configuration/bot-accounts.md#what-is-still-unverified); the most
+   important are whether token login works on the current go-steam master (Q1) and whether an
+   account that never launched Dota 2 gets a game coordinator welcome (Q21).
+2. **Lobbies are not created.** Everything under `/v1/lobbies` answers `501`. League discovery,
+   lobby hosting and match results come in later phases.
+3. **Account setup is manual.** Creating a Steam account and linking its authenticator with
+   steamguard-cli is done by a person, once per bot (about 15 to 20 minutes); see
+   [Bot accounts](configuration/bot-accounts.md). Creating accounts automatically is against the
+   Steam Subscriber Agreement.
+4. **A bot without a `shared_secret` needs a person** whenever its token dies (about every
+   200 days) or Steam asks for a code: it goes to `needs_attention` until someone runs
+   `dota_lobby auth` and calls the retry endpoint. There is no API endpoint for entering a Steam
+   Guard code.
+5. **Limited accounts are untested.** A limited account (no $5 on record) may be enough to log
+   in and reach the game coordinator, but whether its lobby invites arrive (Q22) and whether its
+   chat shows up is unknown.
+6. **Credentials are read at startup.** Changing a password or adding a bot needs a restart
+   (`just docker restart`), which restarts every bot. There is no hot reload.
+7. **Decrypted credentials live on a host tmpfs** while the service runs, readable by root on the
+   host. After a reboot, `just docker up` must run again before the container can start.
+8. **One instance per set of accounts.** The state lock stops a second copy on the same state
+   directory, but nothing stops a copy on another machine; the two would keep taking the
+   accounts from each other (each side then cools down for 10 minutes).
+9. **The clock matters.** Steam Guard codes come from the host clock. Without NTP, logons fail
+   with EResult 88. `steam.totp_skew` is a manual workaround; the service does not ask Steam for
+   its time.
+10. **No metrics yet.** `metrics.addr` is accepted but no metrics listener runs. Token expiry is
+    shown in `/v1/bots` and renewals are logged.
+11. **Several config sections are accepted but unused**: `league`, `lobby`, `match`, `store`,
+    `webhooks` and `metrics`. They are validated so configs keep working once the features
+    arrive.
+12. **No TLS.** Put a reverse proxy in front of the API before exposing it beyond localhost.
 
 ## Roadmap
 
-Possible future work, in no particular order. No dates are promised.
+Planned work, in order. No dates are promised.
 
-- Upgrade go-steam and go-dota2, with modern Steam authentication and a token store.
-- Start and maintain the Dota 2 game coordinator session.
-- Real lobby creation.
-- Login retries with backoff, and handling of connection failures so bots always reconnect.
-- Config validation: required bot fields checked up front, permission errors reported as
-  errors.
-- Separate `/livez` and `/readyz` endpoints.
-- Configuration through environment variables.
+- Run the Phase 0 probe against real bot accounts and fix whatever it finds.
+- League discovery per bot and bot leasing, with state in SQLite.
+- Lobby creation, invites and lobby lifecycle through `/v1/lobbies`.
+- Match results from the game coordinator, the Steam Web API and OpenDota, with webhooks.
+- Prometheus metrics.
 - Move the docs site from Material for MkDocs to Zensical before 2027-05.
+
+The design and the research behind it are in the repository under
+[`docs/plans/`](https://github.com/kettleofketchup/dota_lobby/tree/main/docs/plans) and
+[`docs/research/`](https://github.com/kettleofketchup/dota_lobby/tree/main/docs/research).
