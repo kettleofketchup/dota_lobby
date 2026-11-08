@@ -20,6 +20,10 @@
 - Lobbies survive a restart: each one gets its bot back and carries on, or fails as
   `lobby_lost` / `lost_in_game` when the lobby is gone. With `lobby.destroy_on_shutdown`,
   lobbies that have not launched are destroyed at shutdown instead.
+- A bot that comes back from an outage still holding a lobby that ended meanwhile destroys it,
+  or only leaves it if the match launched.
+- `teams/flip` swaps the rosters once the lobby shows the flip, so seated players are never
+  moved off their side by the swap.
 - New keys: `lobby.host_seat_confirm_timeout`, `max_launch_attempts`, `pending_timeout`,
   `auto_launch_delay`, `postgame_linger`, `enforce_cooldown`, `readopt_timeout`,
   `drain_timeout`, `destroy_on_shutdown`, `admins`, and `store.retention`. `gc.create_timeout`
