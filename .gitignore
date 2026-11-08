@@ -46,3 +46,6 @@ __pycache__/
 # Local binary and container config directory
 /dota_lobby
 /config/
+
+# Local planning notes (design specs and implementation plans)
+docs/superpowers/
