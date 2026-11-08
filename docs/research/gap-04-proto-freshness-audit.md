@@ -1,12 +1,12 @@
 # Gap 04: Protocol freshness audit (per-symbol, dated by GameTracking-Dota2 commit)
 
-> Date: 2026-11-06. Scope: every enum, message and message ID that the plan's `gc/wire.go`,
-> create/verify logic and seat logic depend on. This is a docs-only change. No Go code was modified.
+> Date: 2026-11-06. Scope: every enum, message and message ID that the service's `pkg/gc/wire.go`,
+> create/verify logic and seat logic depend on.
 >
 > Legend: **VERIFIED** means seen in source, in git history, or in a local probe run. **INFERRED** and **UNCERTAIN** are marked where they apply.
 >
 > Path abbreviations:
-> - `$V` = vendored protos `~/.local/share/go/pkg/mod/github.com/paralin/go-dota2@v0.0.0-20250623204622-532cb1851217/protocol/`
+> - `$V` = vendored protos, the `protocol/` directory of `github.com/paralin/go-dota2 v0.0.0-20250623204622-532cb1851217` (`go-dota2@532cb1851217/protocol/`)
 > - `$U` = `SteamDatabase/GameTracking-Dota2` `master` at `b671cd08d5da5820ff0ad64fd26fcf32f615d197` (2026-11-05), `Protobufs/`. GitHub now redirects the repo to `SteamTracking/GameTracking-Dota2`.
 > - `loc:` = `$U/../game/dota/pak01_dir/resource/localization/dota_english.txt` at the same commit
 
@@ -35,9 +35,9 @@
 
 ## 1. Method
 
-1. I made a partial clone (`--filter=blob:none --sparse`) of `SteamDatabase/GameTracking-Dota2` into a scratch
-   directory (`/tmp/gap04/gt`), checking out only `Protobufs/` and `dota_english.txt`.
-2. A small parser (`/tmp/gap04scripts/syms.py`) builds a symbol table for both trees: enum `name → value` and
+1. A partial clone (`--filter=blob:none --sparse`) of `SteamDatabase/GameTracking-Dota2`, checking out only
+   `Protobufs/` and `dota_english.txt`.
+2. A small parser builds a symbol table for both trees: enum `name → value` and
    message `field → label type = number [default]`. Nested enums and messages are included, `[...]` options
    (`boxed_type`, `synthetic_default`) are stripped, and the leading `.` on type names is removed.
 3. **Finding the baseline.** The vendored protos are symbol-identical (0 differences across the six relevant
@@ -90,7 +90,7 @@ The last commit to touch `Protobufs/` is `2151a803` (2026-10-07). It changes no 
 | `ELeagueRegion` (0-6) | — | identical (`$U:486`) | none | — | VERIFIED |
 | `CMsgDOTALeagueInfo` (9 fields) / `CMsgDOTALeagueInfoList` | `$V/…common_league.proto:182,194` | identical (`$U:186,198`) | none | — | VERIFIED |
 | `CMsgDOTALeagueInfoListAdminsRequest {}`, `CMsgDOTALeagueAvailableLobbyNodes[Request]`, `.NodeInfo` | — | identical | none | — | VERIFIED |
-| `CMsgDOTALeagueNodeGroup.TeamStanding` (not used by the plan) | `score_tiebreak_group/below/random = 11/12/13` | replaced by `tiebreak_*`; `+ win_loss_limit = 27` | [`404d1ab1`](https://github.com/SteamDatabase/GameTracking-Dota2/commit/404d1ab185308e9f9da26f89888c7a8e1cd5302e), 2025-07-10 | Fields removed and added | VERIFIED; does not affect the plan |
+| `CMsgDOTALeagueNodeGroup.TeamStanding` (not used by the service) | `score_tiebreak_group/below/random = 11/12/13` | replaced by `tiebreak_*`; `+ win_loss_limit = 27` | [`404d1ab1`](https://github.com/SteamDatabase/GameTracking-Dota2/commit/404d1ab185308e9f9da26f89888c7a8e1cd5302e), 2025-07-10 | Fields removed and added | VERIFIED; does not affect the plan |
 | `CMsgGenericResult` (7055 body) | `eresult = 1 [default=2]`, `debug_message = 2` | identical (`$U/econ_shared_enums.proto:37`) | none | — | VERIFIED |
 | `DOTALobbyVisibility`, `LobbyDotaPauseSetting`, `DOTASelectionPriorityRules`, `DOTA_CM_PICK`, `DOTABotDifficulty` | — | identical | none | — | VERIFIED |
 | `DOTA_GameMode` | up to 25 | `+ DOTA_GAMEMODE_BOT_CHALLENGE = 26` (`$U/dota_shared_enums.proto:35`) | `b25cf388`, 2025-11-10 | Added value | VERIFIED |
@@ -100,8 +100,7 @@ The last commit to touch `Protobufs/` is `2151a803` (2026-10-07). It changes no 
 
 ### 2.1 Wire effect of the TV-delay renumbering (VERIFIED by a local probe)
 
-I ran a probe in a scratch module (`/tmp/gap04go/main.go`) against the pinned go-dota2 and
-`google.golang.org/protobuf v1.36.6`, using Go 1.27.1:
+Decoding test against the pinned go-dota2 and `google.golang.org/protobuf v1.36.6`, Go 1.27.1:
 
 ```text
 wire=1 has=true get=LobbyDotaTV_120 (1) unknownBytes=0   # GC means 60 s
@@ -111,11 +110,13 @@ SetDetails{_120} wire bytes=c0 01 01                     # field 24 = 1  -> 60 s
 ```
 
 The read-back of `CSODOTALobby.dota_tv_delay` returns no error, but its *names* are wrong. Any
-check like "requested `_120`, read back `_120`" passes even though both sides are 60 s. The plan's D6
-approach (integer table keyed by seconds, `10→0, 60→1, 120→2, 300→3, 900→4`) is correct. Its enum-drift
-test (plan:855, :467) must pin to the **GameTracking SHA** (`c592bf50` or later), not to "the generated
-enums of the proto generation in use". Against the vendored generation, that test would *enforce* the stale
-numbering.
+check like "requested `_120`, read back `_120`" passes even though both sides are 60 s. Use an integer table
+keyed by seconds (`10→0, 60→1, 120→2, 300→3, 900→4`). Any enum-drift test must pin to the **GameTracking SHA**
+(`c592bf50` or later), not to "the generated enums of the proto generation in use". Against the vendored
+generation, that test would *enforce* the stale numbering.
+
+**VERIFIED live 2026-11-08:** a league lobby created without the field reads back wire **2** (120 s in the
+current table; the vendored enum would name it `_300`) ([09](09-live-probe.md) §6).
 
 ## 3. Localization keys
 
@@ -166,44 +167,15 @@ Compared with the node-dota2 table in 01 §7.10:
 
 Current `loc:3595-3632` adds a `dota_region_warsaw` display key. Its region ID is **UNKNOWN**
 (regions.txt is no longer tracked). No evidence suggests that any existing ID was renumbered. However,
-regions are not protobuf data, so this audit cannot prove that for 2026. The plan already keeps regions
-operator-configurable (plan:467, :772), which is the right mitigation. `us_west 1, us_east 2, europe 3, sea 5`
+regions are not protobuf data, so this audit cannot prove that for 2026. Keep regions operator-configurable. `us_west 1, us_east 2, europe 3, sea 5`
 matches the 2023 file (VERIFIED for 2023).
 
-## 5. Stale or contradictory places in the docs
-
-The task quoted "02:132". The "boxed_type only, current" claim is actually at **02:150-151**. 02:132 is a
-filter/date-window UNCERTAIN note and is still accurate.
-
-| File:line | Current text (short) | Problem | Fix |
-|---|---|---|---|
-| `01-lobby-protocol.md:220` | `LobbyDotaTV_10(0)`, `_120(1)`, `_300(2)`, `_900(3)` | Stale numbering; no 60 s | Use current `10=0, 60=1, 120=2, 300=3, 900=4` (since `c592bf50`, 2026-08-12) and note that the vendored constants are off by one |
-| `01-lobby-protocol.md:282` | `DotaTvDelay: protocol.LobbyDotaTVDelay_LobbyDotaTV_120.Enum()` | Sends 1, which is **60 s** | `protocol.LobbyDotaTVDelay(2) // 120 s, current numbering` or the D6 table |
-| `01-lobby-protocol.md:398-400` | `LobbyType` list ends at `FEATURED_GAMEMODE(15)` | Missing `AUTOMATED_BOT_ONLY_MATCH(16)` (`b25cf388`) | Add the value (harmless) |
-| `01-lobby-protocol.md:439` | `dota_tv_delay` read-back default `LobbyDotaTV_10`; "differs from SetDetails default (`_120`)" | The default is still 0 = 10 s (correct), but read-back *names* are wrong under the vendored enum (§2.1) | Add: "decode as an integer with the current table; vendored names mislabel 1/2/3 and do not name 4" |
-| `01-lobby-protocol.md:596` | §7.8 `LobbyDotaTVDelay` … `_120(1)`, `_300(2)`, `_900(3)` | Stale | Same as 01:220 |
-| `01-lobby-protocol.md:609-628` | §7.10 region table (node-dota2) | `4 KOREA` absent in the 2023 regions.txt; 25/37/38 missing; Warsaw ID unknown | Replace with the §4 list, dated 2023-02 |
-| `01-lobby-protocol.md:1135` | "All enum values in §7.1-7.9 … and `LobbyType`" listed as verified | No longer true for §7.8 TV delay or for LobbyType 16 | Qualify: "verified against the vendored pin (= GameTracking `ab1f047d`, 2025-06-17)" |
-| `02-league-tickets.md:93` | NonLobbyDelay: "(120, 300 and 900 s stay allowed). Only league lobbies get `LobbyDotaTV_10` (`…common_lobby.proto:14-19`)" | Omits the 60 s option; cites stale numbering | Add 60 s (`_60 = 1`) and mark its league-only status UNCERTAIN (§3) |
-| `02-league-tickets.md:150-151` | "GameTracking-Dota2 (2026-11-06) has the same IDs and fields, with only `boxed_type` annotations added, so the module's protos are current for this area." | True for 7633/7634/7650/7651 and the league messages. **False** for the lobby fields the same doc relies on (TV delay renumbered; `CMsgPracticeLobbyLaunch.nonce`) and for `CMsgDOTALeagueNodeGroup` (`404d1ab1`) | Narrow the claim to the league admin/info/available-nodes messages and IDs, and link this gap doc |
-| `02-league-tickets.md:200` | `dota_tv_delay = 24` (`LobbyDotaTV_10/120/300/900`) | Missing 60; numbering stale | `10/60/120/300/900 = 0..4 (current)` |
-| `02-league-tickets.md:352` | `DotaTvDelay: protocol.LobbyDotaTVDelay_LobbyDotaTV_120.Enum(), // _10 allowed only for league lobbies` | Sends **60 s** | Same as 01:282 |
-| `02-league-tickets.md:377` | "Non-league lobbies have a minimum of 120 s (120/300/900 s allowed)…`common_lobby.proto:14-19`" | Missing 60 s; stale cite | Add "60 s exists since 2026-08-12; whether non-league may use it is UNCERTAIN" and extend the live test to wire values 0 and 1 |
-| `02-league-tickets.md:406` | "matching upstream GameTracking-Dota2 on 2026-11-06" | Accurate for the IDs and league messages listed; fine if scoped | Keep, but scope it as for 150 |
-| `02-league-tickets.md:499` | Verification note: `LobbyDotaTV_10 = 0`, `_120`, `_300`, `_900` | Stale enum list | Update the list |
-| `docs/plans/2026-11-06-lobby-service-architecture.md:467`, `:855` | "A unit test pins each table to the proto generation in `go.mod`"; drift test vs "generated enums of the proto generation in use" | With the vendored pin, this test would assert the *stale* mapping | Pin the table to a GameTracking SHA (`c592bf50`+) via a golden file. Fail if the generated enum disagrees **and** the generation is older than that SHA |
-| `…lobby-service-architecture.md:661` | `10, 60, 120, 300, 900`; "`10` requires `league_id`" | The rule for `60` on non-league lobbies is unresolved; per the UI string, 60 s might also need a league | Mark `60` without `league_id` as UNCERTAIN pending the §3 live test |
-| `03-go-dota2-internals.md:428` (§8.1 table) | `dota_gcmessages_client.proto`: "nothing lobby or league critical in the diff sample" | Confirmed by the full walk (PopupID unchanged) | No change; optionally cite this doc |
-| `03-go-dota2-internals.md:432` | "since SteamDatabase `c983b3e16435`" | That is a SteamDatabase/**Protobufs** SHA. The GameTracking SHA is `c592bf50` (same day) | Add the GameTracking SHA |
-| `06-match-results.md:32`, `:556` | `CSODOTALobby` numbering unchanged; 132 still the highest field | **Still correct** (VERIFIED; only 104 was added) | None |
-| `README.md:68`, `:172`, `:203` | Renumbering summary | Correct | Optionally add "only renumbering found; see gap-04" |
-
-## 6. Verified vs uncertain
+## 5. Verified vs uncertain
 
 **VERIFIED**
 - Vendored protos = GameTracking `ab1f047d` (2025-06-17) at symbol level, for the seven relevant files.
 - Exactly one renumbering (`LobbyDotaTVDelay`, `c592bf50`, 2026-08-12) across all 2,255 shared symbols. All
-  other changes to plan-relevant symbols only add things (§1 output).
+  other changes to the symbols the service uses only add things (§1 output).
 - `NOT_LEAGUE_ADMIN = 27`, `DOTAJoinLobbyResult`, `CSODOTALobby.State`, `EMatchOutcome`, `DOTA_GC_TEAM`,
   `ELeague*`, `CMsgDOTALeagueInfo*`, `CMsgPracticeLobbySetDetails` and the listed message IDs are unchanged
   through 2026-11-05.
@@ -219,9 +191,9 @@ filter/date-window UNCERTAIN note and is still accurate.
 ## Is the gap resolved?
 
 **Mostly yes.** The per-symbol, commit-dated audit is complete. It confirms that TV delay is the only
-renumbering and that league verification and seat logic are safe on the wire. Stale doc locations are listed
-in §5 for a follow-up edit. Two items remain open, and only a live GC test can close them: 60 s on non-league
-lobbies, and `nonce`. Region IDs after 2023 also stay operator-maintained.
+renumbering and that league verification and seat logic are safe on the wire; the current TV-delay table
+matched a live league read-back. Two items remain open: 60 s on non-league lobbies (Q19) and `nonce` (Q5
+covers the first live launch). Region IDs after 2023 also stay operator-maintained.
 
 ## Sources
 
@@ -237,4 +209,4 @@ lobbies, and `nonce`. Region IDs after 2023 also stay operator-maintained.
   [3f630cc1](https://github.com/SteamDatabase/GameTracking-Dota2/commit/3f630cc18bfa63f63b3ce259be52209d922558c3)
 - SteamDB patch notes for 6898: <https://steamdb.info/patchnotes/24700034/>; 6941: <https://steamdb.info/patchnotes/25539253/>
 - Liquipedia Lobby: <https://liquipedia.net/dota2/Lobby>; community guide: <https://dota2lobby.com/casting-spectating-basics-dota-2-community-games/>
-- Local: `$V/*.proto`, `$V/../client_session.go:32-35`, scratch scripts `/tmp/gap04scripts/{syms,cmp,all,hist}.py`, probe `/tmp/gap04go/main.go`
+- go-dota2 module: `$V/*.proto`, `$V/../client_session.go:32-35`

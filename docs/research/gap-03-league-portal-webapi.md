@@ -285,5 +285,5 @@ nlavalle/AghanimsFantasy and others). None of them calls an admin-scoped league 
 - Wayback: https://web.archive.org/cdx/search/cdx?url=dota2.com/league/* and https://web.archive.org/web/20181006194623id_/http://www.dota2.com:80/league/0/editaccount
 - xPaw API list: https://github.com/xPaw/SteamWebAPIDocumentation/blob/master/api.json
 - Valve KB, league tickets: https://support.steampowered.com/kb/1719-OPHL-1139/dota-2-league-tickets
-- Local protos: `~/.local/share/go/pkg/mod/github.com/paralin/go-dota2@v0.0.0-20250623204622-532cb1851217/protocol/dota_gcmessages_common_league.proto:27,61,107,125-129,182-196,233`; `.../dota_shared_enums.proto:509-540`
+- go-dota2 protos (`go-dota2@532cb1851217/protocol/`, pinned `v0.0.0-20250623204622-532cb1851217`): `dota_gcmessages_common_league.proto:27,61,107,125-129,182-196,233`; `dota_shared_enums.proto:509-540`
 - Related project docs: `docs/research/02-league-tickets.md` §6-7, `04-steam-auth-headless.md`, `README.md` open questions 2, 3 and 16
