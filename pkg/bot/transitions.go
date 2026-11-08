@@ -398,10 +398,9 @@ func (st *step) needsAttention(reason string) {
 func (st *step) backoff(reason string) {
 	p := st.s.Params
 	ceil := p.BackoffMax
-	if n := st.s.Attempt; n < 32 {
-		if d := p.BackoffMin << n; d > 0 && d < ceil {
-			ceil = d
-		}
+	// BackoffMin<<n can overflow, so compare against the shifted ceiling.
+	if n := st.s.Attempt; n < 32 && p.BackoffMin > 0 && p.BackoffMin <= ceil>>n {
+		ceil = p.BackoffMin << n
 	}
 	var r uint64
 	r, st.s.Rand = splitmix(st.s.Rand)

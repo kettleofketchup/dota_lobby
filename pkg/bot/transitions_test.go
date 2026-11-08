@@ -647,3 +647,37 @@ func TestParamsFromConfig(t *testing.T) {
 		t.Errorf("rate-limit cooldown = %s", got)
 	}
 }
+
+// BackoffMin<<attempt wraps for a huge BackoffMin; the ceiling must stay at
+// BackoffMax instead of collapsing to the wrapped value (here 8ns).
+func TestBackoffCeilingDoesNotOverflow(t *testing.T) {
+	tests := []struct {
+		name    string
+		min     time.Duration
+		attempt int
+	}{
+		{"wraps to a tiny positive", 1<<61 + 1, 3},
+		{"wraps to zero", 1 << 61, 3},
+		{"wraps negative", 1<<62 + 1, 1},
+		{"shift past the guard", time.Second, 40},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var maxSeen time.Duration
+			for seed := range uint64(200) {
+				s := snap(StateGCReady, func(s *Snapshot) {
+					s.Params.BackoffMin, s.Params.BackoffMax = tt.min, time.Hour
+					s.Attempt, s.Rand = tt.attempt, seed
+				})
+				d, _ := backoffDelay(t, s)
+				if d < minBackoff || d > time.Hour {
+					t.Fatalf("seed %d: delay %s outside [%s, 1h]", seed, d, minBackoff)
+				}
+				maxSeen = max(maxSeen, d)
+			}
+			if maxSeen < 30*time.Minute {
+				t.Errorf("max delay %s, want the jitter spread over BackoffMax", maxSeen)
+			}
+		})
+	}
+}
