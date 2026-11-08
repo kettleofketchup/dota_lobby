@@ -71,6 +71,8 @@ type Options struct {
 	Leagues Leagues
 	// Leases is the bot pool; nil reports no lobbies.
 	Leases Leases
+	// Lobbies is the lobby manager; nil answers 503 on /v1/lobbies.
+	Lobbies Lobbies
 	// GCRequestTimeout bounds a synchronous GC call made for a request,
 	// queue wait included (gc.request_timeout). 0 means
 	// bot.DefaultRequestTimeout; it is capped at MaxSyncGCWait.
@@ -129,6 +131,9 @@ func New(opts Options) *Server {
 	}
 	if opts.Leases == nil {
 		opts.Leases = noLeases{}
+	}
+	if opts.Lobbies == nil {
+		opts.Lobbies = noLobbies{}
 	}
 	s := &Server{opts: opts, log: opts.Logger, started: opts.Now()}
 	s.handler = s.routes()
@@ -194,9 +199,17 @@ func (s *Server) routes() http.Handler {
 	r.handleAuthed("GET /v1/leagues", s.handleLeagues)
 	r.handleAuthed("GET /v1/leagues/{id}/nodes", s.handleLeagueNodes)
 
-	// Lobby endpoints are not implemented yet.
-	r.handle("/v1/lobbies", s.authed(notImplemented))
-	r.handle("/v1/lobbies/", s.authed(notImplemented))
+	r.handleAuthed("POST /v1/lobbies", s.handleLobbyCreate)
+	r.handleAuthed("GET /v1/lobbies", s.handleLobbyList)
+	r.handleAuthed("GET /v1/lobbies/{id}", s.handleLobbyGet)
+	r.handleAuthed("PATCH /v1/lobbies/{id}", s.handleLobbyPatch)
+	r.handleAuthed("DELETE /v1/lobbies/{id}", s.handleLobbyDelete)
+	r.handleAuthed("POST /v1/lobbies/{id}/invite", s.handleLobbyInvite)
+	r.handleAuthed("POST /v1/lobbies/{id}/kick", s.handleLobbyKick)
+	r.handleAuthed("POST /v1/lobbies/{id}/roster", s.handleLobbyRoster)
+	r.handleAuthed("POST /v1/lobbies/{id}/launch", s.handleLobbyLaunch)
+	r.handleAuthed("POST /v1/lobbies/{id}/teams/flip", s.handleLobbyFlip)
+	r.handleAuthed("POST /v1/lobbies/{id}/teams/shuffle", s.handleLobbyShuffle)
 
 	// The pre-v1 placeholders; nothing depends on them.
 	r.handle("/bots", s.authed(gone("/v1/bots")))
@@ -331,10 +344,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	// The status line is out; a failed write only means the client left.
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func notImplemented(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not_implemented", "lobby endpoints are not available yet")
 }
 
 func gone(moved string) http.HandlerFunc {

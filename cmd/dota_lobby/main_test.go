@@ -201,6 +201,20 @@ func TestServeZeroBotsStartsAndStops(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	// The lobby API is wired to the manager.
+	req, _ := http.NewRequest(http.MethodGet, "http://"+addr+"/v1/lobbies", nil)
+	req.Header.Set("X-API-Key", "k")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Lobbies []any `json:"lobbies"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || resp.StatusCode != 200 || list.Lobbies == nil {
+		t.Errorf("GET /v1/lobbies = %d %+v %v", resp.StatusCode, list, err)
+	}
+	_ = resp.Body.Close()
 	// While serving, the state dir is locked against a second process.
 	if _, err := auth.AcquireLock(stateDir); err == nil {
 		t.Error("state dir not locked while serving")
@@ -217,6 +231,11 @@ func TestServeZeroBotsStartsAndStops(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "stopped cleanly") {
 		t.Errorf("no clean-stop log:\n%s", stderr.String())
+	}
+	// Lobbies drain after HTTP and before the bots stop.
+	drained, stopped := strings.Index(stderr.String(), "lobbies drained"), strings.Index(stderr.String(), "stopped cleanly")
+	if drained < 0 || drained > stopped {
+		t.Errorf("lobby drain missing or out of order:\n%s", stderr.String())
 	}
 	lock, err := auth.AcquireLock(stateDir)
 	if err != nil {
