@@ -4,5 +4,6 @@
   signing secret stops startup.
 - An optional static token (`webhooks[].token_header` with `secrets.webhook_tokens`) lets a
   receiver keep its existing service-token check. Neither the token, the secret nor the lobby
-  password is logged or put in an event; receiver URLs are logged without their query.
+  password is logged or put in an event; receiver URLs are logged, and named in startup errors,
+  without their query or user info.
 - Redirects from a receiver are never followed.

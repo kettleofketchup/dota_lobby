@@ -16,7 +16,7 @@ In `config.yaml`:
 ```yaml
 webhooks:
   - url: https://league.internal/api/internal/lobbies/events/
-    events: ["lobby.*", "match.*"]    # path.Match globs; ["*"] for every event
+    events: ["lobby.*", "match.*"]    # path.Match globs; ["*"] or none for every event
     token_header: X-Internal-Token    # optional, see below
 webhook_delivery:
   timeout: 10s      # one attempt, response included

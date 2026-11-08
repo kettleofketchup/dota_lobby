@@ -184,6 +184,7 @@ type StoreConfig struct {
 type WebhookConfig struct {
 	URL string `mapstructure:"url"`
 	// Events are path.Match globs on the event type, such as "lobby.*".
+	// Empty matches every event.
 	Events []string `mapstructure:"events"`
 	// TokenHeader names a request header that carries
 	// secrets.webhook_tokens[url], for receivers that already check a

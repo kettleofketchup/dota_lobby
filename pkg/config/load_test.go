@@ -394,7 +394,7 @@ steam: { reconnect_backoff_min: 10m, reconnect_backoff_max: 1m }
 league: { sources: [gc, portal] }
 lobby: { host_seat_strategy: [] }
 webhooks: [{ url: "ftp://x", events: [] }]
-`, "", []string{"server.port", "log.level", "log.format", "reconnect_backoff_max", "portal", "host_seat_strategy must not be empty", "webhooks[0].url", "webhooks[0].events"}},
+`, "", []string{"server.port", "log.level", "log.format", "reconnect_backoff_max", "portal", "host_seat_strategy must not be empty", "webhooks[0].url"}},
 		{"bot name", "bots:\n  - name: ../evil\n", "", []string{"name \"../evil\""}},
 		{"bot name missing", "bots:\n  - tags: [x]\n", "", []string{"name is required"}},
 		{"duplicate bots", "bots:\n  - name: bot-a\n  - name: BOT_A\n", "", []string{"collide"}},
@@ -435,6 +435,15 @@ secrets:
 			"token_header \"X-Dota-Lobby-Token\" is set by the service itself",
 			"webhooks[2].token_header is set but secrets.webhook_tokens has no token",
 			"webhooks[3]: secrets.webhook_secrets has no signing secret", "webhooks[3]: secrets.webhook_tokens has a token"}},
+		{"webhook URL credentials", `
+webhooks:
+  - { url: "https://user:pw@a.example/hook?token=abc123" }
+  - { url: "ftp://user:pw@b.example/hook?token=abc123", token_header: X-Token }
+  - { url: "https://c.example/%zz?token=abc123" }
+`, "", []string{"webhooks[0]: secrets.webhook_secrets has no signing secret for \"https://a.example/hook\"",
+			"webhooks[1].url: \"ftp://b.example/hook\" is not an absolute http(s) URL",
+			"webhooks[1].token_header is set but secrets.webhook_tokens has no token for \"ftp://b.example/hook\"",
+			"webhooks[2].url: parse: invalid URL escape"}},
 		{"chat slash prefix", "lobby: { chat: { prefix: \"/\", send_interval: 0s, start_countdown: -1s } }\n", "", []string{"lobby.chat.prefix \"/\"", "lobby.chat.send_interval", "lobby.chat.start_countdown"}},
 		{"chat empty prefix", "lobby: { chat: { prefix: \"\" } }\n", "", []string{"lobby.chat.prefix \"\""}},
 		{"chat long prefix", "lobby: { chat: { prefix: \"!bot!\" } }\n", "", []string{"lobby.chat.prefix"}},
@@ -451,12 +460,23 @@ secrets:
 					t.Errorf("error %q does not mention %q", err, w)
 				}
 			}
-			for _, secret := range []string{"not base64!", "0x1F"} {
+			for _, secret := range []string{"not base64!", "0x1F", "abc123", ":pw@"} {
 				if strings.Contains(err.Error(), secret) {
 					t.Errorf("error echoes the secret %q: %v", secret, err)
 				}
 			}
 		})
+	}
+}
+
+// A webhook without events gets every event.
+func TestLoadWebhookWithoutEvents(t *testing.T) {
+	cfg := mustLoad(t, files{
+		config:  "webhooks:\n  - url: https://league.internal/hooks/dota\n",
+		secrets: "secrets:\n  webhook_secrets: { \"https://league.internal/hooks/dota\": s }\n",
+	})
+	if len(cfg.Webhooks) != 1 || len(cfg.Webhooks[0].Events) != 0 {
+		t.Errorf("webhooks = %+v", cfg.Webhooks)
 	}
 }
 

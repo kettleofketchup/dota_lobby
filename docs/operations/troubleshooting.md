@@ -44,7 +44,7 @@ the reason is the last log line, prefixed with `dota_lobby serve:`.
 | `bots "a" and "b" use the same Steam account` | Two bots point at one account | One bot per account |
 | `start bots: auth: lock ...: state dir is locked by another process` | Another `serve` is running on the same state directory | Stop the other copy. Only one instance per set of accounts |
 | `start bots: auth: open lock: ... permission denied` | The state directory is not writable | With Compose, use the named volume from `compose.yaml`; do not bind-mount a host directory there unless UID 65532 owns it |
-| `webhooks[0]: secrets.webhook_secrets has no signing secret for "..."` | A webhook without a signing secret, or a secrets key that is not the exact URL | Add `secrets.webhook_secrets["<url>"]`; see [Webhooks](webhooks.md#configure-a-receiver) |
+| `webhooks[0]: secrets.webhook_secrets has no signing secret for "..."` | A webhook without a signing secret, or a secrets key that is not the exact URL. The message shows the URL without its query or user info | Add `secrets.webhook_secrets["<url>"]`; see [Webhooks](webhooks.md#configure-a-receiver) |
 | `listen: ... address already in use` | Port taken | Free the port or change the host side of the mapping |
 | `read config /app/config/config.yaml: ... permission denied` | `config.yaml` is not readable by UID 65532 | `chmod 644 config/config.yaml` (it holds no secrets) |
 

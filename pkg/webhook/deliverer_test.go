@@ -468,12 +468,13 @@ func TestRoute(t *testing.T) {
 	route := Route([]config.WebhookConfig{
 		{URL: "https://a/h", Events: []string{"lobby.*"}},
 		{URL: "https://b/h", Events: []string{"match.*", "lobby.created"}},
+		{URL: "https://c/h"}, // no events: every event
 	})
 	tests := map[string]string{
-		"lobby.created":       "[https://a/h https://b/h]",
-		"lobby.state_changed": "[https://a/h]",
-		"match.ended":         "[https://b/h]",
-		"other":               "[]",
+		"lobby.created":       "[https://a/h https://b/h https://c/h]",
+		"lobby.state_changed": "[https://a/h https://c/h]",
+		"match.ended":         "[https://b/h https://c/h]",
+		"other":               "[https://c/h]",
 	}
 	for typ, want := range tests {
 		if got := fmt.Sprint(route(typ)); got != want {

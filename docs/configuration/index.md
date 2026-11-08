@@ -150,7 +150,7 @@ Each entry is one receiver of signed event deliveries; see [Webhooks](../operati
 | Key | Meaning |
 |---|---|
 | `url` | Absolute `http` or `https` URL. Each URL may appear once (compared case-insensitively). Use `https` beyond a private network |
-| `events` | Event types to send, as globs: `["lobby.*", "match.*"]`, `["match.ended"]`, `["*"]` for every event. Must not be empty |
+| `events` | Event types to send, as globs: `["lobby.*", "match.*"]`, `["match.ended"]`, `["*"]` for every event. Empty or left out also sends every event |
 | `token_header` | Optional request header that carries `secrets.webhook_tokens[url]`, for a receiver that already checks a static token. `Content-Type`, `User-Agent` and `X-Dota-Lobby-*` are taken |
 
 A webhook without `secrets.webhook_secrets[url]` stops startup, as does a `token_header`

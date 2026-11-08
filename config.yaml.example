@@ -108,7 +108,7 @@ store:
 # a signing secret in secrets.webhook_secrets.
 # webhooks:
 #   - url: https://league.internal/hooks/dota
-#     events: ["lobby.*", "match.*"]  # globs on the event type; ["*"] = all
+#     events: ["lobby.*", "match.*"]  # globs on the event type; ["*"] or empty = all
 #     token_header: X-Internal-Token  # optional; value from secrets.webhook_tokens
 
 webhook_delivery:

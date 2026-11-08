@@ -1,7 +1,8 @@
 - **Webhooks.** Every lobby event is pushed to the receivers in `webhooks` as a JSON envelope
   with a unique `id`, the lobby's `seq`, the time, a summary of the lobby (`external_ref`,
   `state`, `bot`, `gc_lobby_id`, `league_id`, `metadata`) and the event's `data`. Each
-  webhook picks event types with globs in `webhooks[].events`.
+  webhook picks event types with globs in `webhooks[].events`; without `events` it gets every
+  event.
 - Deliveries are queued in the database in the transaction that stores the event and survive
   restarts. A lobby's events reach each receiver in `seq` order; other lobbies are not held
   back. Timeouts, connection errors, `408`, `425`, `429` and `5xx` are retried after 10 s,

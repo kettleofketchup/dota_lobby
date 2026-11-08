@@ -434,10 +434,4 @@ func transportError(err error) string {
 
 // logName is a URL without user info, query or fragment, which may hold
 // credentials.
-func logName(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "(unparsable URL)"
-	}
-	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
-}
+func logName(raw string) string { return config.RedactURL(raw) }
