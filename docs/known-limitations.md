@@ -11,12 +11,12 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
    fakes. The remaining open questions are listed under
    [What is still unverified](configuration/bot-accounts.md#what-is-still-unverified).
 2. **Lobby hosting is only tested against fakes.** Creating a league lobby, setting the game
-   mode, inviting players and the lobby's chat were checked live with the probe; the lobby
-   manager as a whole was not. In particular nobody has yet seen which host seat strategy
-   (`lobby.host_seat_strategy`) lets a launch reach a running game: the default tries the caster
-   slot first, which several reports say blocks the load, and a failed launch moves on to the
-   next strategy. How a finished match shows in the lobby (`POSTGAME`, `match_outcome`) is also
-   unconfirmed.
+   mode, inviting players and joining and answering in the lobby's chat were checked live with
+   the probe; the lobby manager and its chat commands as a whole were not. In particular nobody
+   has yet seen which host seat strategy (`lobby.host_seat_strategy`) lets a launch reach a
+   running game: the default tries the caster slot first, which several reports say blocks the
+   load, and a failed launch moves on to the next strategy. How a finished match shows in the
+   lobby (`POSTGAME`, `match_outcome`) is also unconfirmed.
 3. **The match result is provisional.** It comes from the lobby alone (`match.outcome`). For
    league games, the Steam Web API's match data is the final word; the service does not fetch it
    yet. Unscored outcomes (64-69) need a human decision.
@@ -48,9 +48,9 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
    its time.
 13. **No metrics yet.** `metrics.addr` is accepted but no metrics listener runs. Token expiry is
     shown in `/v1/bots` and renewals are logged.
-14. **Several config keys are accepted but unused**: `lobby.chat`, `lobby.admins`,
-    `lobby.series_types`, `match`, `webhooks`, `metrics` and `league.webapi_enrichment`. They are
-    validated so configs keep working once the features arrive.
+14. **Several config keys are accepted but unused**: `lobby.series_types`, `match`, `webhooks`,
+    `metrics` and `league.webapi_enrichment`. They are validated so configs keep working once the
+    features arrive.
 15. **No TLS.** Put a reverse proxy in front of the API before exposing it beyond localhost.
 
 ## Roadmap
@@ -58,7 +58,6 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
 Planned work, in order. No dates are promised.
 
 - Run the Phase 0 probe against real bot accounts and fix whatever it finds.
-- Lobby chat commands for players and admins.
 - Signed webhooks for lobby and match events.
 - Match results from the game coordinator, the Steam Web API and OpenDota.
 - Prometheus metrics.

@@ -372,8 +372,8 @@ background; follow it with `GET /v1/lobbies/{id}`.
 | `launch` | no | `manual` (default): launch through the API. `auto`: launch `lobby.auto_launch_delay` (10 s) after the lobby is `ready` |
 | `allow_short_handed` | no | `ready` without every rostered player, as long as each side has one and nobody sits wrong |
 | `kick_strangers` | no | Remove members who are not rostered from the lobby, not only from the teams, when they sit on a side or in the pool. The caster and spectator slots are left alone |
-| `ready_check` | no | Stored; used by lobby chat in a later version |
-| `admins` | no | Account IDs allowed to run admin chat commands (a later version) |
+| `ready_check` | no | With lobby chat on and a roster, the lobby is only `ready` once every seated player typed `!ready`; see [Lobby chat](../operations/lobby-chat.md#the-ready-check). Default `false` |
+| `admins` | no | Account IDs allowed admin commands in this lobby's chat, on top of `lobby.admins` |
 | `metadata` | no | Up to 16 string pairs, returned in every response |
 
 A player is `{"account_id": <32-bit number>}` or `{"steam_id": "<SteamID64 as a string>"}`,
@@ -444,6 +444,7 @@ used for a new lobby.
 | `password` | Only in `POST` and `GET /v1/lobbies/{id}` responses, never in lists or logs |
 | `host_seat` | How the bot got out of a player slot; see [Host seat](#host-seat) |
 | `teams.*.players[].status` | `pending` (no invite yet), `invited`, `joined` (in the lobby, not on their side), `seated` (on their side), `left` |
+| `teams.*.players[].ready` | The player typed `!ready` in the lobby chat and has not left their side since. Always `false` without chat |
 | `teams.*.players[].seat` | Where the player sits now: `radiant`, `dire`, `player_pool`, `spectator`, `broadcaster`, `no_team`, `unknown` (the game coordinator sent no team), or `null` when not in the lobby |
 | `strangers` | Members who are neither rostered nor the bot |
 | `pending_invites` | Invites the game coordinator still shows as outstanding (SteamID64 strings). There is no way to cancel one |
@@ -580,7 +581,9 @@ A balanced shuffle by the game coordinator. Only for an open lobby (both rosters
 
 A lobby is `ready` when every rostered player is in the lobby on their own side and nobody who
 is not rostered sits on Radiant or Dire. For an open lobby, one player on each side is enough.
-The bot itself and coaches are never counted.
+The bot itself and coaches are never counted. With lobby chat on and `ready_check: true`, every
+seated rostered player must also have typed `!ready`; see
+[Lobby chat](../operations/lobby-chat.md#the-ready-check).
 
 While a lobby is `waiting` or `ready`, the bot moves rostered players who sit on the wrong side,
 and strangers on a side, back to the pool. With `kick_strangers`, strangers on a side or in the
@@ -621,7 +624,8 @@ version.
 | `lobby.enforcement_stopped` | A member was moved five times; the bot leaves them alone |
 | `lobby.ready`, `lobby.unready` | The lobby became ready, or stopped being ready (`missing`) |
 | `lobby.updated`, `lobby.roster_changed`, `lobby.teams_flipped` | Settings, rosters or sides changed |
-| `lobby.launching`, `lobby.launch_failed` | A launch started, or did not reach a game |
+| `lobby.player_ready`, `lobby.player_unready` | A player typed `!ready` or `!unready`, or lost the ready mark by leaving their side (`reason`: `chat`, `moved`, `left`) |
+| `lobby.launching`, `lobby.launch_failed` | A launch started (`trigger`: `api`, `chat` or `auto`; `by_account_id` for a chat start), or did not reach a game |
 | `match.started`, `match.ended` | Match ID assigned; outcome reported (`provisional: true`) |
 | `lobby.finished`, `lobby.failed`, `lobby.closed`, `lobby.timed_out` | The lobby ended (`reason`) |
 

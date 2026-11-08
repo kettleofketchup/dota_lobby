@@ -116,6 +116,11 @@ How lobbies run. See [Lobbies](../api/index.md#lobbies) for what each step does.
 | `lobby.readopt_timeout` | duration | `5m` | After a restart, how long a lobby waits for its bot to be ready again |
 | `lobby.drain_timeout` | duration | `10s` | Time the lobby step of shutdown may take |
 | `lobby.destroy_on_shutdown` | bool | `false` | Destroy lobbies that have not launched at shutdown, instead of leaving them for the next start |
+| `lobby.admins` | list of int | `[]` | Account IDs allowed admin commands in every lobby's chat. See [Lobby chat](../operations/lobby-chat.md) |
+| `lobby.chat.enabled` | bool | `false` | The bot joins each lobby's chat and answers commands; also turns on the ready check for lobbies that ask for it |
+| `lobby.chat.prefix` | string | `"!"` | What every chat command starts with, 1-4 characters without spaces. Not `/`: the Dota client never sends those |
+| `lobby.chat.send_interval` | duration | `1s` | Least time between two bot messages in one lobby |
+| `lobby.chat.start_countdown` | duration | `10s` | Time from `!start` to the launch, during which an admin can `!cancel` |
 | `lobby.invite.min_resend` | duration | `30s` | Least time between two invites to the same player |
 | `lobby.invite.max_per_player` | int | `5` | Invites per player, the automatic one included |
 | `lobby.regions` | map | `{us_west: 1, us_east: 2, europe: 3, sea: 5}` | Region names for requests. The numbers are unconfirmed; keep them current by hand |
@@ -138,8 +143,8 @@ file. Two bots may not use the same Steam account.
 ### Accepted, not used yet
 
 These keys are validated so a config written now keeps working, but nothing reads them in this
-version: `metrics.addr` (no metrics listener yet), `league.webapi_enrichment`, `lobby.chat.*`,
-`lobby.admins`, `lobby.series_types`, `match.*` and `webhooks`. Their defaults are in
+version: `metrics.addr` (no metrics listener yet), `league.webapi_enrichment`,
+`lobby.series_types`, `match.*` and `webhooks`. Their defaults are in
 [`config.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/config.yaml.example).
 
 ## Secrets
