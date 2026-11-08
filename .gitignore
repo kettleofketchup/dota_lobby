@@ -43,6 +43,7 @@ bin/
 # Docs build output and local Python env
 site/
 .venv/
+__pycache__/
 
 # Local binary and container config directory
 /dota_lobby
@@ -54,3 +55,6 @@ probe-state/
 # Local sops secrets: the generated .sops.yaml and encrypted files stay on this machine
 .sops.yaml
 secrets/
+
+# Local planning notes (design specs and implementation plans)
+docs/superpowers/

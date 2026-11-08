@@ -30,6 +30,8 @@ make run      # Build and run the service
 make test     # Run tests
 make lint     # Run golangci-lint
 make clean    # Clean build artifacts
+just ci::changelog-check   # Changelog fragment checks and tests (what CI runs)
+just release::upgrade      # Cut a release (repo admin); also hotfix, major, current
 ```
 
 ## Code Style Guidelines
@@ -67,6 +69,12 @@ make clean    # Clean build artifacts
 
 - Run `make test` before committing
 - CI runs `golangci-lint` on all PRs and pushes to main
+
+## Changelog
+
+- Never edit `CHANGELOG.md` in a PR; add `changelog.d/<section>/<branch-slug>.md` instead
+- Follow the `changelog` skill: `.claude/skills/changelog/SKILL.md`
+- Run `just ci::changelog-check` before pushing
 
 ## Security Considerations
 

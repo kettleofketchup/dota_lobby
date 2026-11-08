@@ -14,7 +14,10 @@ This page is for people changing the code or the docs. To run the service, start
 | `pkg/bot/` | The per-bot state machine (`next()`, a pure function), its supervisor, the GC request worker and the manager |
 | `pkg/api/` | HTTP API: health endpoints, `/v1/bots`, the error envelope |
 | `tools/probe/` | Phase 0 live probe against real Steam. A **separate Go module** |
-| `just/` | just modules: `dev`, `go`, `docs`, `docker`, `secrets`, `probe` |
+| `just/` | just modules: `dev`, `go`, `docs`, `docker`, `secrets`, `probe`, `ci`, `release`; the changelog checker `changelog.py` and its tests |
+| `changelog.d/` | Changelog fragments, added by each pull request; see [Changelog](changelog.md) |
+| `CHANGELOG.md` | Release notes, assembled from `changelog.d/` at release time; never edited in a pull request |
+| `scripts/` | CI helper scripts (`ci-merge-base.sh`) |
 | `docs/` | This site (MkDocs Material). `docs/plans/` and `docs/research/` are not published |
 | `Dockerfile`, `compose.yaml` | Image and single-machine deployment, see [Docker Compose](../deployment/docker-compose.md) |
 | `Dockerfile.docs`, `mkdocs.yml`, `pyproject.toml`, `uv.lock` | The docs toolchain |
@@ -108,6 +111,9 @@ Never run the probe for a bot that a running service is using.
 | `just secrets set-stdin <bot> <KEY>` | Store a JSON-encoded string from stdin under a key |
 
 `secrets/`, `.sops.yaml` and `probe-state/` are ignored by git.
+
+The `changelog` check (`.github/workflows/changelog.yml`, `just ci::changelog-check`) runs on
+the same events and validates the changelog fragments; see [Changelog](changelog.md).
 
 ## Docs
 

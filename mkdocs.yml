@@ -76,4 +76,5 @@ nav:
       - Known limitations: known-limitations.md
   - Development:
       - Overview: development/index.md
+      - Changelog: development/changelog.md
       - Releasing: development/releasing.md
