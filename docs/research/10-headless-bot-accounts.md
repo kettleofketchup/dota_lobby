@@ -4,13 +4,12 @@ Date: 2026-11-07. Scope: how to set up Steam bot accounts for `dota_lobby` that 
 Dota 2** and log in with a Steam Guard mobile authenticator **with no human input at login time**. It builds on
 [04](04-steam-auth-headless.md) (§4 TOTP, §7.1 limited accounts, §7.2 app 570) and
 [gap-01](gap-01-upstream-master-build-auth.md) (go-steam master auth surface) and does not repeat them.
-No repo code, just files or config were changed. Scratch work: `/tmp/hl10` (Go compile check, live `QueryTime` call,
-sops import test with dummy data and a throwaway age key), `/tmp/hl10src` (steamguard-cli sources fetched via `gh api`).
+Live results from 2026-11-08 are in [09 - Live probe](09-live-probe.md).
 
 Labels: **VERIFIED** = read in source, reproduced locally, or read on a primary page. **REPORTED** = third party
 (issue, forum, library docs). **UNCERTAIN** = conflicting or no evidence; needs a live account.
 
-`$GS` = `~/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20260922075330-336e824f8540`.
+`go-steam@336e824f8540/...` paths are relative to the root of `github.com/paralin/go-steam v0.0.0-20260922075330-336e824f8540` (upstream master).
 `SGC` = [dyc3/steamguard-cli](https://github.com/dyc3/steamguard-cli) `master` (last push 2026-09-22, release v0.18.4 of 2026-07-16).
 
 ---
@@ -31,15 +30,17 @@ Labels: **VERIFIED** = read in source, reproduced locally, or read on a primary 
 3. **Login with zero interaction is implemented in go-steam master.** `Auth.Authenticate` with `TwoFactorCode`
    submits the TOTP code as `DeviceCode` inside the same auth session, whatever order Steam lists the allowed
    confirmations in, and then polls for the refresh token. No callback fires and no approval is needed. VERIFIED in
-   source (`$GS/auth_session.go:113-149`); live run still pending (probe Q1). Steam tolerates **60 s** of clock
+   source (`go-steam@336e824f8540/auth_session.go:113-149`) and VERIFIED live (Q1): a refresh token in 0.7 s with no
+   prompt ([09](09-live-probe.md) §2). Steam tolerates **60 s** of clock
    skew (`skew_tolerance_seconds` from a live `ITwoFactorService/QueryTime` call, VERIFIED 2026-11-07).
    identity_secret / auto-approval is **not** needed.
 4. **Never running Dota is probably fine.** Dota 2 ships a free-on-demand package, sub **49307 "Dota 2 - Free
    On-Demand"** (app 570), which is VERIFIED through the store API. go-steam has the
    `ClientRequestFreeLicense` (5572/5573) EMsgs and protos but no helper. A ~100-line helper (plus a
-   `QueryTime` skew helper) **compiles against go-steam master** (§4.3). Whether the GC welcomes an account
-   with no 570 licence is still probe Q21. One 2026 report shows Dota running on accounts whose licence list
-   lacks it, which suggests the GC does not check.
+   `QueryTime` skew helper) **compiles against go-steam master** (§4.3). VERIFIED live (Q21): an account that
+   never launched Dota 2 got a GC welcome and hosted league lobbies ([09](09-live-probe.md) §3). Its licence list
+   was not read, so whether the GC checks it is still open; one 2026 report shows Dota running on accounts whose
+   licence list lacks it.
 5. **ToS risk is real but not new.** The Steam Subscriber Agreement (revision **2026-09-10**) §4.C bans
    "scripts, bots, macros, or other non-human-controlled systems" interacting with Steam *"in any manner"*, naming
    *"Automating the Steam account creation process"*, and §2.G(ii) bans emulating Valve's protocols without written
@@ -88,18 +89,18 @@ There is **no age gate beyond the 13+ checkbox** for Dota. Dota 2 has `required_
 New accounts are **limited** until US$5 has been spent on the store. Restrictions (04 §7.1): no outgoing friend
 invites, no Market, no Web API key, and rate-limited chat. go-steam already surfaces the state in two places.
 `CMsgClientIsLimitedAccount{bis_limited_account, bis_community_banned, bis_locked_account,
-bis_limited_account_allowed_to_invite_friends}` (EMsg 5430, `$GS/protocol/protobuf/client_server.proto:194-198`,
-`$GS/protocol/steamlang/enums.go:1405`) is pushed after logon, and `EAccountFlags_LimitedUser = 4096`
-(`enums.go:4235`) appears in `LoggedOnEvent.AccountFlags` (`$GS/auth.go:118`). VERIFIED. §4.3 logs both.
+bis_limited_account_allowed_to_invite_friends}` (EMsg 5430, `go-steam@336e824f8540/protocol/protobuf/client_server.proto:194-198`,
+`go-steam@336e824f8540/protocol/steamlang/enums.go:1405`) is pushed after logon, and `EAccountFlags_LimitedUser = 4096`
+(`enums.go:4235`) appears in `LoggedOnEvent.AccountFlags` (`go-steam@336e824f8540/auth.go:118`). VERIFIED. §4.3 logs both.
 
 Implications for lobby hosting:
 
 | Need | Limited OK? | Confidence |
 |---|---|---|
 | Log in, GC session, create a lobby | likely yes | REPORTED (04 §7.1) |
-| GC lobby invite (`InviteLobbyMember`) | unknown | UNCERTAIN, probe Bot B |
-| Lobby chat (rules, "gl hf", results) | Dota limits chat for limited accounts ([teamsmurf](https://teamsmurf.com/limited-steam-accounts-dota-2/), [05](05-prior-art.md) §3.3) | REPORTED |
-| League admin on dota2.com/league | unknown | UNCERTAIN, probe Bot B |
+| GC lobby invite (`InviteLobbyMember`) | unknown | UNCERTAIN (Q22) |
+| Lobby chat (rules, "gl hf", results) | Dota limits chat for limited accounts ([teamsmurf](https://teamsmurf.com/limited-steam-accounts-dota-2/), [05](05-prior-art.md) §3) | REPORTED |
+| League admin on dota2.com/league | unknown | UNCERTAIN (Q13) |
 | Account recovery via Steam Support | a card purchase made on the account is the strongest proof of ownership | REPORTED |
 
 **Cheapest legitimate way to lift the limit:** add US$5 (or the local equivalent) to the bot's own **Steam
@@ -111,8 +112,7 @@ does **not** count until it is spent, and retail/promo keys never count
 REPORTED. Valve's own FAQ (`help.steampowered.com/en/faqs/view/71D3-35C2-AD96-AA3A`) renders client-side and could
 not be read here. Refunds that bring the total back below $5 re-limit the account (04 §7.1). The wallet balance
 is not wasted: it stays on the bot and can later pay for a league ticket or a Battle Pass for the league account
-if ever needed. **Recommendation:** fund every production bot. Fund the test Bot B only once probe Q13/Q21 say a
-limited bot does not work.
+if ever needed. **Recommendation:** fund every production bot. A limited test bot is only useful to answer Q22.
 
 ---
 
@@ -214,10 +214,10 @@ whether Valve adds a non-trade cooldown on brand-new accounts. Nothing was found
 ### 3.1 go-steam master path (VERIFIED in source)
 
 `Auth.Authenticate(ctx, &LogOnDetails{Username, Password, TwoFactorCode, DeviceFriendlyName, ShouldRememberPassword:
-true})` (`$GS/auth-token.go:12-17`) runs these steps:
+true})` (`go-steam@336e824f8540/auth-token.go:12-17`) runs these steps:
 
 1. `GetPasswordRSAPublicKey`, then `BeginAuthSessionViaCredentials` with platform `SteamClient`, persistence
-   `Persistent`, `WebsiteId "Client"` (`$GS/auth_session.go:38-76`).
+   `Persistent`, `WebsiteId "Client"` (`go-steam@336e824f8540/auth_session.go:38-76`).
 2. `submitAvailableSteamGuardCode` (`:113-149`) walks **all** `allowed_confirmations`. `DeviceConfirmation` and
    `EmailConfirmation` only set a flag (`:128-130`). When it reaches `DeviceCode` and `TwoFactorCode != ""`, it
    calls `UpdateAuthSessionWithSteamGuardCode{client_id, steamid, code, code_type=DeviceCode}` and returns
@@ -236,8 +236,8 @@ Gaps in go-steam to handle in our code:
 
 | Gap | Evidence | Handling |
 |---|---|---|
-| No time-skew correction | No `QueryTime` anywhere in `$GS` (grep) | Compute the code at `time.Now().Add(offset)`, with `offset` from `ITwoFactorService/QueryTime` (§4.3 helper, VERIFIED live: offset −0.42 s on this host). Steam returned `skew_tolerance_seconds: "60"`, so NTP alone is normally enough |
-| A wrong or reused code fails the whole session | A non-1 `x-eresult` → `AuthSessionStateDenied` (`$GS/auth_session.go:229-235`); no retry | On `eresult 88` (TwoFactorCodeMismatch), wait for the next 30 s window and call `Authenticate` again (a new session). Never submit the same code twice; stagger bots that log in together |
+| No time-skew correction | No `QueryTime` anywhere in go-steam master (grep) | Compute the code at `time.Now().Add(offset)`, with `offset` from `ITwoFactorService/QueryTime` (§4.3 helper, VERIFIED live: offset −0.42 s on the test host). Steam returned `skew_tolerance_seconds: "60"`, so NTP alone is normally enough |
+| A wrong or reused code fails the whole session | A non-1 `x-eresult` → `AuthSessionStateDenied` (`go-steam@336e824f8540/auth_session.go:229-235`); no retry | On `eresult 88` (TwoFactorCodeMismatch), wait for the next 30 s window and call `Authenticate` again (a new session). Never submit the same code twice; stagger bots that log in together |
 | Same device name for every bot | Default `"go-steam"` (`:53-56`) | Set `DeviceFriendlyName: "dota_lobby <bot>"` so the account's "authorized devices" page tells sessions apart |
 
 ### 3.2 Will "new login" email confirmations still appear?
@@ -248,7 +248,7 @@ Gaps in go-steam to handle in our code:
   IP on top of a valid device code is LIKELY; no report of that was found.
 - **Notification emails** ("new sign-in" or similar): UNCERTAIN whether Steam sends them. They would be informational
   only and need no action. Probe step: check the bot's inbox after `just probe auth`.
-- **A first login from a datacenter IP may re-trigger Steam Guard** (REPORTED, 05 §3.3). With TOTP this is handled
+- **A first login from a datacenter IP may re-trigger Steam Guard** (REPORTED by existing league bots). With TOTP this is handled
   automatically by re-running `Authenticate`. To keep the token-only path stable, mint the refresh token from the host
   (egress IP) that will use it, or let the service re-authenticate on its first start (UNCERTAIN whether refresh
   tokens are IP-bound; gap-01 §7).
@@ -291,12 +291,12 @@ Side note from the same issue: authenticators created by SGC before 0.17 are `ve
 ### 4.2 GC welcome, Dota profile, EULA, new-account restrictions
 
 - **GC welcome without ever launching:** go-dota2 sends `ClientHello` after `SetPlaying(570)`. The Dota game account
-  (`CSODOTAGameAccountClient` in the SOCache) is created server-side on first contact. REPORTED in 04 §7.1, from the
-  go-dota2#21 walkthrough with a plain account. **UNCERTAIN until probe Q21** (Bot B).
+  (`CSODOTAGameAccountClient` in the SOCache) is created server-side on first contact. **VERIFIED live (Q21):** the never-launched test bot got a
+  welcome with `CSODOTAGameAccountClient` in the SOCache ([09](09-live-probe.md) §3).
 - **EULA:** Dota 2 has no separate third-party EULA beyond the SSA, which was accepted at signup. The SSA can change
   (current revision 2026-09-10). If Steam ever needs a new acceptance, the auth flow says so:
   `PollAuthSessionStatus.agreement_session_url` / `UpdateAuthSessionWithSteamGuardCode.agreement_session_url` →
-  `AuthSessionStateAgreement` (`$GS/auth_session.go:100-102`, `:185-187`). VERIFIED code path. **Handling:** alert
+  `AuthSessionStateAgreement` (`go-steam@336e824f8540/auth_session.go:100-102`, `:185-187`). VERIFIED code path. **Handling:** alert
   the operator, who logs in once in a browser and accepts.
 - **Dota restrictions for new accounts** (all REPORTED, third-party; none mention practice lobbies):
   - Ranked needs a unique phone number and playtime ([Dota wiki](https://dota2.fandom.com/wiki/Matchmaking)). Bots
@@ -304,24 +304,24 @@ Side note from the same issue: authenticators created by SGC before 0.17 are `ve
   - Behaviour and communication score gate voice/text chat below 8000/6000 for new accounts, whose starting score
     is reported as 8000-10000 ([teamsmurf](https://teamsmurf.com/behavior-score-guide/),
     [hawk.live](https://hawk.live/posts/player-behavior-system-reports-dota-2)). If the bot's lobby chat messages
-    vanish, this is a suspect (probe: send a chat line in `create --hold`).
+    vanish, this is a suspect. The fresh test bot's lobby chat replies were delivered ([09](09-live-probe.md) §9).
   - Limited accounts have restricted chat (§1.3).
-  - **Lobby creation with zero playtime:** no restriction found. UNCERTAIN until probe Q21/Q4 on Bot B.
+  - **Lobby creation with zero playtime:** works. VERIFIED live: the test bot, with no playtime, created league lobbies.
 
 ### 4.3 Go sketch: free licence, account-state capture, Steam time offset (VERIFIED compiles)
 
-`/tmp/hl10/freelicense.go` builds and passes `go vet` against go-steam master `v0.0.0-20260922075330-336e824f8540`
-with Go 1.27.1. Running it called `QueryTime` live and printed `steam time offset: -420ms`. Building blocks used
+The helper below builds and passes `go vet` against go-steam master `v0.0.0-20260922075330-336e824f8540`.
+Running it called `QueryTime` live and printed `steam time offset: -420ms`. Building blocks used
 (all VERIFIED):
 
-- `RegisterPacketHandler` (`$GS/client.go:117-121`, `PacketHandler` `:70-72`)
+- `RegisterPacketHandler` (`go-steam@336e824f8540/client.go:117-121`, `PacketHandler` `:70-72`)
 - `GetNextJobId` (`:124-126`), `Write` (`:273`)
-- `protocol.NewClientMsgProtobuf` (`$GS/protocol/msg.go:38`)
-- `Packet.ReadProtoMsg` (`$GS/protocol/packet.go:80`)
+- `protocol.NewClientMsgProtobuf` (`go-steam@336e824f8540/protocol/msg.go:38`)
+- `Packet.ReadProtoMsg` (`go-steam@336e824f8540/protocol/packet.go:80`)
 - `EMsg_ClientRequestFreeLicense = 5572` / `...Response = 5573`, `EMsg_ClientLicenseList = 780`,
-  `EMsg_ClientIsLimitedAccount = 5430` (`$GS/protocol/steamlang/enums.go:1541-1542, 341, 1405`)
+  `EMsg_ClientIsLimitedAccount = 5430` (`go-steam@336e824f8540/protocol/steamlang/enums.go:1541-1542, 341, 1405`)
 - `CMsgClientRequestFreeLicense{appids=2}` / `Response{eresult=1 (default 2), granted_packageids=2,
-  granted_appids=3}` (`$GS/protocol/protobuf/client_server_2.proto:215-223`, Go `client_server_2.pb.go:1081-1121`)
+  granted_appids=3}` (`go-steam@336e824f8540/protocol/protobuf/client_server_2.proto:215-223`, Go `client_server_2.pb.go:1081-1121`)
 
 ```go
 // Register BEFORE Connect so the post-logon pushes (780 licence list, 5430 limited flags) are seen.
@@ -378,8 +378,7 @@ Expected results (UNCERTAIN until run):
 
 Afterwards, `ClientLicenseList` should contain 49307. A proposed `probe license` subcommand would print
 `licenses ∋ {0, 49307, 197846}`, `bis_limited_account`, `AccountFlags & LimitedUser`, then request 570, then
-re-read the licence list. **Run it only on Bot B, and only after Q21 shows whether the GC cares.** If the GC welcomes
-Bot B without the licence, skip the step for all bots.
+re-read the licence list. Q21 showed the GC welcomes a never-launched account, so skip this step unless a bot's welcome fails.
 
 **Store fallback (one-time, human, in the browser session from account creation):** the store endpoint
 `POST https://store.steampowered.com/checkout/addfreelicense` with form fields `action=add_to_cart`, `subid=49307`
@@ -387,7 +386,7 @@ and `sessionid=<the store sessionid cookie>` adds the package. The `sessionid` i
 store cookie ([gist](https://gist.github.com/Pelirrojo/ee9c2c5dfda8ae41aa3950be856e44f2),
 [node-steamstore `addFreeLicense`](https://github.com/DoctorMcKay/node-steamstore)). REPORTED. Doing this headlessly
 would need a store web session from our client token. go-steam's `Web.LogOn` still uses the legacy
-`ISteamUserAuth/AuthenticateUser` nonce flow (`$GS/web.go:69-108`), which is unlikely to work with new tokens, so
+`ISteamUserAuth/AuthenticateUser` nonce flow (`go-steam@336e824f8540/web.go:69-108`), which is unlikely to work with new tokens, so
 there is no headless store path in go-steam today.
 
 ---
@@ -475,7 +474,7 @@ Never paste secrets into chat, tickets or shell history. Use the `$EDITOR` that 
    tick the 13+/SSA box, click the link in the verification email, then set `<acct>` and the password. Do not script
    this (SSA §4.C).
 3. **(Production bots) Lift the limit:** log in to the store as `<acct>` and add US$5 to the Steam Wallet with your
-   card, or redeem a $5 wallet code. Skip this for the deliberately limited test Bot B.
+   card, or redeem a $5 wallet code. Skip this only for a deliberately limited test bot (Q22).
 4. **Link the authenticator, no phone:** `steamguard setup`.
    - Enter `<acct>`, then the password.
    - Enter the **email** Steam Guard code sent to the mailbox (fresh accounts have email Guard).
@@ -513,54 +512,21 @@ Never paste secrets into chat, tickets or shell history. Use the `$EDITOR` that 
 
 After the runbook, the automated checks are the existing probe plan:
 
-- `just probe run <bot> login` (GC welcome; this is Q21 for a never-launched account)
+- `just probe run <bot> login` (GC welcome; works for a never-launched account, Q21)
 - `just probe renew <bot>`
 - the proposed `probe license` from §4.3, only if the welcome fails.
 
 ---
 
-## 7. Proposal: `just secrets import-mafile` (not applied)
+## 7. `just secrets import-mafile`
 
-**Not implemented.** Other agents are editing `just/`. The recipe body was **tested** in `/tmp/hl10/import_test.sh`
-with a dummy maFile and a throwaway age key: values round-trip, the guard file contains no plaintext, and a
-case-insensitive account-name check is included. It requires jq ≥ 1.7, which keeps the 64-bit `steam_id` exact.
-Proposed for `just/secrets.just`:
+Implemented in `just/secrets.just`: it copies `shared_secret` from a steamguard-cli/SDA maFile into the bot's sops
+file and the other fields (identity secret, revocation code, serial, device ID, Steam ID) into
+`secrets/guard/<bot>.sops.yaml`, checks the account name, and never prints a value. It needs jq ≥ 1.7, which keeps
+the 64-bit `steam_id` exact.
 
-```just
-# Import a steamguard-cli/SDA maFile: shared_secret into the bot file, the rest into secrets/guard (never printed)
-[group('secrets')]
-import-mafile name mafile:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    bot={{BOTS_DIR}}/{{name}}.sops.yaml
-    guard=secrets/guard/{{name}}.sops.yaml
-    [[ -f .sops.yaml ]] || { echo "run: just secrets init"; exit 1; }
-    [[ -f "$bot" ]] || { echo "run: just secrets new-bot {{name}}"; exit 1; }
-    jq -e '[.shared_secret, .identity_secret, .revocation_code] | all(type == "string" and length > 0)' "{{mafile}}" >/dev/null \
-        || { echo "{{mafile}}: missing secrets, or the maFile is encrypted (run: steamguard decrypt)"; exit 1; }
-    acct=$(jq -r .account_name "{{mafile}}")
-    user=$(sops decrypt --extract '["STEAM_USER"]' "$bot")
-    [[ "${acct,,}" == "${user,,}" ]] || { echo "{{mafile}} is for $acct, not $user"; exit 1; }
-    jq -c .shared_secret "{{mafile}}" | sops set --value-stdin "$bot" '["STEAM_SHARED_SECRET"]'
-    if [[ ! -f "$guard" ]]; then
-        mkdir -p secrets/guard && chmod 700 secrets/guard
-        printf 'STEAM_ID: ""\n' | sops encrypt --filename-override "$guard" --input-type yaml --output-type yaml /dev/stdin > "$guard"
-        chmod 600 "$guard"
-    fi
-    for k in identity_secret revocation_code serial_number device_id; do
-        jq -c --arg k "$k" '.[$k] // "" | tostring' "{{mafile}}" | sops set --value-stdin "$guard" "[\"STEAM_${k^^}\"]"
-    done
-    jq -c '(.steam_id // .Session.SteamID // "") | tostring' "{{mafile}}" | sops set --value-stdin "$guard" '["STEAM_ID"]'
-    echo "imported {{mafile}} into $bot (STEAM_SHARED_SECRET) and $guard; re-encrypt or delete the maFile"
-```
-
-Companion changes, also proposals:
-
-- `just secrets list` could add a `guard: set/-` column for `secrets/guard/<bot>.sops.yaml`.
-- A `just probe code <bot>` recipe (`sops exec-env` → print the current TOTP) would let the operator log in to the
-  bot's store page without steamguard-cli. It prints a short-lived code, so it is acceptable on a terminal.
-- `tools/probe` should apply the `QueryTime` offset and set `DeviceFriendlyName: "dota_lobby <bot>"`. It currently
-  uses `time.Now()` and `"dota_lobby probe"` (`tools/probe/auth.go:143, 154`).
+Still proposals: a `guard: set/-` column in `just secrets list`, a `just probe code <bot>` recipe that prints the
+current TOTP, and having `tools/probe` apply the `QueryTime` offset and set `DeviceFriendlyName: "dota_lobby <bot>"`.
 
 ---
 
@@ -569,11 +535,11 @@ Companion changes, also proposals:
 | ID | Question | How |
 |---|---|---|
 | H1 | Does `steamguard setup` succeed on a phone-less fresh account in Nov 2026 (email `confirm_type` 3), or does it hit `InvalidState`/`NoVerifiedPhone`? | Runbook step 4 on Bot A/B |
-| H2 | Does `Authenticate` with `DeviceCode` complete with no email/app approval for a version-2 authenticator, from a datacenter IP? | `just probe auth` (Q1) from the deployment host |
+| H2 | Does `Authenticate` with `DeviceCode` complete with no email/app approval from a datacenter IP? | Answered for the probe host (no approval, [09](09-live-probe.md) §2); still to run from the deployment host |
 | H3 | Does Steam send a non-blocking "new sign-in" email on each `Authenticate`? | Watch the bot mailbox |
-| H4 | Does the GC welcome an account that never launched Dota, and does its licence list contain 0/49307/197846? | Probe Q21 plus the proposed `probe license` |
+| H4 | Does the GC welcome an account that never launched Dota, and does its licence list contain 0/49307/197846? | Welcome: yes (Q21, [09](09-live-probe.md) §3). Licence list: the proposed `probe license` |
 | H5 | Does `ClientRequestFreeLicense{570}` answer, or hang as `app_license_request 570` reportedly does? | `probe license` with a 20 s timeout |
-| H6 | Can a limited account create/invite/be league admin, and does its lobby chat show up? | Probe Bot B (Q13) |
+| H6 | Can a limited account create/invite/be league admin, and does its lobby chat show up? | A limited test bot (Q13, Q22) |
 | H7 | Can several bots share one email address (a second signup with the same email)? | Account creation for bot 2 |
 | H8 | Are refresh tokens bound to the minting IP? | Mint on a laptop, use on the server (gap-01 §7) |
 
@@ -581,14 +547,13 @@ Companion changes, also proposals:
 
 ## Sources
 
-### Local (VERIFIED)
+### Module and repo source (VERIFIED)
 
-- `$GS/auth_session.go:20-149, 175-243`, `$GS/auth-token.go:12-17`, `$GS/logon-details.go:10-39`, `$GS/auth.go:118`
-- `$GS/client.go:70-72, 117-126, 273`, `$GS/web.go:69-108`, `$GS/protocol/msg.go:38`, `$GS/protocol/packet.go:80`
-- `$GS/protocol/steamlang/enums.go:341, 1405, 1541-1542, 4235`
-- `$GS/protocol/protobuf/client_server.proto:168-198`, `client_server_2.proto:215-223`, `client_server_2.pb.go:1081-1121`
+- `go-steam@336e824f8540/auth_session.go:20-149, 175-243`, `go-steam@336e824f8540/auth-token.go:12-17`, `go-steam@336e824f8540/logon-details.go:10-39`, `go-steam@336e824f8540/auth.go:118`
+- `go-steam@336e824f8540/client.go:70-72, 117-126, 273`, `go-steam@336e824f8540/web.go:69-108`, `go-steam@336e824f8540/protocol/msg.go:38`, `go-steam@336e824f8540/protocol/packet.go:80`
+- `go-steam@336e824f8540/protocol/steamlang/enums.go:341, 1405, 1541-1542, 4235`
+- `go-steam@336e824f8540/protocol/protobuf/client_server.proto:168-198`, `client_server_2.proto:215-223`, `client_server_2.pb.go:1081-1121`
 - `tools/probe/auth.go:22-41, 136-180`, `just/secrets.just:1-67`, `just/probe.just:20-29`, `.gitignore:40-44`
-- Scratch: `/tmp/hl10/freelicense.go` (go build plus go vet OK; live QueryTime), `/tmp/hl10/import_test.sh` (sops round-trip with dummy data)
 
 ### Upstream code (read via `gh api`, `master`)
 
