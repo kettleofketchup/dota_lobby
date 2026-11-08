@@ -43,6 +43,7 @@ type Store interface {
 	List(ctx context.Context, f store.LobbyFilter) ([]store.LobbyRow, error)
 	Players(ctx context.Context, lobbyID string) ([]store.PlayerRow, error)
 	ActiveLobbies(ctx context.Context) ([]store.LobbyRow, error)
+	Events(ctx context.Context, lobbyID string, after int64, limit int) ([]store.EventRow, error)
 	Sweep(ctx context.Context, cutoff time.Time) (int, error)
 }
 
@@ -326,7 +327,7 @@ func (m *Manager) commitHold(e *entry, change func(l *Lobby) ([]newEvent, error)
 	for i, ev := range evs {
 		l.Seq++
 		events[i] = Event{ID: "evt_" + m.ids.next(now), LobbyID: l.ID, Seq: l.Seq, Type: ev.Type, OccurredAt: now, Data: ev.Data}
-		if rows[i], err = eventRow(events[i]); err != nil {
+		if rows[i], err = eventRow(l, events[i]); err != nil {
 			e.mu.Unlock()
 			return old, nil, err
 		}
@@ -618,7 +619,7 @@ func (m *Manager) insert(ctx context.Context, spec Spec) (Lobby, error) {
 	if err != nil {
 		return Lobby{}, err
 	}
-	evRow, err := eventRow(ev)
+	evRow, err := eventRow(l, ev)
 	if err != nil {
 		return Lobby{}, err
 	}

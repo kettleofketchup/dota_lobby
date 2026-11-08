@@ -1322,11 +1322,19 @@ func TestLobbiesNeverLeakPassKey(t *testing.T) {
 	hooked, _ := json.Marshal(h.rec.events)
 	h.rec.mu.Unlock()
 	row, _ := h.db.Lobbies().Get(context.Background(), l.ID)
+	envs, err := h.m.Events(context.Background(), l.ID, 0, MaxEventsPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enveloped, _ := json.Marshal(envs)
 	for _, secret := range []string{testPassword, "n3w-secret"} {
 		for _, ev := range evs {
-			if strings.Contains(string(ev.Data), secret) {
+			if strings.Contains(string(ev.Data), secret) || strings.Contains(string(ev.Lobby), secret) {
 				t.Errorf("stored event %s has the password", ev.Type)
 			}
+		}
+		if strings.Contains(string(enveloped), secret) {
+			t.Error("event envelopes contain the password")
 		}
 		for name, s := range map[string]string{"hooks": string(hooked), "logs": h.logs.String(),
 			"spec column": string(row.Spec), "details column": string(row.Details)} {
