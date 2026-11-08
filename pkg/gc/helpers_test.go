@@ -47,6 +47,9 @@ type fakeTransport struct {
 
 	mu       sync.Mutex
 	handlers []steam.GCPacketHandler
+	// onGamesPlayed sees every SetGamesPlayed, the wire write behind
+	// SetPlaying.
+	onGamesPlayed func(ids []uint64)
 }
 
 func newFakeTransport() *fakeTransport {
@@ -62,7 +65,14 @@ func (f *fakeTransport) SteamID() steamid.SteamId { return steamid.SteamId(f.ste
 
 func (f *fakeTransport) Write(m gamecoordinator.IGCMsg) { f.writes <- m }
 
-func (f *fakeTransport) SetGamesPlayed(...uint64) {}
+func (f *fakeTransport) SetGamesPlayed(ids ...uint64) {
+	f.mu.Lock()
+	hook := f.onGamesPlayed
+	f.mu.Unlock()
+	if hook != nil {
+		hook(ids)
+	}
+}
 
 func (f *fakeTransport) RegisterPacketHandler(h steam.GCPacketHandler) {
 	f.mu.Lock()

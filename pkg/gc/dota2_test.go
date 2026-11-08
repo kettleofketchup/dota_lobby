@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -659,5 +660,97 @@ func TestCredentialsRedact(t *testing.T) {
 		if strings.Contains(s, "SECRET") {
 			t.Errorf("secret leaked: %s", s)
 		}
+	}
+}
+
+// SetPlaying(false) is queued for playLoop, and Disconnect used to cancel the
+// connection at once, so the stop announcement was usually never sent.
+func TestDisconnectFlushesSetPlayingFalse(t *testing.T) {
+	tests := []struct {
+		name string
+		play func(a *Adapter)
+		// wantSent is whether a stop announcement (SetGamesPlayed with no
+		// games) must reach the transport while the connection is still open.
+		wantSent bool
+	}{
+		{"pending SetPlaying(false)", func(a *Adapter) { a.SetPlaying(false) }, true},
+		{"nothing pending", func(*Adapter) {}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ft := newFakeTransport()
+			a := newTestAdapter(t, ft)
+			connectWelcomed(t, a, ft)
+			c := a.current()
+			var mu sync.Mutex
+			var stops, stopsOpen int
+			ft.mu.Lock()
+			ft.onGamesPlayed = func(ids []uint64) {
+				mu.Lock()
+				defer mu.Unlock()
+				if len(ids) == 0 {
+					stops++
+					if c.ctx.Err() == nil {
+						stopsOpen++
+					}
+				}
+			}
+			ft.mu.Unlock()
+
+			tt.play(a)
+			a.Disconnect()
+
+			mu.Lock()
+			defer mu.Unlock()
+			if tt.wantSent && (stops != 1 || stopsOpen != 1) {
+				t.Errorf("stop announcements = %d, sent before close = %d; want 1 and 1", stops, stopsOpen)
+			}
+			if !tt.wantSent && stops != 0 {
+				t.Errorf("stop announcements = %d, want none", stops)
+			}
+		})
+	}
+}
+
+// With the pump wedged the flush must give up, not hang the caller of
+// Disconnect (the supervisor's run loop, which is what drains Events()).
+func TestDisconnectFlushIsBounded(t *testing.T) {
+	ft := newFakeTransport()
+	a := newTestAdapter(t, ft)
+	a.opts.PlayFlushTimeout = 50 * time.Millisecond
+	connectWelcomed(t, a, ft)
+	c := a.current()
+
+	status := protocol.GCConnectionStatus_GCConnectionStatus_HAVE_SESSION
+	go func() {
+		for range EventBuffer + cap(c.dota) + 8 {
+			select {
+			case c.dota <- &devents.GCConnectionStatusChanged{OldState: status, NewState: status}:
+			case <-c.stop:
+				return
+			}
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(a.events) < EventBuffer || len(c.dota) < cap(c.dota) {
+		if time.Now().After(deadline) {
+			t.Fatalf("buffers not full: events %d dota %d", len(a.events), len(c.dota))
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	a.SetPlaying(false)
+	done := make(chan struct{})
+	go func() {
+		a.Disconnect()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Disconnect blocked on a pending SetPlaying(false)")
+	}
+	if c.ctx.Err() == nil {
+		t.Error("connection not cancelled")
 	}
 }

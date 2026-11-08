@@ -37,6 +37,9 @@ type Options struct {
 	LeaveTimeout time.Duration
 	// DestroyTimeout bounds the destroy of a stale lobby we lead; 0 means 10 s.
 	DestroyTimeout time.Duration
+	// PlayFlushTimeout bounds how long Disconnect waits for a pending
+	// SetPlaying(false) to be sent before it closes the connection; 0 means 1 s.
+	PlayFlushTimeout time.Duration
 }
 
 // Adapter is the Client backed by go-steam and go-dota2. Create one per bot
@@ -77,6 +80,9 @@ func New(opts Options) *Adapter {
 	}
 	if opts.DestroyTimeout <= 0 {
 		opts.DestroyTimeout = 10 * time.Second
+	}
+	if opts.PlayFlushTimeout <= 0 {
+		opts.PlayFlushTimeout = time.Second
 	}
 	return &Adapter{
 		opts:         opts,
@@ -148,6 +154,9 @@ type conn struct {
 	// and playKick wakes playLoop to apply it.
 	wantPlay atomic.Int32
 	playKick chan struct{}
+	// playMu serializes applyPlay, so Disconnect can wait for a request
+	// playLoop has already taken.
+	playMu sync.Mutex
 }
 
 const (
@@ -164,12 +173,40 @@ func (c *conn) playLoop() {
 	for {
 		select {
 		case <-c.playKick:
-			if v := c.wantPlay.Swap(playNone); v != playNone {
-				c.d.SetPlaying(v == playOn)
-			}
+			c.applyPlay()
 		case <-c.stop:
 			return
 		}
+	}
+}
+
+// applyPlay sends the latest pending SetPlaying request, if any.
+func (c *conn) applyPlay() {
+	c.playMu.Lock()
+	defer c.playMu.Unlock()
+	if v := c.wantPlay.Swap(playNone); v != playNone {
+		c.d.SetPlaying(v == playOn)
+	}
+}
+
+// flushPlay sends a pending SetPlaying request on the caller's goroutine
+// before the socket closes, so SetPlaying(false) reaches Steam on a graceful
+// stop. go-dota2 emits a status change before it writes, and that emit waits
+// for the pump, which may be waiting for the caller to drain Events(); that
+// is why SetPlaying is asynchronous. So the flush runs on its own goroutine
+// and the wait is bounded: when the pump is stuck the request is dropped and
+// the connection closes anyway.
+func (c *conn) flushPlay(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.applyPlay()
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
 	}
 }
 
@@ -245,10 +282,12 @@ func (a *Adapter) Connect(ctx context.Context, creds Credentials) error {
 	return nil
 }
 
-// Disconnect implements Client. Cancelling the connection context covers
-// both a dial in progress and an open socket.
+// Disconnect implements Client. It first flushes a pending SetPlaying
+// request, for at most Options.PlayFlushTimeout, then cancels the connection
+// context, which covers both a dial in progress and an open socket.
 func (a *Adapter) Disconnect() {
 	if c := a.current(); c != nil {
+		c.flushPlay(a.opts.PlayFlushTimeout)
 		c.cancel()
 	}
 }
