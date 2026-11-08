@@ -46,3 +46,14 @@ func TestClaimsSummaryOmitsToken(t *testing.T) {
 		t.Fatal("expected an error entry for a non-JWT")
 	}
 }
+
+// Known-answer vector from steamguard-cli (steamguard/src/token.rs, test_generate_code).
+func TestSteamTOTPKnownAnswer(t *testing.T) {
+	got, err := steamTOTP("zvIayp3JPvtvX/QGHqsqKBk/44s=", time.Unix(1616374841, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "2F9J5" {
+		t.Fatalf("got %q, want 2F9J5", got)
+	}
+}

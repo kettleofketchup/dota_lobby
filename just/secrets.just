@@ -65,3 +65,30 @@ list:
 [group('secrets')]
 set-stdin name key:
     sops set --value-stdin {{BOTS_DIR}}/{{name}}.sops.yaml '["{{key}}"]'
+
+# Import a steamguard-cli maFile: shared_secret into the bot file, recovery fields into secrets/guard (never printed)
+[group('secrets')]
+import-mafile name mafile:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bot={{BOTS_DIR}}/{{name}}.sops.yaml
+    guard=secrets/guard/{{name}}.sops.yaml
+    [[ -f .sops.yaml ]] || { echo "run: just secrets init"; exit 1; }
+    [[ -f "$bot" ]] || { echo "run: just secrets new-bot {{name}}"; exit 1; }
+    jq -e '[.shared_secret, .identity_secret, .revocation_code] | all(type == "string" and length > 0)' "{{mafile}}" >/dev/null \
+        || { echo "{{mafile}}: missing secrets, or the maFile is encrypted (run: steamguard decrypt)"; exit 1; }
+    acct=$(jq -r .account_name "{{mafile}}")
+    user=$(sops decrypt --extract '["STEAM_USER"]' "$bot")
+    [[ "${acct,,}" == "${user,,}" ]] || { echo "{{mafile}} is for $acct, not $user"; exit 1; }
+    jq -c .shared_secret "{{mafile}}" | sops set --value-stdin "$bot" '["STEAM_SHARED_SECRET"]'
+    if [[ ! -f "$guard" ]]; then
+        mkdir -p secrets/guard && chmod 700 secrets/guard
+        printf 'STEAM_ID: ""\n' | sops encrypt --filename-override "$guard" --input-type yaml --output-type yaml /dev/stdin > "$guard"
+        chmod 600 "$guard"
+    fi
+    # The service never loads secrets/guard; these are only for recovery and support.
+    for k in identity_secret revocation_code serial_number device_id; do
+        jq -c --arg k "$k" '.[$k] // "" | tostring' "{{mafile}}" | sops set --value-stdin "$guard" "[\"STEAM_${k^^}\"]"
+    done
+    jq -c '(.steam_id // .Session.SteamID // "") | tostring' "{{mafile}}" | sops set --value-stdin "$guard" '["STEAM_ID"]'
+    echo "imported into $bot (STEAM_SHARED_SECRET) and $guard; now run: steamguard encrypt (or delete the maFile)"

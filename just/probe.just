@@ -42,6 +42,11 @@ renew bot: build
         echo "no new token issued"
     fi
 
+# Print the bot's current Steam Guard code, e.g. to log in to its store page in a browser
+[group('probe')]
+code bot: build
+    sops exec-env {{BOTS_DIR}}/{{bot}}.sops.yaml 'bin/probe code -state probe-state/{{bot}}'
+
 # Run any probe command as a bot, e.g. `just probe run bot-a create -league 123 -hold`
 [group('probe')]
 [positional-arguments]

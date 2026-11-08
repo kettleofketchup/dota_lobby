@@ -177,3 +177,17 @@ func cmdAuth(ctx context.Context, c *config, rep *reporter) error {
 	})
 	return nil
 }
+
+// cmdCode prints the current Steam Guard code, for logging in to the bot's
+// account in a browser. Codes are valid for 30 seconds.
+func cmdCode(_ context.Context, c *config, _ *reporter) error {
+	if c.sharedSecret == "" {
+		return errors.New("STEAM_SHARED_SECRET is not set")
+	}
+	code, err := steamTOTP(c.sharedSecret, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Println(code)
+	return nil
+}

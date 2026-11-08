@@ -47,6 +47,7 @@ commands:
   login     token login to GC welcome; --renew tries CM renewal (Q1, Q12)
   leagues   list leagues this account administers via 7633/7634 (Q2, Q18)
   create    create a lobby and record the GC's answer (Q4, Q6, Q7, Q19)
+  code      print the current Steam Guard code from STEAM_SHARED_SECRET
 
 env: STEAM_USER, STEAM_PASS (auth only), STEAM_SHARED_SECRET,
      STEAM_REFRESH_TOKEN (instead of the token file; set by sops exec-env)
@@ -63,6 +64,7 @@ func main() {
 		"login":   cmdLogin,
 		"leagues": cmdLeagues,
 		"create":  cmdCreate,
+		"code":    cmdCode,
 	}[cmd]
 	if !ok {
 		fmt.Fprintln(os.Stderr, usage)
