@@ -32,6 +32,8 @@ config.yaml
 config.yml
 secrets.*
 !secrets.yaml.example
+# the just module that manages the sops files is not a secret
+!just/secrets.just
 bin/
 
 # Editor/IDE
@@ -45,3 +47,10 @@ site/
 # Local binary and container config directory
 /dota_lobby
 /config/
+
+# Probe tokens, captures and reports
+probe-state/
+
+# Local sops secrets: the generated .sops.yaml and encrypted files stay on this machine
+.sops.yaml
+secrets/

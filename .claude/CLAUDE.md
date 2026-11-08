@@ -11,7 +11,9 @@ dota_lobby/
 ├── cmd/dota_lobby/      # Application entry point
 ├── pkg/
 │   ├── api/             # HTTP API server (handlers, middleware)
-│   ├── bot/             # Bot manager and Steam client handling
+│   ├── auth/            # Token store, TOTP, EResult classifier, state-dir lock
+│   ├── bot/             # Per-bot supervisor, GC worker, manager
+│   ├── gc/              # Only importer of go-steam/go-dota2 (+ fake/)
 │   └── config/          # Configuration loading with Viper
 ```
 
@@ -45,20 +47,21 @@ make clean    # Clean build artifacts
 
 ## Configuration Files
 
-- `config.yaml` - Application settings (host, port, api_key)
-- `secrets.yaml` - Steam bot credentials (**never commit**)
+- `config.yaml` - Application settings (host, port, state_dir, bots)
+- `secrets.yaml` - API key and Steam bot credentials (**never commit**)
 - `.golangci.yml` - Linter configuration
 
 ## API Endpoints
 
 | Method | Endpoint | Auth Required | Description |
 |--------|----------|---------------|-------------|
-| GET | /health | No | Health check |
-| GET | /bots | Yes* | Bot status |
-| POST | /lobby/create | Yes* | Create lobby |
-| GET/POST | /lobby/info | Yes* | Lobby info |
+| GET | /livez | No | Liveness (process + bot loop watchdog) |
+| GET | /readyz | No | Readiness (min_ready_bots in gc_ready, not draining) |
+| GET | /health | No | Detailed health, always 200 |
+| GET | /v1/bots, /v1/bots/{name} | Yes* | Bot states |
+| any | /v1/lobbies/... | Yes* | 501 until Phase 3 |
 
-*Only if `server.api_key` is configured
+*Only if `secrets.api_key` is configured
 
 ## Testing Notes
 
