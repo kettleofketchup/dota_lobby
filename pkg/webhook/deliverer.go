@@ -105,7 +105,7 @@ type hook struct {
 	secret      []byte
 	tokenHeader string
 	token       config.Secret
-	// name is the URL without query or user info, for logs.
+	// name is the URL without user info, query or fragment, for logs.
 	name string
 }
 
