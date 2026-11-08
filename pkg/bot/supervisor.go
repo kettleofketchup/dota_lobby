@@ -109,7 +109,10 @@ type Supervisor struct {
 	authGen     uint64
 	renewCancel context.CancelFunc
 	renewGen    uint64
-	beatTimer   Timer
+	// adoptRenew is set when startAuth found a renewal in flight: its
+	// result is then the logon path's Authenticate result.
+	adoptRenew bool
+	beatTimer  Timer
 
 	// Background renewal's own failure policy, also owned by the run
 	// goroutine. renewBlocked is the error that stopped renewal for good
@@ -274,9 +277,24 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 	return err
 }
 
+// ErrBusy is returned by Retry when the run loop did not take the request
+// before ctx ended, e.g. because it is wedged with a full input queue.
+var ErrBusy = errors.New("bot: run loop busy")
+
 // Retry asks a bot in needs_attention, backoff or cooling_down to try again
-// now, e.g. after an operator fixed its credentials.
-func (s *Supervisor) Retry() { s.push(Retry{}) }
+// now, e.g. after an operator fixed its credentials. It gives up with
+// ErrBusy (wrapping ctx's error) when the input queue stays full until ctx
+// ends. Retrying a stopped bot is a no-op.
+func (s *Supervisor) Retry(ctx context.Context) error {
+	select {
+	case s.inputs <- Retry{}:
+		return nil
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: retry %s: %w", ErrBusy, s.bot.Name, ctx.Err())
+	}
+}
 
 // push delivers an input to the run goroutine unless it has exited.
 func (s *Supervisor) push(in Input) {
@@ -385,7 +403,7 @@ func (s *Supervisor) handle(in Input) {
 		// A rate-limit pause can start after this slot was booked; the
 		// slot then waits out the pause like a fresh Reserve would.
 		if v.Kind == TimerSlot && v.Gen == s.snap.TimerGen && s.snap.Timer == TimerSlot {
-			if d := s.gate.Recheck(s.clock.Now()); d > 0 {
+			if d := s.gate.Recheck(s.bot.Name, s.clock.Now()); d > 0 {
 				s.armTimer(TimerSlot, d, v.Gen)
 				return
 			}
@@ -472,7 +490,7 @@ func (s *Supervisor) setTokenExpiry(t time.Time) {
 func (s *Supervisor) exec(a Action) Input {
 	switch a := a.(type) {
 	case AwaitSlot:
-		d := s.gate.Reserve(s.clock.Now())
+		d := s.gate.Reserve(s.bot.Name, s.clock.Now())
 		if d <= 0 {
 			return TimerFired{Kind: TimerSlot, Gen: a.Gen}
 		}
@@ -486,7 +504,7 @@ func (s *Supervisor) exec(a Action) Input {
 	case Authenticate:
 		s.startAuth()
 	case DeleteToken:
-		if err := s.store.Delete(); err != nil {
+		if err := s.store.DeleteRejected(); err != nil {
 			s.log.Error("delete dead token", "err", err)
 		}
 		s.setTokenExpiry(time.Time{})
@@ -537,16 +555,22 @@ func (s *Supervisor) connect() error {
 }
 
 // startAuth runs Authenticate off the run goroutine (it is HTTP and may
-// take a while); an authDone reports back. An in-flight renewal is
-// cancelled first: two auth sessions would submit the same TOTP code, and
-// Steam rejects the second (88).
+// take a while); an authDone reports back. An in-flight renewal is adopted
+// instead of cancelled or duplicated: two auth sessions would submit the
+// same TOTP code, and Steam rejects the second (88), while cancelling the
+// first would throw away a result that is about to arrive. The renewal's
+// outcome then answers this Authenticate.
 func (s *Supervisor) startAuth() {
-	s.cancelRenew()
 	if s.authCancel != nil {
 		s.authCancel()
+		s.authCancel = nil
 	}
 	s.authGen++
 	gen := s.authGen
+	if s.renewCancel != nil {
+		s.adoptRenew = true
+		return
+	}
 	if s.renewBlocked != nil && s.renewReason == auth.ReasonBadCredential {
 		// Steam already refused this password; submitting it again is what
 		// gets an IP throttled. Fail the same way until an operator retries.
@@ -563,14 +587,6 @@ func (s *Supervisor) startAuth() {
 	}()
 }
 
-func (s *Supervisor) cancelRenew() {
-	if s.renewCancel != nil {
-		s.renewCancel()
-		s.renewCancel = nil
-	}
-	s.renewGen++
-}
-
 // authFinished saves the token of a current authDone on the run goroutine,
 // so a save can never interleave with DeleteToken. For a startAuth result
 // it returns the AuthResult to feed to next.
@@ -581,6 +597,10 @@ func (s *Supervisor) authFinished(d authDone) (Input, bool) {
 		}
 		s.renewCancel = nil
 		s.renewGen++
+		if s.adoptRenew {
+			s.adoptRenew = false
+			return s.authResult(d), true
+		}
 		if d.err != nil {
 			s.renewFailed(d.err)
 			return nil, false
@@ -589,6 +609,9 @@ func (s *Supervisor) authFinished(d authDone) (Input, bool) {
 			s.log.Warn("token renewal failed; will retry", "err", err)
 			return nil, false
 		}
+		// The renewed token is what the next logon must use, not a fresh
+		// password Authenticate.
+		s.snap.HasToken = true
 		s.clearRenewBlock()
 		return nil, false
 	}
@@ -596,13 +619,19 @@ func (s *Supervisor) authFinished(d authDone) (Input, bool) {
 		return nil, false
 	}
 	s.authCancel = nil
+	return s.authResult(d), true
+}
+
+// authResult saves the token of a finished logon-path Authenticate and
+// returns the AuthResult for next.
+func (s *Supervisor) authResult(d authDone) Input {
 	if d.err == nil {
 		d.err = s.saveToken(d.tok)
 		if d.err == nil {
 			s.clearRenewBlock() // the credentials work
 		}
 	}
-	return AuthResult{Err: d.err}, true
+	return AuthResult{Err: d.err}
 }
 
 func (s *Supervisor) saveToken(tok auth.Token) error {
@@ -634,27 +663,31 @@ func (s *Supervisor) authenticate(ctx context.Context) (auth.Token, error) {
 	return auth.FromMinted(raw, s.clock.Now()), nil
 }
 
-func (s *Supervisor) scheduleRenew() {
-	if s.renewTimer != nil {
-		s.renewTimer.Stop()
-	}
-	s.renewTimer = s.clock.AfterFunc(s.opts.RenewCheck, func() { s.push(renewTick{}) })
-}
+func (s *Supervisor) scheduleRenew() { s.scheduleRenewIn(s.opts.RenewCheck) }
 
 // maybeRenew re-authenticates in the background when the stored token is
 // close to expiry. The connection is untouched: the new token is used at the
 // next logon.
+//
+// It only runs in gc_ready with a token that has not yet expired. In any
+// other state the logon path may authenticate by itself, and two sessions in
+// one 30 s window would submit the same TOTP code, which Steam answers with
+// 88. A bot that is not ready gets its renewal when it reaches gc_ready; if
+// the token expires first, the logon path authenticates and mints a fresh
+// one. A renewal already in flight when the logon path needs to authenticate
+// is adopted by startAuth.
 func (s *Supervisor) maybeRenew() {
 	switch {
 	case s.renewCancel != nil, !s.bot.Credentials.Headless():
 		return
 	case s.renewBlocked != nil, s.clock.Now().Before(s.renewNotBefore):
 		return
-	case s.snap.State == StateAuthenticating, s.snap.State == StateStopped:
+	case s.snap.State != StateGCReady:
 		return
 	}
+	now := s.clock.Now()
 	tok, err := s.store.Load()
-	if err != nil || !tok.ExpiresWithin(s.clock.Now(), s.opts.RenewBefore) {
+	if err != nil || tok.Expired(now) || !tok.ExpiresWithin(now, s.opts.RenewBefore) {
 		return
 	}
 	s.log.Info("refresh token expires soon; renewing", "token", tok)

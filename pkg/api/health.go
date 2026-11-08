@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"time"
+
+	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 )
 
 // Liveness must not depend on Steam or the GC: a Steam outage would turn
@@ -27,8 +29,9 @@ type readiness struct {
 	MinReadyBots int    `json:"min_ready_bots"`
 }
 
-func (s *Server) readiness() readiness {
-	sts := s.opts.Bots.Statuses()
+// readiness derives readiness from one snapshot of the bots' statuses, so
+// callers that also count states see the same instant.
+func (s *Server) readiness(sts []bot.Status) readiness {
 	r := readiness{
 		Draining:     s.draining.Load(),
 		BotsTotal:    len(sts),
@@ -51,7 +54,7 @@ func (s *Server) readiness() readiness {
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
-	r := s.readiness()
+	r := s.readiness(s.opts.Bots.Statuses())
 	status := http.StatusOK
 	if r.Status != "ready" {
 		status = http.StatusServiceUnavailable
@@ -78,9 +81,10 @@ type healthBody struct {
 // body.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	now := s.opts.Now()
-	r := s.readiness()
+	sts := s.opts.Bots.Statuses()
+	r := s.readiness(sts)
 	states := map[string]int{}
-	for _, st := range s.opts.Bots.Statuses() {
+	for _, st := range sts {
 		states[string(st.State)]++
 	}
 	writeJSON(w, http.StatusOK, healthBody{

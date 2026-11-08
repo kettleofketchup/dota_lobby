@@ -158,14 +158,18 @@ func (m *Manager) Supervisor(name string) (*Supervisor, bool) {
 	return s, ok
 }
 
+// ErrUnknownBot is returned for a bot name that is not configured.
+var ErrUnknownBot = errors.New("bot: unknown bot")
+
 // Retry asks the named bot to try again now (see Supervisor.Retry). It
-// reports false when there is no such bot.
-func (m *Manager) Retry(name string) bool {
+// returns ErrUnknownBot when there is no such bot and ErrBusy when the
+// bot's run loop does not take the request before ctx ends.
+func (m *Manager) Retry(ctx context.Context, name string) error {
 	s, ok := m.Supervisor(name)
-	if ok {
-		s.Retry()
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownBot, name)
 	}
-	return ok
+	return s.Retry(ctx)
 }
 
 // Stalled returns the names of bots whose run loop has not made progress

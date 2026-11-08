@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"cmp"
 	"errors"
 	"time"
 
@@ -121,9 +122,9 @@ const (
 // filling zero values with the documented defaults.
 func ParamsFromConfig(steam config.SteamConfig, gcc config.GCConfig) Params {
 	p := Params{
-		BackoffMin:        orDefault(steam.ReconnectBackoffMin, 5*time.Second),
-		BackoffMax:        orDefault(steam.ReconnectBackoffMax, 5*time.Minute),
-		HelloInterval:     orDefault(gcc.HelloInterval, 10*time.Second),
+		BackoffMin:        cmp.Or(steam.ReconnectBackoffMin, 5*time.Second),
+		BackoffMax:        cmp.Or(steam.ReconnectBackoffMax, 5*time.Minute),
+		HelloInterval:     cmp.Or(gcc.HelloInterval, 10*time.Second),
 		LogonTimeout:      DefaultLogonTimeout,
 		DisconnectTimeout: DefaultDisconnectTimeout,
 		SettleDelay:       DefaultSettleDelay,
@@ -138,13 +139,6 @@ func ParamsFromConfig(steam config.SteamConfig, gcc config.GCConfig) Params {
 	p.HelloMax = max(DefaultHelloMax, p.HelloInterval)
 	p.BackoffMax = max(p.BackoffMax, p.BackoffMin)
 	return p
-}
-
-func orDefault(d, def time.Duration) time.Duration {
-	if d > 0 {
-		return d
-	}
-	return def
 }
 
 // Snapshot is the supervisor's whole state. next takes one and returns the
@@ -497,6 +491,14 @@ func (st *step) stop() {
 	}
 	if st.s.Conn {
 		st.do(Disconnect{})
+		if st.s.Abandoned != 0 && st.s.Abandoned == st.s.ConnSeq {
+			// Already given up on: its Disconnected is not coming for us.
+			st.s.Conn = false
+		} else {
+			// The run loop exits once the connection is gone; the timer
+			// covers a Disconnected that never comes.
+			st.arm(TimerDisconnect, st.s.Params.DisconnectTimeout)
+		}
 	}
 	st.enter(StateStopped, ReasonShutdown)
 }
@@ -519,11 +521,16 @@ func (st *step) timer(kind TimerKind) {
 		// Disconnected never came. Decide anyway; Conn stays set, so the
 		// next Connect fails with ErrAlreadyConnected and tries again, and
 		// the late Disconnected is recognised as this connection's.
-		if s.State.online() {
+		switch {
+		case s.State.online():
 			if s.Conn {
 				s.Abandoned = s.ConnSeq
 			}
 			st.connectionGone()
+		case s.State == StateStopped && s.Conn:
+			// Stopping: stop waiting; a late Disconnected is recognised
+			// as this connection's.
+			s.Abandoned, s.Conn = s.ConnSeq, false
 		}
 	case TimerSettle:
 		if s.State == StateSteamOnline {
@@ -709,7 +716,7 @@ func (st *step) event(ev gc.Event) {
 		if ev.Blocked && s.State.online() {
 			st.dropConn(auth.Policy{
 				Action:   auth.ActionCoolDown,
-				Cooldown: orDefault(s.Params.Classifier.CooldownElsewhere, auth.DefaultCooldownElsewhere),
+				Cooldown: s.Params.Classifier.ElsewhereCooldown(),
 				Reason:   ReasonBlockedElsewhere,
 			}, true)
 		}

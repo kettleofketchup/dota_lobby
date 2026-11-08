@@ -461,11 +461,11 @@ func TestNext(t *testing.T) {
 
 		// --- stop and retry ---
 		{name: "stop while ready", s: snap(StateGCReady), in: Stop{},
-			wantState: StateStopped, wantReason: ReasonShutdown, wantActs: []string{"stop_timer", "set_playing(false)", "disconnect"}},
+			wantState: StateStopped, wantReason: ReasonShutdown, wantActs: []string{"stop_timer", "set_playing(false)", "disconnect", "timer(disconnect,30s)"}},
 		{name: "stop while backing off", s: snap(StateBackoff), in: Stop{},
 			wantState: StateStopped, wantReason: ReasonShutdown, wantActs: []string{"stop_timer"}},
 		{name: "stop before playing", s: snap(StateSteamOnline), in: Stop{},
-			wantState: StateStopped, wantReason: ReasonShutdown, wantActs: []string{"stop_timer", "disconnect"}},
+			wantState: StateStopped, wantReason: ReasonShutdown, wantActs: []string{"stop_timer", "disconnect", "timer(disconnect,30s)"}},
 		{name: "retry from needs attention", s: snap(StateNeedsAttention, func(s *Snapshot) { s.Retries, s.ReauthTried, s.Attempt = 3, true, 4 }), in: Retry{},
 			wantState: StateConnecting, wantActs: []string{"await_slot"},
 			check: func(t *testing.T, s Snapshot) {
@@ -679,5 +679,52 @@ func TestBackoffCeilingDoesNotOverflow(t *testing.T) {
 				t.Errorf("max delay %s, want the jitter spread over BackoffMax", maxSeen)
 			}
 		})
+	}
+}
+
+func TestStop(t *testing.T) {
+	tests := []struct {
+		name     string
+		s        Snapshot
+		wantActs []string
+		wantConn bool
+	}{
+		{
+			name: "live connection waits for Disconnected under a timer", s: snap(StateGCReady, func(s *Snapshot) { s.ConnSeq = 3 }),
+			wantActs: []string{"stop_timer", "set_playing(false)", "disconnect", "timer(disconnect,30s)"}, wantConn: true,
+		},
+		{
+			name: "abandoned connection counts as gone", s: snap(StateBackoff, func(s *Snapshot) { s.Conn, s.ConnSeq, s.Abandoned = true, 3, 3 }),
+			wantActs: []string{"stop_timer", "disconnect"}, wantConn: false,
+		},
+		{
+			name: "no connection", s: snap(StateBackoff),
+			wantActs: []string{"stop_timer"}, wantConn: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, acts := next(tt.s, Stop{})
+			if got.State != StateStopped || got.Conn != tt.wantConn {
+				t.Errorf("state %s conn %v, want stopped conn %v", got.State, got.Conn, tt.wantConn)
+			}
+			if d := describe(acts); !slices.Equal(d, tt.wantActs) {
+				t.Errorf("actions %v, want %v", d, tt.wantActs)
+			}
+		})
+	}
+}
+
+// A stopping bot whose Disconnected never arrives stops waiting when the
+// disconnect timer fires, and a late Disconnected changes nothing.
+func TestStopDisconnectTimeout(t *testing.T) {
+	s, _ := next(snap(StateGCReady, func(s *Snapshot) { s.ConnSeq = 3 }), Stop{})
+	s, _ = next(s, TimerFired{Kind: TimerDisconnect, Gen: s.TimerGen})
+	if s.State != StateStopped || s.Conn || s.Abandoned != 3 {
+		t.Fatalf("after timeout: state %s conn %v abandoned %d", s.State, s.Conn, s.Abandoned)
+	}
+	s, _ = next(s, Event{Event: gc.Disconnected{Conn: 3}})
+	if s.State != StateStopped || s.Conn {
+		t.Errorf("late Disconnected: state %s conn %v", s.State, s.Conn)
 	}
 }

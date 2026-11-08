@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,23 +22,31 @@ type fakeBots struct {
 	statuses []bot.Status
 	stalled  []string
 	retried  []string
+	// retryErr, when set, is what Retry returns for a known bot.
+	retryErr error
+	// statusCalls counts Statuses calls.
+	statusCalls int
 }
 
-func (f *fakeBots) Retry(name string) bool {
+func (f *fakeBots) Retry(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, st := range f.statuses {
 		if strings.EqualFold(st.Name, name) {
+			if f.retryErr != nil {
+				return f.retryErr
+			}
 			f.retried = append(f.retried, name)
-			return true
+			return nil
 		}
 	}
-	return false
+	return bot.ErrUnknownBot
 }
 
 func (f *fakeBots) Statuses() []bot.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.statusCalls++
 	return append([]bot.Status(nil), f.statuses...)
 }
 
@@ -308,6 +317,34 @@ func TestBotRetry(t *testing.T) {
 	}
 	if len(bots.retried) != 1 || bots.retried[0] != "league_bot_3" {
 		t.Errorf("retried = %v", bots.retried)
+	}
+}
+
+// A bot whose run loop cannot take the request is a 503 the client may
+// retry, not a hang.
+func TestBotRetryBusy(t *testing.T) {
+	bots := &fakeBots{retryErr: fmt.Errorf("%w: retry league_bot_3: %w", bot.ErrBusy, context.DeadlineExceeded)}
+	bots.set(backoff("league_bot_3"))
+	s := newTestServer(t, "", 0, bots)
+	r := do(t, s, http.MethodPost, "/v1/bots/league_bot_3/retry", nil)
+	if r.code != http.StatusServiceUnavailable || errCode(r) != "unavailable" {
+		t.Fatalf("busy retry = %d %v", r.code, r.body)
+	}
+	if retryable, _ := r.body["error"].(map[string]any)["retryable"].(bool); !retryable {
+		t.Errorf("busy retry not marked retryable: %v", r.body)
+	}
+}
+
+// /health derives readiness and the state counts from one snapshot.
+func TestHealthTakesOneSnapshot(t *testing.T) {
+	bots := &fakeBots{}
+	bots.set(ready("a"), backoff("b"))
+	s := newTestServer(t, "", 1, bots)
+	if r := do(t, s, http.MethodGet, "/health", nil); r.code != 200 {
+		t.Fatalf("/health = %d", r.code)
+	}
+	if bots.statusCalls != 1 {
+		t.Errorf("Statuses called %d times, want 1", bots.statusCalls)
 	}
 }
 

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +10,9 @@ import (
 
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 )
+
+// retryTimeout bounds how long a retry request waits for a bot's run loop.
+const retryTimeout = 5 * time.Second
 
 // botView is one bot in /v1/bots. 64-bit IDs are strings, and
 // unknown values are null rather than zero. Credentials never appear.
@@ -92,11 +97,19 @@ func (s *Server) handleBot(w http.ResponseWriter, r *http.Request) {
 
 // handleBotRetry is the operator's way out of needs_attention,
 // e.g. after `dota_lobby auth --bot <name> --force` stored a new token or a
-// password was fixed. It is a no-op for a bot that is not waiting.
+// password was fixed. It is a no-op for a bot that is not waiting, and 503
+// when the bot's run loop is too backed up to take the request.
 func (s *Server) handleBotRetry(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !s.opts.Bots.Retry(name) {
+	ctx, cancel := context.WithTimeout(r.Context(), retryTimeout)
+	defer cancel()
+	switch err := s.opts.Bots.Retry(ctx, name); {
+	case errors.Is(err, bot.ErrUnknownBot):
 		writeError(w, http.StatusNotFound, "not_found", "no bot named "+strconv.Quote(name))
+		return
+	case err != nil:
+		s.log.Error("bot retry not accepted", "bot", name, "err", err)
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "bot "+strconv.Quote(name)+" is not accepting requests; try again shortly")
 		return
 	}
 	s.log.Info("bot retry requested", "bot", name)

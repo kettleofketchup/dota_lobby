@@ -34,8 +34,9 @@ type Bots interface {
 	// Stalled names the bots whose run loop has not moved for maxAge.
 	Stalled(maxAge time.Duration) []string
 	// Retry asks a bot in needs_attention, backoff or cooling_down to try
-	// again now; false means no such bot.
-	Retry(name string) bool
+	// again now. It returns bot.ErrUnknownBot for no such bot and any other
+	// error when the bot did not take the request before ctx ended.
+	Retry(ctx context.Context, name string) error
 }
 
 // Options configures a Server.
@@ -301,4 +302,6 @@ type noBots struct{}
 
 func (noBots) Statuses() []bot.Status         { return nil }
 func (noBots) Stalled(time.Duration) []string { return nil }
-func (noBots) Retry(string) bool              { return false }
+func (noBots) Retry(context.Context, string) error {
+	return bot.ErrUnknownBot
+}

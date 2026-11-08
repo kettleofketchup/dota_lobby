@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -26,14 +27,14 @@ func TestGate(t *testing.T) {
 		{"third waits two", time.Second, 19 * time.Second},
 		{"later is free again", time.Minute, 0},
 	}
-	for _, s := range steps {
-		if got := g.Reserve(t0.Add(s.at)); got != s.want {
+	for i, s := range steps {
+		if got := g.Reserve(fmt.Sprint(i), t0.Add(s.at)); got != s.want {
 			t.Errorf("%s: wait %s, want %s", s.name, got, s.want)
 		}
 	}
 	g.Pause(t0.Add(10 * time.Minute))
 	g.Pause(t0.Add(5 * time.Minute)) // never shortens
-	if got := g.Reserve(t0.Add(2 * time.Minute)); got != 8*time.Minute {
+	if got := g.Reserve("late", t0.Add(2*time.Minute)); got != 8*time.Minute {
 		t.Errorf("paused wait = %s", got)
 	}
 }
@@ -154,5 +155,37 @@ func TestManagerLocked(t *testing.T) {
 	}
 	if err := m.Stop(context.Background()); err != nil {
 		t.Errorf("Stop after failed Start = %v", err)
+	}
+}
+
+// A bot holds one booking: booking again replaces the old slot, so a bot
+// looping through backoff does not push the others' first logons later.
+func TestGateOneBookingPerBot(t *testing.T) {
+	t0 := newFakeClock().Now()
+	g := NewGate(10 * time.Second)
+	steps := []struct {
+		name  string
+		owner string
+		at    time.Duration
+		want  time.Duration
+	}{
+		{"a books the first slot", "a", 0, 0},
+		{"b books the next", "b", 0, 10 * time.Second},
+		{"a rebooks behind b", "a", time.Second, 19 * time.Second},
+		{"a rebooks again, replacing its slot", "a", 2 * time.Second, 18 * time.Second},
+		{"and again", "a", 3 * time.Second, 17 * time.Second},
+		{"c lands after a, not after a's old bookings", "c", 3 * time.Second, 27 * time.Second},
+	}
+	for _, s := range steps {
+		if got := g.Reserve(s.owner, t0.Add(s.at)); got != s.want {
+			t.Errorf("%s: wait %s, want %s", s.name, got, s.want)
+		}
+	}
+}
+
+func TestManagerRetry(t *testing.T) {
+	m := &Manager{byName: map[string]*Supervisor{}}
+	if err := m.Retry(t.Context(), "nobody"); !errors.Is(err, ErrUnknownBot) {
+		t.Errorf("unknown bot = %v", err)
 	}
 }

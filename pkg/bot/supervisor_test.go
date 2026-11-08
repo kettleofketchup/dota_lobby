@@ -269,7 +269,7 @@ func TestRateLimitPausesGate(t *testing.T) {
 	if st.Reason != auth.ReasonRateLimited {
 		t.Errorf("reason = %q", st.Reason)
 	}
-	if d := h.sup.gate.Reserve(h.clk.Now()); d < 4*time.Minute {
+	if d := h.sup.gate.Reserve("probe", h.clk.Now()); d < 4*time.Minute {
 		t.Errorf("gate wait after rate limit = %s, want about 5m", d)
 	}
 }
@@ -341,7 +341,7 @@ func TestPauseHoldsReservedSlots(t *testing.T) {
 	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
 	h := newHarness(t, b, func(h *harness) {
 		h.gate = NewGate(10 * time.Second)
-		h.gate.Reserve(h.clk.Now()) // another bot holds the first slot
+		h.gate.Reserve("other", h.clk.Now()) // another bot holds the first slot
 		h.fc.Script("Connect", logonOK()...)
 		welcomeOnHello(h)
 	})
@@ -377,15 +377,17 @@ func TestRetryPicksUpNewToken(t *testing.T) {
 	if err := h.store.Save(tok); err != nil {
 		t.Fatal(err)
 	}
-	h.sup.Retry()
+	if err := h.sup.Retry(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	h.untilState(StateGCReady, time.Minute)
 	if creds := connectCreds(t, h.fc); len(creds) != 1 || creds[0].AccessToken.Reveal() != tok.RefreshToken {
 		t.Errorf("Connect creds = %+v", creds)
 	}
 }
 
-// TestStaleAuthResultsDropped: a renewal superseded by a re-auth, or an
-// Authenticate superseded by another, must not touch the store.
+// TestStaleAuthResultsDropped: a stale renewal result, or an Authenticate
+// superseded by another, must not touch the store.
 func TestStaleAuthResultsDropped(t *testing.T) {
 	now := newFakeClock().Now()
 	tok, err := auth.NewToken(jwt(t, "1", now.Add(200*24*time.Hour)), now, auth.SourceAuthenticate)
@@ -396,19 +398,16 @@ func TestStaleAuthResultsDropped(t *testing.T) {
 	s.ctx, s.cancel = context.WithCancel(t.Context())
 	defer s.cancel()
 
-	renewCancelled := false
-	s.renewCancel = func() { renewCancelled = true }
+	s.renewCancel = func() {}
 	s.renewGen = 5
-	s.startAuth()
-	if !renewCancelled || s.renewCancel != nil {
-		t.Fatal("startAuth did not cancel the in-flight renewal")
-	}
-	if _, ok := s.authFinished(authDone{gen: 5, renew: true, tok: tok}); ok {
-		t.Error("renewal result fed to the state machine")
+	if _, ok := s.authFinished(authDone{gen: 4, renew: true, tok: tok}); ok {
+		t.Error("stale renewal result fed to the state machine")
 	}
 	if _, err := s.store.Load(); !errors.Is(err, auth.ErrNoToken) {
 		t.Errorf("superseded renewal saved a token: %v", err)
 	}
+	s.renewCancel = nil
+	s.startAuth()
 	if _, ok := s.authFinished(authDone{gen: s.authGen - 1, tok: tok}); ok {
 		t.Error("stale Authenticate result accepted")
 	}
@@ -472,7 +471,9 @@ func TestGuardWithoutSharedSecretNeedsAttention(t *testing.T) {
 	h.fc.SetToken(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
 	h.fc.Script("Connect", logonOK()...)
 	welcomeOnHello(h)
-	h.sup.Retry()
+	if err := h.sup.Retry(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	h.untilState(StateGCReady, time.Minute)
 }
 
@@ -753,7 +754,7 @@ func TestRenewalFailurePolicy(t *testing.T) {
 			if got := h.sup.Status().RenewBlocked; got != tt.wantBlocked {
 				t.Errorf("RenewBlocked = %q, want %q", got, tt.wantBlocked)
 			}
-			if got := h.gate.Recheck(h.clk.Now()) > 0; got != tt.wantPaused {
+			if got := h.gate.Recheck("probe", h.clk.Now()) > 0; got != tt.wantPaused {
 				t.Errorf("logons paused = %v, want %v", got, tt.wantPaused)
 			}
 			for _, sp := range tt.spans {
@@ -793,7 +794,9 @@ func TestRenewalBlockClearedByRetry(t *testing.T) {
 	if h.sup.Status().RenewBlocked == "" {
 		t.Fatal("renewal not blocked")
 	}
-	h.sup.Retry()
+	if err := h.sup.Retry(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	h.waitAuthCalls(2)
 	st := h.until("renewal succeeded", time.Millisecond, time.Second, func(s Status) bool {
 		return s.RenewBlocked == "" && s.TokenExpiresAt.After(h.clk.Now().Add(100*24*time.Hour))
@@ -817,5 +820,190 @@ func TestKnownBadPasswordIsNotResubmitted(t *testing.T) {
 	}
 	if n := h.fc.CallCount("Authenticate"); n != 1 {
 		t.Errorf("Authenticate called %d times; the refused password was sent again", n)
+	}
+}
+
+// unstarted returns a supervisor whose run loop is not running, with ctx
+// set, so tests can drive its run-goroutine methods directly.
+func unstarted(t *testing.T) (*Supervisor, *fake.Client, *auth.Store) {
+	t.Helper()
+	fc := fake.New()
+	store := auth.NewStore(t.TempDir())
+	s := NewSupervisor(headlessBot(), fc, SupervisorOptions{Store: store, Clock: newFakeClock(), Logger: testLogger(t), Seed: 1})
+	s.startOnce.Do(func() { s.ctx, s.cancel = context.WithCancel(t.Context()) })
+	return s, fc, store
+}
+
+func TestRetryWithFullQueue(t *testing.T) {
+	s, _, _ := unstarted(t)
+	for range cap(s.inputs) {
+		s.inputs <- heartbeat{}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- s.Retry(ctx) }()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, ErrBusy) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Retry = %v, want ErrBusy wrapping the deadline", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Retry blocked on a full input queue")
+	}
+
+	// An exited loop is not an error.
+	close(s.done)
+	if err := s.Retry(t.Context()); err != nil {
+		t.Errorf("Retry after exit = %v", err)
+	}
+}
+
+// Background renewal runs only in gc_ready with an unexpired token; in any
+// other state the logon path may authenticate itself, and two sessions in
+// one TOTP window get an 88.
+func TestRenewOnlyWhenReady(t *testing.T) {
+	now := newFakeClock().Now()
+	soon := jwt(t, "1", now.Add(10*24*time.Hour))
+	expired := jwt(t, "1", now.Add(-time.Hour))
+	far := jwt(t, "1", now.Add(100*24*time.Hour))
+	tests := []struct {
+		name  string
+		state State
+		token string
+		want  bool
+	}{
+		{"gc_ready, expiring soon", StateGCReady, soon, true},
+		{"gc_ready, far from expiry", StateGCReady, far, false},
+		{"gc_ready, already expired", StateGCReady, expired, false},
+		{"backoff", StateBackoff, soon, false},
+		{"cooling_down", StateCoolingDown, soon, false},
+		{"needs_attention", StateNeedsAttention, soon, false},
+		{"connecting", StateConnecting, soon, false},
+		{"logging_on", StateLoggingOn, soon, false},
+		{"authenticating", StateAuthenticating, soon, false},
+		{"stopped", StateStopped, soon, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _, store := unstarted(t)
+			tok, err := auth.NewToken(tt.token, now, auth.SourceSeed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(tok); err != nil {
+				t.Fatal(err)
+			}
+			s.snap.State = tt.state
+			s.maybeRenew()
+			if got := s.renewCancel != nil; got != tt.want {
+				t.Errorf("renewal started = %v, want %v", got, tt.want)
+			}
+			if s.renewCancel != nil {
+				s.renewCancel()
+			}
+		})
+	}
+}
+
+// A renewal that succeeds leaves HasToken set so the next logon uses the
+// renewed token rather than a fresh password Authenticate.
+func TestRenewalSuccessSetsHasToken(t *testing.T) {
+	s, _, store := unstarted(t)
+	now := s.clock.Now()
+	minted := jwt(t, "1", now.Add(200*24*time.Hour))
+	s.snap.HasToken = false
+	s.renewGen = 4
+	s.renewCancel = func() {}
+	tok := auth.FromMinted(minted, now)
+	if in, ok := s.authFinished(authDone{gen: 4, renew: true, tok: tok}); ok || in != nil {
+		t.Fatalf("authFinished = %v, %v; a renewal feeds nothing to next", in, ok)
+	}
+	if !s.snap.HasToken {
+		t.Error("HasToken not set after a saved renewal")
+	}
+	if got, err := store.Load(); err != nil || got.RefreshToken != minted {
+		t.Errorf("stored = %v, %v", got, err)
+	}
+	if got := s.Status().TokenExpiresAt; !got.Equal(tok.ExpiresAt) {
+		t.Errorf("TokenExpiresAt = %v, want %v", got, tok.ExpiresAt)
+	}
+}
+
+// When the logon path needs to authenticate while a renewal is in flight it
+// adopts the renewal: no second Authenticate, and the renewal's outcome
+// answers the logon.
+func TestStartAuthAdoptsRenewal(t *testing.T) {
+	denied := deniedErr("BeginAuthSessionViaCredentials", gc.EResultInvalidPassword)
+	tests := []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{"renewal succeeds", nil, false},
+		{"renewal is refused", denied, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, fc, store := unstarted(t)
+			now := s.clock.Now()
+			minted := jwt(t, "1", now.Add(200*24*time.Hour))
+			s.renewGen = 7
+			s.renewCancel = func() {}
+
+			s.startAuth()
+			if n := fc.CallCount("Authenticate"); n != 0 {
+				t.Fatalf("startAuth submitted a second Authenticate (%d calls)", n)
+			}
+			// Stale renewal results are still dropped.
+			if _, ok := s.authFinished(authDone{gen: 6, renew: true}); ok {
+				t.Error("stale renewal result accepted")
+			}
+			in, ok := s.authFinished(authDone{gen: 7, renew: true, tok: auth.FromMinted(minted, now), err: tt.err})
+			if !ok {
+				t.Fatal("adopted renewal produced no AuthResult")
+			}
+			res, isRes := in.(AuthResult)
+			if !isRes || (res.Err != nil) != tt.wantErr {
+				t.Fatalf("input = %#v, wantErr %v", in, tt.wantErr)
+			}
+			_, lerr := store.Load()
+			if (lerr == nil) == tt.wantErr {
+				t.Errorf("token store after = %v, wantErr %v", lerr, tt.wantErr)
+			}
+			if s.adoptRenew {
+				t.Error("adoptRenew left set")
+			}
+		})
+	}
+}
+
+// Stop must not hold for the whole budget when the Disconnected never
+// arrives: the disconnect timer ends the wait.
+func TestStopWithoutDisconnected(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.Script("Connect", logonOK()...)
+		h.fc.Script("Disconnect") // the Disconnected never comes
+		welcomeOnHello(h)
+	})
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- h.sup.Stop(ctx) }()
+	for {
+		select {
+		case err := <-errc:
+			if err != nil {
+				t.Fatalf("Stop = %v; it waited for a Disconnected that never came", err)
+			}
+			return
+		case <-time.After(time.Millisecond):
+			h.clk.Advance(DefaultDisconnectTimeout)
+		}
 	}
 }
