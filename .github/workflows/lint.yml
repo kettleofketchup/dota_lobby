@@ -17,6 +17,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: "go.mod"
+          # Keep in step with mise.toml and the Dockerfile's builder stage.
+          go-version: "1.27.1"
+      - name: go vet
+        run: go vet ./...
+      # golangci-lint must be built with Go >= the toolchain above: 2.11.x
+      # (Go 1.26) panics on the Go 1.27 standard library.
       - name: Golangci-lint
         uses: golangci/golangci-lint-action@v8.0.0
+        with:
+          version: v2.15.0
+      # tools/probe is its own module, so ./... above does not include it.
+      - name: go vet (tools/probe)
+        run: go -C tools/probe vet ./...
+      - name: Golangci-lint (tools/probe)
+        uses: golangci/golangci-lint-action@v8.0.0
+        with:
+          version: v2.15.0
+          working-directory: tools/probe

@@ -85,7 +85,7 @@ does them once, in this order.
 
 ## Checklist
 
-1. On `main`: CI is green (lint and the docs build) and `make test` passes locally.
+1. On `main`: CI is green (tests, lint and the docs build) and `make test` passes locally.
 2. Cut the release (repo admin): `just release::upgrade|hotfix|major`.
 3. Check that both `release.yml` and `container.yml` succeeded on the Actions tab.
 4. If this is the first release, check step 2 of [One-time setup](#one-time-setup).

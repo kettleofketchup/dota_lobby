@@ -5,8 +5,8 @@ repo_url: https://github.com/kettleofketchup/dota_lobby
 repo_name: kettleofketchup/dota_lobby
 edit_uri: edit/main/docs/
 
-# Internal design notes are kept out of the published site; research/ is
-# excluded in advance and does not exist yet.
+# Internal design notes and research are kept out of the published site;
+# pages link to them on GitHub instead.
 exclude_docs: |
   plans/
   superpowers/

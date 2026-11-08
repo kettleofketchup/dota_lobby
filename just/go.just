@@ -1,3 +1,10 @@
+set working-directory := ".."
+
+# Tools run through mise when it is installed, so the versions pinned in
+# mise.toml (go, golangci-lint) are used.
+RUN := `command -v mise >/dev/null 2>&1 && echo "mise exec --" || true`
+GO := RUN + " go"
+LINT := RUN + " golangci-lint"
 BINARY_NAME := "dota_lobby"
 BIN_DIR := justfile_directory() / "bin"
 VERSION := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
@@ -7,51 +14,51 @@ LDFLAGS := "-s -w -X main.version=" + VERSION + " -X main.commit=" + COMMIT + " 
 
 # Build the binary
 [group('go')]
-build: deps
+build:
     @echo "Building {{BINARY_NAME}}..."
-    @cd "{{justfile_directory()}}" && mkdir -p {{BIN_DIR}}
-    cd "{{justfile_directory()}}" && go build -trimpath -o {{BIN_DIR}}/{{BINARY_NAME}} -ldflags "{{LDFLAGS}}" ./cmd/dota_lobby
+    @mkdir -p {{BIN_DIR}}
+    {{GO}} build -trimpath -o {{BIN_DIR}}/{{BINARY_NAME}} -ldflags "{{LDFLAGS}}" ./cmd/dota_lobby
 
 # Run the application
 [group('go')]
 run: build
     @echo "Version: {{VERSION}}, Commit: {{COMMIT}}, Date: {{DATE}}"
     @echo "Running {{BINARY_NAME}}..."
-    cd "{{justfile_directory()}}" && {{BIN_DIR}}/{{BINARY_NAME}}
+    {{BIN_DIR}}/{{BINARY_NAME}} serve
 
 # Run tests
 [group('go')]
 test:
     @echo "Running tests..."
-    cd "{{justfile_directory()}}" && go test -v ./...
+    {{GO}} test -race ./...
 
 # Run tests with race detection and coverage
 [group('go')]
 test-full:
-    cd "{{justfile_directory()}}" && go test -race -cover ./...
+    {{GO}} test -race -cover ./...
 
 # Format code
 [group('go')]
-format: deps
+format:
     @echo "Formatting code..."
-    cd "{{justfile_directory()}}" && go fmt ./...
+    {{GO}} fmt ./...
 
 # Run linter
 [group('go')]
-lint: deps
+lint:
     @echo "Linting..."
-    cd "{{justfile_directory()}}" && golangci-lint run
+    {{LINT}} run ./...
 
-# Install dependencies
+# Tidy and download dependencies
 [group('go')]
 deps:
     @echo "Installing dependencies..."
-    cd "{{justfile_directory()}}" && go mod tidy
-    cd "{{justfile_directory()}}" && go mod download
+    {{GO}} mod tidy
+    {{GO}} mod download
 
 # Clean build artifacts
 [group('go')]
 clean:
     @echo "Cleaning..."
-    cd "{{justfile_directory()}}" && go clean
-    cd "{{justfile_directory()}}" && rm -rf {{BIN_DIR}}
+    {{GO}} clean
+    rm -rf {{BIN_DIR}}

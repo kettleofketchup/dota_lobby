@@ -1,22 +1,41 @@
 # Single-machine deployment. See https://kettleofketchup.github.io/dota_lobby/deployment/docker-compose/
-# DOTA_LOBBY_TAG is a Compose variable (image tag, no leading "v"), not an app setting.
+# Start and stop it with `just docker up` and `just docker down`: they decrypt
+# the sops bot credentials into a tmpfs directory on the host and remove them
+# again. DOTA_LOBBY_TAG and DOTA_LOBBY_SECRETS_HOST_DIR are Compose variables,
+# not app settings.
+name: dota_lobby
+
 services:
   dota_lobby:
     image: ghcr.io/kettleofketchup/dota_lobby:${DOTA_LOBBY_TAG:-latest}
     container_name: dota_lobby # also blocks accidental --scale
+    command: ["serve"]
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      # One decrypted credentials file per bot, written by `just docker up`.
+      DOTA_LOBBY_CREDENTIALS_DIR: /run/secrets/dota_lobby/creds
     volumes:
       - ./config:/app/config:ro
+      # Decrypted secrets on a host tmpfs: creds/<bot>.yaml and an optional
+      # secrets.yaml. Read-only; the image holds no sops keys.
+      - ${DOTA_LOBBY_SECRETS_HOST_DIR:-${XDG_RUNTIME_DIR:?set XDG_RUNTIME_DIR or DOTA_LOBBY_SECRETS_HOST_DIR}/dota_lobby}:/run/secrets/dota_lobby:ro
+      # Token store and LOCK file. Renewed tokens are kept here, so keep the
+      # volume across upgrades.
+      - state:/app/state
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - "no-new-privileges:true"
+    # Shutdown takes up to 5s for HTTP plus 15s for the bots to disconnect.
     stop_grace_period: 30s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  state:

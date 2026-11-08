@@ -32,6 +32,8 @@ config.yaml
 config.yml
 secrets.*
 !secrets.yaml.example
+# the just module that manages the sops files is not a secret
+!just/secrets.just
 bin/
 
 # Editor/IDE
@@ -47,5 +49,13 @@ __pycache__/
 /dota_lobby
 /config/
 
-# Local planning notes (design specs and implementation plans)
+# Probe tokens, captures and reports
+probe-state/
+
+# Local sops secrets: the generated .sops.yaml and encrypted files stay on this machine
+.sops.yaml
+secrets/
+
+# Local planning notes (design specs and implementation plans); never committed
 docs/superpowers/
+docs/plans/

@@ -7,20 +7,42 @@ This page is for people changing the code or the docs. To run the service, start
 
 | Path | What it holds |
 |---|---|
-| `cmd/dota_lobby/` | Entry point (`main.go`): loads the config, starts the bot manager and the HTTP API |
-| `pkg/api/` | HTTP server, handlers and the API key middleware (`server.go`) |
-| `pkg/bot/` | Bot manager and the Steam client for each bot (`manager.go`) |
-| `pkg/config/` | Config loading with Viper and the `Secret` type that redacts itself (`config.go`) |
-| `docs/` | This documentation site (MkDocs Material) |
+| `cmd/dota_lobby/` | Entry point and subcommands: `serve`, `auth`, `healthcheck`, `version` |
+| `pkg/config/` | Config loading with its own Viper instance: files, credentials files, `DOTA_LOBBY_*` env, `*_FILE`, validation, the `Secret` type |
+| `pkg/gc/` | The only package that imports go-steam and go-dota2. `gc.Client` is the seam; `pkg/gc/fake` is a scripted fake for tests |
+| `pkg/auth/` | Token store, Steam Guard TOTP, the EResult classifier, the state-dir `flock` |
+| `pkg/bot/` | The per-bot state machine (`next()`, a pure function), its supervisor, the GC request worker and the manager |
+| `pkg/api/` | HTTP API: health endpoints, `/v1/bots`, the error envelope |
+| `tools/probe/` | Phase 0 live probe against real Steam. A **separate Go module** |
+| `just/` | just modules: `dev`, `go`, `docs`, `docker`, `secrets`, `probe`, `ci`, `release`; the changelog checker `changelog.py` and its tests |
 | `changelog.d/` | Changelog fragments, added by each pull request; see [Changelog](changelog.md) |
 | `CHANGELOG.md` | Release notes, assembled from `changelog.d/` at release time; never edited in a pull request |
 | `scripts/` | CI helper scripts (`ci-merge-base.sh`) |
-| `just/` | just modules: `dev.just`, `go.just`, `docs.just`, `ci.just`, `release.just`; the changelog checker `changelog.py` and its tests |
-| `Dockerfile` | Two-stage image build: Go cross-compile, then distroless `nonroot` |
-| `compose.yaml` | Single-machine deployment, see [Docker Compose](../deployment/docker-compose.md) |
-| `Dockerfile.docs` | Pinned `squidfunk/mkdocs-material` image used by the Docker docs recipes |
-| `mkdocs.yml` | Site config and navigation |
-| `pyproject.toml`, `uv.lock` | Pinned docs toolchain for `uv` |
+| `docs/` | This site (MkDocs Material). `docs/research/` is not published |
+| `Dockerfile`, `compose.yaml` | Image and single-machine deployment, see [Docker Compose](../deployment/docker-compose.md) |
+| `Dockerfile.docs`, `mkdocs.yml`, `pyproject.toml`, `uv.lock` | The docs toolchain |
+| `mise.toml` | Pinned Go and golangci-lint versions |
+
+The research behind the design, with the open live-Steam questions, is in
+[`docs/research/`](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/README.md).
+
+## Toolchain
+
+`go.mod` needs Go 1.26.0 or newer, because the upstream go-steam and go-dota2 masters do.
+`mise.toml` pins the versions everyone uses:
+
+```toml
+[tools]
+go = "1.27.1"
+golangci-lint = "2.15.0"
+```
+
+Run `mise install` once. `make` and the `just go` recipes run `go` and `golangci-lint` through
+`mise exec` when mise is installed. CI, the Dockerfile's builder stage and `mise.toml` use the
+same Go version; change them together.
+
+golangci-lint must be built with a Go at least as new as the one you compile with: 2.11.x is
+built with Go 1.26 and panics on the 1.27 standard library, 2.15.0 works.
 
 ## Bootstrap
 
@@ -29,35 +51,64 @@ This page is for people changing the code or the docs. To run the service, start
 ```
 
 `./dev` installs [just](https://just.systems/) into `~/.local/bin` if it is missing, then runs
-`just dev`. That recipe checks that `go` and `docker` are on your `PATH`, then runs
-`go mod tidy` and `go mod download` and lists the available recipes. You need Go 1.24 or
-newer.
+`just dev`, which checks for `go` and `docker`, downloads the modules and lists the recipes.
 
-## Build, run, test and lint
-
-Both `make` and `just` work. The just recipes run from the repository root no matter which
-directory you call them from.
+## Build, test and lint
 
 | Task | make | just |
 |---|---|---|
-| Build `bin/dota_lobby` | `make build` | `just go::build` |
-| Build and run | `make run` | `just go::run` |
-| Tests | `make test` | `just go::test` |
-| Lint | `make lint` | `just go::lint` |
-| Format | `make format` | `just go::format` |
-| Clean | `make clean` | `just go::clean` |
+| Build `bin/dota_lobby` | `make build` | `just go build` |
+| Build and run `serve` | `make run` | `just go run` |
+| Tests (`go test -race ./...`) | `make test` | `just go test` |
+| Tests with coverage | | `just go test-full` |
+| Lint | `make lint` | `just go lint` |
+| Format | `make format` | `just go format` |
+| Tidy modules | | `just go deps` |
+| Clean | `make clean` | `just go clean` |
 
-`build`, `lint` and `format` run `go mod tidy` and `go mod download` first, so they can
-change `go.mod` and `go.sum`. Do not commit those changes unless you meant to change
-dependencies.
+The just recipes run from the repository root whichever directory you call them from.
 
-`run` starts the binary from the repository root, so it reads `config.yaml` and
-`secrets.yaml` from there or from `config/` (see the
-[configuration reference](../configuration/index.md)). It will try to log your bots in to
-Steam, so read [Bot accounts](../configuration/bot-accounts.md) first.
+The tests run against `pkg/gc/fake` and a fake Steam transport, never against Steam. `./...`
+in the repository root does **not** include `tools/probe`, because it is its own module. Test it
+separately:
 
-Lint is `golangci-lint run` with the repository's `.golangci.yml`. CI runs the same linter in
-`.github/workflows/lint.yml` on every pull request and every push to `main`.
+```bash
+go -C tools/probe test ./...      # or: just probe test
+```
+
+CI runs `go test -race -count=1 ./...`, the probe's tests, `go vet` and golangci-lint on every
+pull request and every push to `main`.
+
+## The live probe
+
+`tools/probe` answers the questions only a real account can (token login, game coordinator
+welcome, league listing). Its recipes take a bot's sops file and never print secrets:
+
+| Recipe | What it does |
+|---|---|
+| `just probe build` | Build `bin/probe` |
+| `just probe auth <bot>` | Password + Steam Guard code, store the refresh token in the bot's sops file (Q1) |
+| `just probe renew <bot>` | Token login, then token renewal (Q12) |
+| `just probe code <bot>` | Print the current Steam Guard code |
+| `just probe run <bot> <cmd> ...` | Any probe command, for example `login` or `leagues` |
+| `just probe report <bot> <Q>` | Report lines for one question from `probe-state/<bot>/report.jsonl` |
+
+See `tools/probe/README.md`; the questions it answers (Q1, Q2, ...) are listed in
+[`docs/research/README.md`](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/README.md).
+Never run the probe for a bot that a running service is using.
+
+## Secrets recipes
+
+| Recipe | What it does |
+|---|---|
+| `just secrets init` | Add a labelled age key to your sops key file and write `.sops.yaml` |
+| `just secrets new-bot <bot>` | Create `secrets/bots/<bot>.sops.yaml` and open it |
+| `just secrets edit <bot>` | Edit it |
+| `just secrets list` | Which keys each bot has set (values are never printed) |
+| `just secrets import-mafile <bot> <maFile>` | Import a steamguard-cli maFile, see [Bot accounts](../configuration/bot-accounts.md#7-import-the-shared-secret-from-the-mafile) |
+| `just secrets set-stdin <bot> <KEY>` | Store a JSON-encoded string from stdin under a key |
+
+`secrets/`, `.sops.yaml` and `probe-state/` are ignored by git.
 
 The `changelog` check (`.github/workflows/changelog.yml`, `just ci::changelog-check`) runs on
 the same events and validates the changelog fragments; see [Changelog](changelog.md).
@@ -69,7 +120,7 @@ Preview the site with live reload on <http://localhost:8000>:
 === "Docker"
 
     ```bash
-    just docs::serve
+    just docs serve
     ```
 
     Builds the image from `Dockerfile.docs` and serves the repository's docs from it.
@@ -77,7 +128,7 @@ Preview the site with live reload on <http://localhost:8000>:
 === "uv"
 
     ```bash
-    just docs::serve-local
+    just docs serve-local
     ```
 
     Runs `uv run mkdocs serve` with the versions pinned in `uv.lock`.
@@ -89,16 +140,16 @@ uv run --locked mkdocs build --strict
 ```
 
 `--strict` turns warnings into errors, and `mkdocs.yml` makes broken links and missing
-anchors warnings, so a bad link fails the build. `--locked` fails if `uv.lock` no longer
-matches `pyproject.toml`. `just docs::build` (Docker) and `just docs::build-local` (uv) build
-the site into `site/` the same way.
+anchors warnings, so a bad link fails the build. `just docs build` (Docker) and
+`just docs build-local` (uv) build the site into `site/` the same way.
 
 New pages must be added to `nav:` in `mkdocs.yml`.
 
 !!! note "Internal notes"
-    `docs/plans/` and `docs/superpowers/` hold internal design notes and plans. They stay in
-    the repository but are excluded from the published site (`exclude_docs` in `mkdocs.yml`).
-    Do not link to them from site pages.
+    `docs/research/` holds research notes. It stays in the repository but is excluded from the
+    published site (`exclude_docs` in `mkdocs.yml`). Design plans (`docs/plans/`,
+    `docs/superpowers/`) are local working notes and are git-ignored. Link to them with a full GitHub URL, never a relative
+    link: a relative link to an excluded page fails the strict build.
 
 ## Writing docs
 

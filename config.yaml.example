@@ -1,12 +1,101 @@
+# config.yaml: non-secret settings. Copy to config.yaml (git-ignored).
+# Layers, lowest first: built-in defaults, this file, the secrets file,
+# per-bot credentials files, DOTA_LOBBY_* env, DOTA_LOBBY_*_FILE.
+# Env names are the key path joined by "_", uppercased, with "-" as "_":
+#   DOTA_LOBBY_SERVER_PORT=9000
+#   DOTA_LOBBY_SECRETS_API_KEY_FILE=/run/secrets/api_key
+#   DOTA_LOBBY_SECRETS_BOTS_LEAGUE_BOT_1_PASSWORD=...
+# Unknown keys are an error, so typos fail at startup.
+
 server:
-  # Keep "0.0.0.0" when running in a container, or the API is unreachable
-  # from outside the container.
-  host: "0.0.0.0"
-  # Leave 8080 in a container. To use another port, change the HOST side of the
-  # port mapping instead (for example 127.0.0.1:9000:8080). If you change this
-  # value anyway, the container side of the mapping must match it.
+  # Keep 0.0.0.0 in a container, or the API is unreachable from outside it.
+  host: 0.0.0.0
+  # Leave 8080 in a container and change the HOST side of the port mapping
+  # instead (for example 127.0.0.1:9000:8080). The healthcheck subcommand
+  # probes 8080 unless DOTA_LOBBY_SERVER_PORT says otherwise.
   port: 8080
-  # API key for the protected endpoints. Strongly recommended whenever the port
-  # is reachable beyond localhost. Send it as "X-API-Key: <key>" or
-  # "Authorization: Bearer <key>".
-  # api_key: "your-secret-api-key-here"
+  max_body_bytes: 65536
+  # The API key moved to secrets.api_key (secrets.yaml or
+  # DOTA_LOBBY_SECRETS_API_KEY[_FILE]). A server.api_key here still works
+  # but logs a deprecation warning.
+
+metrics:
+  addr: ":9090"            # empty disables the metrics listener
+
+# Tokens and other per-bot state: <state_dir>/bots/<username>/, plus a LOCK
+# file. Must be writable and persistent. The container image and compose.yaml
+# use /app/state (a named volume) and set DOTA_LOBBY_STATE_DIR to it.
+state_dir: /var/lib/dota_lobby
+
+# Optional: one decrypted credentials file per bot, named <bot>.yaml (or
+# .yml, .json, .env). Point it at a tmpfs filled from the sops files, e.g.
+#   umask 077   # the files hold passwords and shared secrets: owner-only
+#   install -d -m 0700 /run/dota_lobby/creds
+#   for f in secrets/bots/*.sops.yaml; do
+#     sops decrypt "$f" > "/run/dota_lobby/creds/$(basename "$f" .sops.yaml).yaml"
+#   done
+# Quote secret values in the sops files (STEAM_PASS: "0123"); an unquoted
+# number is rejected at startup rather than silently rewritten.
+# With no bots list below, every file there becomes a bot.
+# credentials_dir: /run/dota_lobby/creds
+
+log:
+  level: info              # debug, info, warn, error
+  format: json             # json, text
+
+readiness:
+  min_ready_bots: 1
+
+steam:
+  login_stagger: 10s
+  reconnect_backoff_min: 5s
+  reconnect_backoff_max: 5m
+  cooldown_rate_limited: 30m
+  cooldown_elsewhere: 10m
+  totp_skew: 0s            # Steam clock minus host clock; keep the host on NTP
+
+gc:
+  hello_interval: 10s
+  request_timeout: 10s
+  create_timeout: 2m
+
+league:
+  sources: [gc, config]
+  refresh_interval: 30m
+  allow_unverified: false
+  webapi_enrichment: true
+
+lobby:
+  host_seat_strategy: [self_kick, player_pool, spectator, caster]
+  idle_timeout: 30m
+  launch_settle_timeout: 2m
+  server_stall_timeout: 10m
+  ingame_backstop: 3h
+  invite: { min_resend: 30s, max_per_player: 5 }
+  chat: { enabled: false }
+  # Wire values are unconfirmed; keep them current by hand.
+  regions: { us_west: 1, us_east: 2, europe: 3, sea: 5 }
+  game_modes: { ap: 1, cm: 2, cd: 16, ad: 22, turbo: 23 }
+  series_types: { none: 0, bo3: 1, bo5: 2 }
+
+match:
+  settle_after: 6h
+  opendota: { enabled: true, base_url: https://api.opendota.com/api, rps: 1 }
+  webapi: { enabled: true, rps: 1 }
+
+store:
+  path: ""                 # empty = <state_dir>/dota_lobby.db
+
+# webhooks:
+#   - url: https://league.internal/hooks/dota
+#     events: ["lobby.*", "match.*"]
+
+bots:
+  - name: league_bot_1       # used in the API, logs and env names
+    # username: league_bot_1 # Steam account; defaults to STEAM_USER, then name
+    enabled: true
+    leagues: [20004]         # optional static fallback (unverified)
+    tags: [na]
+    # credentials_file: /run/dota_lobby/creds/league_bot_1.yaml
+  - name: league_bot_2
+    enabled: true
