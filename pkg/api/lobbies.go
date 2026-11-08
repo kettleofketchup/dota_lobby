@@ -741,7 +741,9 @@ var errNoLobbies = fmt.Errorf("%w: no lobby manager", lobby.ErrUnavailable)
 func (noLobbies) Create(context.Context, lobby.Spec) (lobby.Lobby, bool, error) {
 	return lobby.Lobby{}, false, errNoLobbies
 }
-func (noLobbies) Get(context.Context, string) (lobby.Lobby, error) { return lobby.Lobby{}, errNoLobbies }
+func (noLobbies) Get(context.Context, string) (lobby.Lobby, error) {
+	return lobby.Lobby{}, errNoLobbies
+}
 func (noLobbies) List(context.Context, lobby.Filter) ([]lobby.Lobby, string, error) {
 	return nil, "", errNoLobbies
 }

@@ -175,8 +175,8 @@ func New(opts Options) *Manager {
 		opts.GC.CreateTimeout = 2 * time.Minute
 	}
 	return &Manager{
-		opts:   opts,
-		log:    opts.Logger,
+		opts:        opts,
+		log:         opts.Logger,
 		active:      map[string]*entry{},
 		wake:        make(chan struct{}, 1),
 		orphanTried: map[string]time.Time{},
