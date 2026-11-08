@@ -126,6 +126,7 @@ type harness struct {
 	cfg     config.LobbyConfig
 	rec     *recorder
 	logs    *syncBuffer
+	clock   *testClock
 	m       *Manager
 	// store and bots, when set, stand in for the database and the bot
 	// source at the next start.
@@ -138,7 +139,7 @@ type harness struct {
 func newHarness(t *testing.T, n int, tweak func(*config.LobbyConfig)) *harness {
 	t.Helper()
 	h := &harness{t: t, path: filepath.Join(t.TempDir(), "dota_lobby.db"), cfg: testConfig(),
-		holders: &holders{by: map[uint32][]league.Holding{}}}
+		holders: &holders{by: map[uint32][]league.Holding{}}, clock: &testClock{}}
 	if tweak != nil {
 		tweak(&h.cfg)
 	}
@@ -187,7 +188,7 @@ func (h *harness) start() {
 	h.m = New(Options{
 		Store: st, Pool: h.pool, Holders: h.holders, Bots: src,
 		Lobby: h.cfg, GC: config.GCConfig{RequestTimeout: time.Second, CreateTimeout: time.Second},
-		Retention: 24 * time.Hour, Hooks: h.rec, Tick: 10 * time.Millisecond, LostGrace: 100 * time.Millisecond,
+		Retention: 24 * time.Hour, Hooks: h.rec, Tick: 10 * time.Millisecond, LostGrace: 100 * time.Millisecond, Now: h.clock.now,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err := h.m.Start(context.Background()); err != nil {
@@ -195,6 +196,25 @@ func (h *harness) start() {
 	}
 	m := h.m
 	h.t.Cleanup(func() { _ = m.Drain(context.Background()) })
+}
+
+// testClock is the manager's clock in tests: the wall clock, moved on by
+// advance. Tests that do not advance it run on real time.
+type testClock struct {
+	mu     sync.Mutex
+	offset time.Duration
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.offset)
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset += d
 }
 
 // restart drains the manager and starts a new one on the same database,

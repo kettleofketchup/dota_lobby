@@ -124,6 +124,7 @@ func TestChatReadyCheckAndStart(t *testing.T) {
 			}
 		}
 	})
+	h.clock.advance(readyCooldown)
 	b.say(l, 12, "!ready")
 	h.waitState(l.ID, StateReady)
 
@@ -144,8 +145,10 @@ func TestChatReadyCheckAndStart(t *testing.T) {
 	}
 }
 
+// The countdown runs on the manager's clock: it launches when the clock
+// says so, never on wall time alone.
 func TestChatAdminStartAndCancel(t *testing.T) {
-	h := newHarness(t, 1, withChat(300*time.Millisecond))
+	h := newHarness(t, 1, withChat(10*time.Minute))
 	l, b := h.chatWaiting(spec("game-admin"))
 	b.join(chatAdmin, gc.TeamSpectator)
 	b.join(11, gc.TeamRadiant)
@@ -154,27 +157,82 @@ func TestChatAdminStartAndCancel(t *testing.T) {
 	b.say(l, 11, "!start")
 	h.waitChat(b, "Not ready yet: 12 not seated, 21 not seated.")
 	b.say(l, chatAdmin, "!start")
-	h.waitChat(b, "Starting in 0 s.")
+	h.waitChat(b, "Starting in 600 s.")
 	b.say(l, 11, "!cancel")
 	h.waitChat(b, "Only an admin can !cancel.")
 	b.say(l, chatAdmin, "!cancel")
 	h.waitChat(b, "Start cancelled.")
-	time.Sleep(400 * time.Millisecond)
+	h.clock.advance(11 * time.Minute)
+	time.Sleep(50 * time.Millisecond)
 	if n := b.fc.CallCount("Launch"); n != 0 {
 		t.Fatalf("a cancelled start launched %d times", n)
 	}
 
-	// The admin's start is a forced launch from waiting.
+	// The admin's start is a forced launch from waiting, once the
+	// countdown is over.
 	b.say(l, chatAdmin, "!start")
+	h.waitFor(l.ID, "a second start", func(Lobby) bool { return chatCount(b, "Starting in 600 s.") == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if n := b.fc.CallCount("Launch"); n != 0 {
+		t.Fatalf("launched %d times before the countdown ended", n)
+	}
+	h.clock.advance(10 * time.Minute)
 	h.waitCalls(b, "Launch", 1)
 	h.waitState(l.ID, StateLaunching)
 
-	// Each reply has its cooldown: a second !cancel from the player in
-	// the same window gets no answer.
+	// Each reply has its cooldown: of two !cancel from the player in the
+	// same window only the first is answered. The clock has moved past
+	// the earlier denial's cooldown.
+	b.say(l, 11, "!cancel")
 	b.say(l, 11, "!cancel")
 	time.Sleep(50 * time.Millisecond)
-	if n := chatCount(b, "Only an admin"); n != 1 {
-		t.Errorf("denial sent %d times, want 1", n)
+	if n := chatCount(b, "Only an admin"); n != 2 {
+		t.Errorf("denial sent %d times, want 2", n)
+	}
+}
+
+// Ready and unready share a cooldown: a player toggling them gets one
+// stored change per readyCooldown.
+func TestChatReadyToggleCooldown(t *testing.T) {
+	h := newHarness(t, 1, withChat(time.Second))
+	s := spec("game-toggle")
+	s.ReadyCheck = true
+	l, b := h.chatWaiting(s)
+	h.seatAll(b)
+	b.say(l, 11, "!ready")
+	h.waitChat(b, "is ready (1/3 ready).")
+	for range 3 {
+		b.say(l, 11, "!unready")
+		b.say(l, 11, "!ready")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := len(h.eventData(l.ID, "lobby.player_ready")) + len(h.eventData(l.ID, "lobby.player_unready")); n != 1 {
+		t.Fatalf("%d ready changes inside the cooldown, want 1", n)
+	}
+	h.clock.advance(readyCooldown)
+	b.say(l, 11, "!unready")
+	h.waitChat(b, "is not ready (0/3 ready).")
+}
+
+// A join the GC never answers runs off the lobby's op lock: a DELETE
+// meanwhile answers at once, and the lobby is closed without waiting for
+// the join.
+func TestChatJoinDoesNotHoldTheLobby(t *testing.T) {
+	h := newHarness(t, 1, withChat(time.Second))
+	b := h.bots[0]
+	b.fc.BlockUntilDone("JoinLobbyChat", true)
+	l, _ := h.toWaiting(spec("game-hang"))
+	h.waitCalls(b, "JoinLobbyChat", 1)
+	start := time.Now()
+	if _, _, err := h.m.Close(context.Background(), l.ID); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Errorf("close waited %v behind the chat join", d)
+	}
+	h.waitState(l.ID, StateClosed)
+	if n := b.fc.CallCount("JoinLobbyChat"); n != 1 {
+		t.Errorf("joined %d times", n)
 	}
 }
 
@@ -249,6 +307,24 @@ func TestChatJoinFailureAndChatOff(t *testing.T) {
 	if n := b.fc.CallCount("JoinLobbyChat"); n != 1 || b.fc.CallCount("SendChat") != 0 {
 		t.Errorf("joins %d, sends %d", n, b.fc.CallCount("SendChat"))
 	}
+	// Each failure doubles the wait before the next join.
+	failed := func(n int) func(Lobby) bool {
+		return func(Lobby) bool { return strings.Count(h.logs.String(), "could not join the lobby chat") >= n }
+	}
+	h.waitFor(l.ID, "the first failure", failed(1))
+	h.clock.advance(chatRetry)
+	h.waitCalls(b, "JoinLobbyChat", 2)
+	h.waitFor(l.ID, "the second failure", failed(2))
+	h.clock.advance(chatRetry)
+	time.Sleep(50 * time.Millisecond)
+	if n := b.fc.CallCount("JoinLobbyChat"); n != 2 {
+		t.Errorf("joined %d times %v after the second failure", n, chatRetry)
+	}
+	h.clock.advance(chatRetry)
+	h.waitCalls(b, "JoinLobbyChat", 3)
+	if !strings.Contains(h.logs.String(), "USER_IN_TOO_MANY_CHANNELS") {
+		t.Error("the refusal is not in the log")
+	}
 
 	off := newHarness(t, 1, nil)
 	l, ob := off.toWaiting(spec("game-off"))
@@ -257,4 +333,17 @@ func TestChatJoinFailureAndChatOff(t *testing.T) {
 	if n := ob.fc.CallCount("JoinLobbyChat"); n != 0 {
 		t.Errorf("chat off, but joined %d times", n)
 	}
+}
+
+// A create that never left the queue hands the lobby to a new tracker
+// while the old one is still unwinding; each keeps to its own chat
+// session.
+func TestChatRequeuedLobby(t *testing.T) {
+	h := newHarness(t, 1, withChat(time.Second))
+	b := h.bot("bot1")
+	b.fc.FailNext("CreateLobby", gc.ErrNotReady)
+	l := h.create(spec("game-requeue"))
+	h.waitFor(l.ID, "a retried create", func(Lobby) bool { return b.fc.CallCount("CreateLobby") >= 2 })
+	h.waitState(l.ID, StateWaiting)
+	h.waitChat(b, "Type !help for commands.")
 }

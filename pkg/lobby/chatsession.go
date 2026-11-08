@@ -10,11 +10,20 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
 )
 
-// chatRetry spaces chat joins after one failed.
-const chatRetry = 30 * time.Second
+// Chat join timing. A join that fails waits chatRetry before the next
+// one, doubled after every further failure up to chatRetryMax. A join gets
+// at most chatJoinTimeout: it holds the bot's GC worker while it waits, and
+// the GC does not answer every join.
+const (
+	chatRetry       = 30 * time.Second
+	chatRetryMax    = 5 * time.Minute
+	chatJoinTimeout = 5 * time.Second
+)
 
-// chatSession is one lobby's chat state. It belongs to the lobby's tracker
-// goroutine: every method that touches it runs there.
+// chatSession is one lobby's chat state. It belongs to the tracker
+// goroutine that made it: every method that touches it runs there, and
+// that tracker passes its own session around rather than reading e.chat,
+// which the next tracker of a requeued lobby replaces.
 type chatSession struct {
 	// channel is the joined channel, 0 while not joined. session is the
 	// bot's ReadySince when it was joined: a new GC session has left every
@@ -22,6 +31,11 @@ type chatSession struct {
 	channel uint64
 	session time.Time
 	retryAt time.Time
+	// failures counts the joins that failed in a row.
+	failures int
+	// joining is set while a join runs; its result arrives on joined.
+	joining bool
+	joined  chan chatJoin
 	greeted bool
 
 	names     map[uint32]string
@@ -35,15 +49,28 @@ type cooldownKey struct {
 	cmd     string
 }
 
-// countdown is a start announced in chat that launches when timer fires.
+// chatJoin is the result of one join.
+type chatJoin struct {
+	session time.Time
+	channel uint64
+	err     error
+}
+
+// countdown is a start announced in chat that launches at at, by the
+// manager's clock. timer only wakes the tracker then; the tracker also
+// checks at on every tick.
 type countdown struct {
 	by    uint32
 	force bool
+	at    time.Time
 	timer *time.Timer
 }
 
 func newChatSession() *chatSession {
-	return &chatSession{names: map[uint32]string{}, cooldowns: map[cooldownKey]time.Time{}, queue: newSendQueue()}
+	return &chatSession{
+		names: map[uint32]string{}, cooldowns: map[cooldownKey]time.Time{},
+		queue: newSendQueue(), joined: make(chan chatJoin, 1),
+	}
 }
 
 // countdownC is the running countdown's timer channel, nil without one.
@@ -52,6 +79,14 @@ func (cs *chatSession) countdownC() <-chan time.Time {
 		return nil
 	}
 	return cs.countdown.timer.C
+}
+
+// joinedC delivers the result of the running join, nil with chat off.
+func (cs *chatSession) joinedC() <-chan chatJoin {
+	if cs == nil {
+		return nil
+	}
+	return cs.joined
 }
 
 func (cs *chatSession) stopCountdown() *countdown {
@@ -83,17 +118,18 @@ func (e *entry) say(text string) {
 }
 
 // startChat subscribes to the bot's chat and starts the lobby's send queue.
-// It returns the message channel (nil with chat off) and the func that
-// stops both.
-func (m *Manager) startChat(ctx context.Context, e *entry, h bot.Handle) (<-chan gc.ChatMessage, func()) {
+// It returns the message channel and the session (both nil with chat off)
+// and the func that stops both.
+func (m *Manager) startChat(ctx context.Context, e *entry, h bot.Handle) (<-chan gc.ChatMessage, *chatSession, func()) {
 	if !m.opts.Lobby.Chat.Enabled {
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	msgs, stop := h.SubscribeChat()
-	e.chat = newChatSession()
+	cs := newChatSession()
 	// A lobby re-adopted after a restart was greeted by the last process.
-	e.chat.greeted = e.snapshot().GCLobbyID != 0
-	q := e.chat.queue
+	cs.greeted = e.snapshot().GCLobbyID != 0
+	e.chat = cs
+	q := cs.queue
 	qctx, cancel := context.WithCancel(ctx)
 	m.wg.Go(func() {
 		q.run(qctx, m.opts.Lobby.Chat.SendInterval, func(l chatLine) error {
@@ -102,7 +138,7 @@ func (m *Manager) startChat(ctx context.Context, e *entry, h bot.Handle) (<-chan
 			m.log.Debug("chat message not sent", "lobby", e.id, "err", err)
 		})
 	})
-	return msgs, func() {
+	return msgs, cs, func() {
 		cancel()
 		stop()
 	}
@@ -110,8 +146,7 @@ func (m *Manager) startChat(ctx context.Context, e *entry, h bot.Handle) (<-chan
 
 // leaveChat leaves the channel of a lobby that ended. A lobby left running
 // at shutdown keeps it: the next start joins again anyway.
-func (m *Manager) leaveChat(ctx context.Context, e *entry, h bot.Handle) {
-	cs := e.chat
+func (m *Manager) leaveChat(ctx context.Context, e *entry, h bot.Handle, cs *chatSession) {
 	if cs == nil {
 		return
 	}
@@ -129,40 +164,27 @@ func (m *Manager) leaveChat(ctx context.Context, e *entry, h bot.Handle) {
 }
 
 // chatStep is the chat part of a tracker step, run with op held while the
-// bot is ready and sees the lobby: join (again after a reconnect), drop a
-// countdown the lobby no longer allows, and announce what events mean for
-// the players.
+// bot is ready and sees the lobby: start a join (again after a reconnect),
+// drop a countdown the lobby no longer allows, and announce what events
+// mean for the players. The join runs on its own goroutine, so a GC that
+// does not answer it never holds op; chatJoined applies its result.
 func (m *Manager) chatStep(ctx context.Context, e *entry, h bot.Handle, l Lobby, st bot.Status, evs []newEvent) {
 	cs := e.chat
 	if cs == nil || l.GCLobbyID == 0 {
 		return
 	}
 	now := m.now()
-	if cs.channel == 0 || !cs.session.Equal(st.ReadySince) {
+	if cs.channel != 0 && !cs.session.Equal(st.ReadySince) {
 		cs.channel = 0
-		if now.Before(cs.retryAt) {
-			return
-		}
-		var id uint64
-		err := m.doGC(ctx, h, "join lobby chat", func(ctx context.Context, c gc.Client) error {
-			var err error
-			id, err = c.JoinLobbyChat(ctx, l.GCLobbyID)
-			return err
-		})
-		if err != nil {
-			cs.retryAt = now.Add(chatRetry)
-			m.log.Warn("could not join the lobby chat; retrying", "lobby", l.ID, "retry_in", chatRetry, "err", err)
-			return
-		}
-		cs.channel, cs.session = id, st.ReadySince
-		m.log.Info("joined the lobby chat", "lobby", l.ID, "channel_id", id)
-		if !cs.greeted {
-			cs.greeted = true
-			e.say("Hi, I host this lobby. Type " + m.opts.Lobby.Chat.Prefix + "help for commands.")
-		}
+	}
+	// Chat is for the players getting ready: a lobby past that does not
+	// join, or join again after a reconnect.
+	prep := l.State == StateWaiting || l.State == StateReady
+	if cs.channel == 0 && !cs.joining && prep && !now.Before(cs.retryAt) {
+		cs.joining = true
+		m.joinChat(ctx, e, h, cs, l.GCLobbyID, st.ReadySince)
 	}
 	if cd := cs.countdown; cd != nil {
-		prep := l.State == StateWaiting || l.State == StateReady
 		if !prep || (!cd.force && l.State != StateReady) {
 			cs.stopCountdown()
 			if prep {
@@ -187,13 +209,52 @@ func (m *Manager) chatStep(ctx context.Context, e *entry, h bot.Handle, l Lobby,
 	}
 }
 
+// joinChat starts a join of the lobby's chat. Its result goes to
+// cs.joined, which holds one: only one join runs at a time.
+func (m *Manager) joinChat(ctx context.Context, e *entry, h bot.Handle, cs *chatSession, gcLobbyID uint64, session time.Time) {
+	timeout := min(chatJoinTimeout, m.opts.GC.RequestTimeout)
+	joined := cs.joined
+	m.wg.Go(func() {
+		jctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		var id uint64
+		err := h.Do(jctx, "join lobby chat", func(ctx context.Context, c gc.Client) error {
+			var err error
+			id, err = c.JoinLobbyChat(ctx, gcLobbyID)
+			return err
+		})
+		joined <- chatJoin{session: session, channel: id, err: err}
+	})
+}
+
+// chatJoined applies the result of a join on the tracker goroutine. A join
+// from an older GC session is kept: the next step sees the new session and
+// joins again.
+func (m *Manager) chatJoined(e *entry, cs *chatSession, j chatJoin) {
+	cs.joining = false
+	if j.err != nil {
+		wait := chatRetry << min(cs.failures, 4)
+		wait = min(wait, chatRetryMax)
+		cs.failures++
+		cs.retryAt = m.now().Add(wait)
+		m.log.Warn("could not join the lobby chat; retrying", "lobby", e.id, "retry_in", wait, "failures", cs.failures, "err", j.err)
+		return
+	}
+	cs.failures = 0
+	cs.channel, cs.session = j.channel, j.session
+	m.log.Info("joined the lobby chat", "lobby", e.id, "channel_id", j.channel)
+	if !cs.greeted {
+		cs.greeted = true
+		e.say("Hi, I host this lobby. Type " + m.opts.Lobby.Chat.Prefix + "help for commands.")
+	}
+}
+
 func seconds(d time.Duration) int { return int(d.Round(time.Second) / time.Second) }
 
 // onChat handles one chat message. Only current members of the lobby can
 // run commands, identified by the account ID the GC put on the message;
 // the bot's own messages are ignored.
-func (m *Manager) onChat(e *entry, h bot.Handle, msg gc.ChatMessage) {
-	cs := e.chat
+func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMessage) {
 	if cs == nil || cs.channel == 0 || msg.ChannelID != cs.channel {
 		return
 	}
@@ -220,7 +281,7 @@ func (m *Manager) onChat(e *entry, h bot.Handle, msg gc.ChatMessage) {
 		cs.names[msg.AccountID] = n
 	}
 	now := m.now()
-	key := cooldownKey{msg.AccountID, cmd}
+	key := cooldownKey{msg.AccountID, cooldownGroup(cmd)}
 	if until, ok := cs.cooldowns[key]; ok && now.Before(until) {
 		return
 	}
@@ -242,7 +303,10 @@ func (m *Manager) onChat(e *entry, h bot.Handle, msg gc.ChatMessage) {
 			return
 		}
 	case effStart:
-		cs.countdown = &countdown{by: msg.AccountID, force: out.Force, timer: time.NewTimer(cfg.Chat.StartCountdown)}
+		cs.countdown = &countdown{
+			by: msg.AccountID, force: out.Force,
+			at: now.Add(cfg.Chat.StartCountdown), timer: time.NewTimer(cfg.Chat.StartCountdown),
+		}
 	case effCancel:
 		cs.stopCountdown()
 	}
@@ -267,14 +331,22 @@ func (m *Manager) setReady(e *entry, account uint32, ready bool) error {
 	return err
 }
 
-// fireCountdown launches when a start countdown ends.
-func (m *Manager) fireCountdown(e *entry) {
-	cd := e.chat.stopCountdown()
-	if cd == nil {
+// fireCountdown launches once a start countdown has run out by the
+// manager's clock. The launch attempts are checked again here: an admin's
+// start is forced past a lobby that is not ready, but after
+// lobby.max_launch_attempts only a forced API launch may try again.
+func (m *Manager) fireCountdown(e *entry, cs *chatSession) {
+	if cs == nil || cs.countdown == nil || m.now().Before(cs.countdown.at) {
 		return
 	}
+	cd := cs.stopCountdown()
 	e.op.Lock()
 	defer e.op.Unlock()
+	if !canAutoLaunch(e.snapshot(), m.opts.Lobby) {
+		m.log.Info("chat start refused", "lobby", e.id, "account_id", cd.by, "reason", "launch_attempts_exhausted")
+		e.say("Start failed: no launch attempts left.")
+		return
+	}
 	if _, err := m.launchHeld(e, LaunchRequest{Force: cd.force, Trigger: TriggerChat, By: cd.by}); err != nil {
 		m.log.Info("chat start refused", "lobby", e.id, "account_id", cd.by, "err", err)
 		e.say("Start failed: " + startFailure(err) + ".")

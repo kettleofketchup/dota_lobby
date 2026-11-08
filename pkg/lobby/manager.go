@@ -127,7 +127,7 @@ type entry struct {
 	seen         []uint32
 
 	// chat is nil with lobby chat off. It belongs to the tracker
-	// goroutine, not to op holders.
+	// goroutine that set it, not to op holders; see chatSession.
 	chat *chatSession
 
 	// cancel stops the tracker; guarded by mu.

@@ -75,14 +75,14 @@ func TestRunCommand(t *testing.T) {
 		{"help for an admin", cmdHelp, rostered(StateWaiting, t0), seatedView(gc.LobbyUI), 50, false, false, effNone, false, "!start, !cancel.", helpCooldown},
 		{"teams", cmdTeams, rostered(StateWaiting, t0), oneOff, 3, false, false, effNone, false, "Radiant: 1/2 seated, missing 2. Dire: 1/1 seated.", teamsCooldown},
 
-		{"ready", cmdReady, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 1, false, false, effReady, false, "1 is ready (1/3 ready).", 0},
+		{"ready", cmdReady, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 1, false, false, effReady, false, "1 is ready (1/3 ready).", readyCooldown},
 		{"ready again", cmdReady, isReady(readyCheck(rostered(StateWaiting, t0)), 1), seatedView(gc.LobbyUI), 1, false, false, effNone, false, "already ready", denyCooldown},
 		{"ready off its side", cmdReady, readyCheck(rostered(StateWaiting, t0)), oneOff, 2, false, false, effNone, false, "Take a Radiant slot first", denyCooldown},
 		{"ready not rostered", cmdReady, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 99, false, false, effNone, false, "Only rostered players", denyCooldown},
 		{"ready without ready check", cmdReady, rostered(StateWaiting, t0), seatedView(gc.LobbyUI), 1, false, false, effNone, false, "no ready check", denyCooldown},
 		{"ready with chat off", cmdReady, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 1, false, true, effNone, false, "no ready check", denyCooldown},
 		{"ready while launching", cmdReady, readyCheck(rostered(StateLaunching, t0)), seatedView(gc.LobbyUI), 1, false, false, effNone, false, "Too late", denyCooldown},
-		{"unready", cmdUnready, isReady(readyCheck(rostered(StateReady, t0)), 1, 2), seatedView(gc.LobbyUI), 2, false, false, effUnready, false, "2 is not ready (1/3 ready).", 0},
+		{"unready", cmdUnready, isReady(readyCheck(rostered(StateReady, t0)), 1, 2), seatedView(gc.LobbyUI), 2, false, false, effUnready, false, "2 is not ready (1/3 ready).", readyCooldown},
 		{"unready when not ready", cmdUnready, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 2, false, false, effNone, false, "not marked ready", denyCooldown},
 
 		{"start by a player when ready", cmdStart, rostered(StateReady, t0), seatedView(gc.LobbyUI), 3, false, false, effStart, false, "Starting in 10 s. An admin can !cancel.", 0},
@@ -93,7 +93,7 @@ func TestRunCommand(t *testing.T) {
 		{"start by a lobby admin", cmdStart, lobbyAdmin(rostered(StateWaiting, t0)), oneOff, 60, false, false, effStart, true, "Starting", 0},
 		{"start twice", cmdStart, rostered(StateReady, t0), seatedView(gc.LobbyUI), 3, true, false, effNone, false, "Already starting", denyCooldown},
 		{"start with no attempts left", cmdStart, exhausted(rostered(StateReady, t0)), seatedView(gc.LobbyUI), 3, false, false, effNone, false, "No launch attempts left", denyCooldown},
-		{"admin start with no attempts left", cmdStart, exhausted(rostered(StateReady, t0)), seatedView(gc.LobbyUI), 50, false, false, effStart, true, "Starting", 0},
+		{"admin start with no attempts left", cmdStart, exhausted(rostered(StateReady, t0)), seatedView(gc.LobbyUI), 50, false, false, effNone, false, "No launch attempts left", denyCooldown},
 		{"start with the host on a team", cmdStart, unseatedHost(rostered(StateReady, t0)), seatedView(gc.LobbyUI), 50, false, false, effNone, false, "still leaving its player slot", denyCooldown},
 		{"start in game", cmdStart, rostered(StateInGame, t0), seatedView(gc.LobbyRun), 50, false, false, effNone, false, "cannot start now", denyCooldown},
 
@@ -120,6 +120,20 @@ func TestRunCommand(t *testing.T) {
 				t.Errorf("reply %q, want it to contain %q", out.Reply, tt.reply)
 			}
 		})
+	}
+}
+
+func TestCooldownGroup(t *testing.T) {
+	tests := []struct{ cmd, want string }{
+		{cmdReady, cmdReady},
+		{cmdUnready, cmdReady},
+		{cmdHelp, cmdHelp},
+		{cmdStart, cmdStart},
+	}
+	for _, tt := range tests {
+		if got := cooldownGroup(tt.cmd); got != tt.want {
+			t.Errorf("cooldownGroup(%q) = %q, want %q", tt.cmd, got, tt.want)
+		}
 	}
 }
 

@@ -31,7 +31,20 @@ const (
 	// denyCooldown follows a refusal, so a player hammering a command they
 	// may not use gets one answer.
 	denyCooldown = 10 * time.Second
+	// readyCooldown follows a ready or unready that was applied. Each one
+	// is a stored change and an event, so a player toggling the two gets
+	// one change per readyCooldown.
+	readyCooldown = 3 * time.Second
 )
+
+// cooldownGroup is the command a cooldown is kept under: ready and unready
+// share one, or alternating them would never be throttled.
+func cooldownGroup(cmd string) string {
+	if cmd == cmdUnready {
+		return cmdReady
+	}
+	return cmd
+}
 
 // maxChatText bounds one message the bot sends.
 const maxChatText = 300
@@ -84,7 +97,8 @@ type chatInput struct {
 // chatOutcome is a command's answer.
 type chatOutcome struct {
 	Effect chatEffect
-	// Force is set for an admin start: it may launch from waiting.
+	// Force is set for an admin start: it may launch from waiting, but
+	// not past lobby.max_launch_attempts.
 	Force bool
 	Reply string
 	// Cooldown, when set, silences the same command from the same player
@@ -134,7 +148,7 @@ func runCommand(cmd string, in chatInput) chatOutcome {
 			word = "ready"
 		}
 		ready, total := readyCount(l, in.Account, want)
-		return chatOutcome{Effect: eff, Reply: fmt.Sprintf("%s is %s (%d/%d ready).", displayName(in.Names, in.Account), word, ready, total)}
+		return chatOutcome{Effect: eff, Cooldown: readyCooldown, Reply: fmt.Sprintf("%s is %s (%d/%d ready).", displayName(in.Names, in.Account), word, ready, total)}
 	case cmdStart:
 		switch {
 		case !prep:
@@ -146,8 +160,8 @@ func runCommand(cmd string, in chatInput) chatOutcome {
 		case !in.Admin && l.State != StateReady:
 			_, missing := readiness(l, in.View, in.Host, readyCheckOn(l, in.Cfg))
 			return deny("Not ready yet: " + missingText(missing, in.Names) + ".")
-		case !in.Admin && !canAutoLaunch(l, in.Cfg):
-			return deny("No launch attempts left; an admin can " + p + "start.")
+		case !canAutoLaunch(l, in.Cfg):
+			return deny("No launch attempts left; the organisers have to launch this lobby.")
 		case !hostGate(in.View, in.Host, l.HostSeat):
 			return deny("The bot is still leaving its player slot; try again in a moment.")
 		}

@@ -40,9 +40,9 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 	defer stopLobbies()
 	invites, stopInvites := h.SubscribeInvites()
 	defer stopInvites()
-	chats, stopChat := m.startChat(ctx, e, h)
+	chats, cs, stopChat := m.startChat(ctx, e, h)
 	defer stopChat()
-	defer m.leaveChat(ctx, e, h)
+	defer m.leaveChat(ctx, e, h, cs)
 
 	e.op.Lock()
 	needCreate := !e.readopt && l.State == StateCreating && l.GCLobbyID == 0
@@ -57,6 +57,7 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 			return
 		}
 		m.step(ctx, e, h)
+		m.fireCountdown(e, cs)
 		select {
 		case <-ctx.Done():
 			return
@@ -66,9 +67,10 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 		case inv := <-invites:
 			m.confirmInvite(e, inv)
 		case msg := <-chats:
-			m.onChat(e, h, msg)
-		case <-e.chat.countdownC():
-			m.fireCountdown(e)
+			m.onChat(e, cs, h, msg)
+		case j := <-cs.joinedC():
+			m.chatJoined(e, cs, j)
+		case <-cs.countdownC():
 		}
 	}
 }
