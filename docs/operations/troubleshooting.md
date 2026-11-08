@@ -93,6 +93,22 @@ cause first (table above), then:
     The bot re-reads its token store and logs on. `retry` also ends a `backoff` or
     `cooling_down` early.
 
+## Token renewal stopped
+
+When the refresh token has under 14 days left, the service renews it in the background with
+the bot's password and Steam Guard code. Renewal follows the same rules as a logon: a refused
+password is never sent twice, a rate limit (84 or 87) pauses logons for every bot, and a
+Steam Guard code that Steam rejects (88) is retried in the next code window, at most twice.
+
+If renewal stops for something only you can fix, the log shows `token renewal stopped` and
+`renew_blocked` in `/v1/bots` names the reason (`bad_credentials`, `guard_required` or
+`totp_mismatch`). The bot is **not** disconnected: its current token still works, and cutting
+it off would turn a credential problem into an outage. Fix the password or `shared_secret`
+(see [Recovering a bot](#recovering-a-bot-in-needs_attention)), then call
+`POST /v1/bots/<bot>/retry`, which clears the block and renews again. If the token expires
+first, the bot goes to `needs_attention` with `reason: bad_credentials` at its next logon, and
+the same password is not sent to Steam again until you retry.
+
 ## Clock skew (EResult 88)
 
 Steam Guard codes change every 30 seconds and are computed from the host clock. Steam
@@ -118,7 +134,9 @@ Then [retry](#recovering-a-bot-in-needs_attention) the bot.
 | Warning `API key authentication disabled; /v1 endpoints are public` | No `secrets.api_key` | Create `secrets/service.sops.yaml` (see [Credentials](../deployment/docker-compose.md#credentials)) and `just docker restart` |
 | Warning `secrets.bots entry matches no configured bot` | Credentials for a bot name that is not in `bots:` | Fix the name, or remove the entry |
 | Warning `stored token unusable; will authenticate` or `stored token has expired` | The token in the state volume cannot be used | Nothing, if the bot has a password and `shared_secret` |
-| Warning `token renewal failed; will retry` | Background renewal (under 14 days left) failed | Nothing at first. If `token_expires_at` keeps getting closer, check the password and `shared_secret` |
+| Warning `token renewal failed; will retry` | Background renewal (under 14 days left) failed for a transient reason such as a network error | Nothing at first. If `token_expires_at` keeps getting closer, check the logs |
+| Warning `token renewal refused; backing off` | Steam rate-limited the renewal (84 or 87). Logons are paused for every bot, like a rate-limited logon | Nothing; renewal runs again after `steam.cooldown_rate_limited` |
+| Error `token renewal stopped` and `renew_blocked` set in `/v1/bots` | Steam refused the password, wants a Steam Guard code the bot cannot answer, or rejected the code three times | See [Token renewal stopped](#token-renewal-stopped) |
 | Container `unhealthy` but running | `/livez` failing: see above, or the healthcheck cannot read the same `config.yaml` or `DOTA_LOBBY_SERVER_*` as the service | See [Changing the port](../deployment/docker-compose.md#changing-the-port) |
 | No health status under Podman | The image was built in OCI format, which drops `HEALTHCHECK` | Build with `just docker build` |
 | Port unreachable | `server.host` is not `0.0.0.0` in the container, or you connect from another machine to a `127.0.0.1` binding | Keep `host: 0.0.0.0`, change the host side of the mapping |

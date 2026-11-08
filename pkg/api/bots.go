@@ -26,8 +26,11 @@ type botView struct {
 	Limited          bool       `json:"limited"`
 	LobbyStale       bool       `json:"lobby_stale"`
 	TokenExpiresAt   *time.Time `json:"token_expires_at"`
-	Attempt          int        `json:"attempt"`
-	GCQueuePosition  *int32     `json:"gc_queue_position"`
+	// RenewBlocked is why background token renewal stopped, e.g.
+	// "bad_credentials"; the bot's connection is unaffected.
+	RenewBlocked    *string `json:"renew_blocked"`
+	Attempt         int     `json:"attempt"`
+	GCQueuePosition *int32  `json:"gc_queue_position"`
 }
 
 func newBotView(st bot.Status) botView {
@@ -39,6 +42,7 @@ func newBotView(st bot.Status) botView {
 		Reason:           nonEmpty(st.Reason),
 		LastError:        nonEmpty(st.LastResult),
 		LastErrorMessage: nonEmpty(st.LastError),
+		RenewBlocked:     nonEmpty(st.RenewBlocked),
 		Since:            st.Since.UTC(),
 		Limited:          st.Limited,
 		LobbyStale:       st.LobbyStale,

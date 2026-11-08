@@ -138,6 +138,7 @@ Always `200`, for dashboards and old monitors:
       "limited": false,
       "lobby_stale": false,
       "token_expires_at": "2027-05-27T11:47:52Z",
+      "renew_blocked": null,
       "attempt": 0,
       "gc_queue_position": null
     }
@@ -159,6 +160,7 @@ Always `200`, for dashboards and old monitors:
 | `limited` | Steam reports the account as limited |
 | `lobby_stale` | The game coordinator session dropped while the bot was ready |
 | `token_expires_at` | Expiry of the stored refresh token, or `null` |
+| `renew_blocked` | Why background token renewal stopped (`bad_credentials`, `guard_required`, `totp_mismatch`, ...), or `null`. The bot stays connected; see [token renewal](../operations/troubleshooting.md#token-renewal-stopped) |
 | `attempt` | Retry counter for the current failure |
 | `gc_queue_position` | Position in the game coordinator logon queue, only in `gc_queued` |
 

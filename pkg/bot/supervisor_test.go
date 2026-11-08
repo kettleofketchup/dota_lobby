@@ -645,3 +645,177 @@ func TestSupervisorStalled(t *testing.T) {
 		t.Error("an exited loop is not stalled")
 	}
 }
+
+// renewHarness is a gc_ready bot whose token is inside the renewal window,
+// with the renewal's Authenticate failing with err first. It returns once
+// that first failed renewal has been made.
+func renewHarness(t *testing.T, failures ...error) *harness {
+	t.Helper()
+	now := newFakeClock().Now()
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", now.Add(10*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.gate = NewGate(0)
+		h.fc.SetToken(jwt(t, "1", now.Add(200*24*time.Hour)))
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+		for _, err := range failures {
+			h.fc.FailNext("Authenticate", err)
+		}
+	})
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+	h.waitAuthCalls(1)
+	return h
+}
+
+// waitAuthCalls waits in real time until Authenticate has been called n
+// times, then lets the supervisor finish handling the outcome.
+func (h *harness) waitAuthCalls(n int) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for h.fc.CallCount("Authenticate") < n {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("Authenticate called %d times, want %d", h.fc.CallCount("Authenticate"), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+}
+
+// elapse moves the fake clock forward in steps, giving the supervisor real
+// time to react after each.
+func (h *harness) elapse(d, step time.Duration) {
+	for done := time.Duration(0); done < d; done += step {
+		h.clk.Advance(step)
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+}
+
+// A renewal that Steam refuses goes through the logon classifier: it must not
+// be re-run blindly on every transition and every check.
+func TestRenewalFailurePolicy(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantBlocked string
+		wantPaused  bool
+		// calls is the expected total Authenticate count after each
+		// elapsed span.
+		spans []struct {
+			after time.Duration
+			calls int
+		}
+	}{
+		{
+			name: "refused password stops renewal", err: deniedErr("BeginAuthSessionViaCredentials", gc.EResultInvalidPassword),
+			wantBlocked: auth.ReasonBadCredential,
+			spans: []struct {
+				after time.Duration
+				calls int
+			}{{time.Hour, 1}, {24 * time.Hour, 1}, {7 * 24 * time.Hour, 1}},
+		},
+		{
+			name: "rate limit pauses all logons and waits out the cooldown", err: deniedErr("BeginAuthSessionViaCredentials", gc.EResultRateLimitExceeded),
+			wantPaused: true,
+			spans: []struct {
+				after time.Duration
+				calls int
+			}{{20 * time.Minute, 1}, {20 * time.Minute, 2}},
+		},
+		{
+			name: "login throttle is a rate limit", err: deniedErr("BeginAuthSessionViaCredentials", gc.EResultAccountLoginDeniedThrottle),
+			wantPaused: true,
+			spans: []struct {
+				after time.Duration
+				calls int
+			}{{20 * time.Minute, 1}, {20 * time.Minute, 2}},
+		},
+		{
+			name: "totp mismatch retries in a new window", err: deniedErr("UpdateAuthSessionWithSteamGuardCode", gc.EResultTwoFactorCodeMismatch),
+			spans: []struct {
+				after time.Duration
+				calls int
+			}{{10 * time.Second, 1}, {30 * time.Second, 2}},
+		},
+		{
+			name: "transient failure waits for the next check", err: errors.New("connection reset"),
+			spans: []struct {
+				after time.Duration
+				calls int
+			}{{time.Hour, 1}, {6 * time.Hour, 2}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := renewHarness(t, tt.err)
+			if got := h.sup.Status().RenewBlocked; got != tt.wantBlocked {
+				t.Errorf("RenewBlocked = %q, want %q", got, tt.wantBlocked)
+			}
+			if got := h.gate.Recheck(h.clk.Now()) > 0; got != tt.wantPaused {
+				t.Errorf("logons paused = %v, want %v", got, tt.wantPaused)
+			}
+			for _, sp := range tt.spans {
+				h.elapse(sp.after, sp.after/20)
+				if n := h.fc.CallCount("Authenticate"); n != sp.calls {
+					t.Fatalf("after +%s: Authenticate called %d times, want %d", sp.after, n, sp.calls)
+				}
+			}
+			if st := h.sup.Status(); st.State != StateGCReady || !st.Ready {
+				t.Errorf("a failed renewal disturbed the connection: %+v", st)
+			}
+		})
+	}
+}
+
+func TestRenewalTOTPRetriesAreLimited(t *testing.T) {
+	mismatch := deniedErr("UpdateAuthSessionWithSteamGuardCode", gc.EResultTwoFactorCodeMismatch)
+	h := renewHarness(t, mismatch, mismatch, mismatch)
+	for n := 2; n <= 3; n++ {
+		h.elapse(31*time.Second, time.Second)
+		if got := h.fc.CallCount("Authenticate"); got != n {
+			t.Fatalf("Authenticate called %d times, want %d", got, n)
+		}
+	}
+	if got := h.sup.Status().RenewBlocked; got != auth.ReasonTOTPMismatch {
+		t.Errorf("RenewBlocked = %q after the retries ran out", got)
+	}
+	h.elapse(24*time.Hour, time.Hour)
+	if got := h.fc.CallCount("Authenticate"); got != 3 {
+		t.Errorf("Authenticate called %d times after giving up, want 3", got)
+	}
+}
+
+// An operator retry lifts the block and renewal runs again.
+func TestRenewalBlockClearedByRetry(t *testing.T) {
+	h := renewHarness(t, deniedErr("BeginAuthSessionViaCredentials", gc.EResultInvalidPassword))
+	if h.sup.Status().RenewBlocked == "" {
+		t.Fatal("renewal not blocked")
+	}
+	h.sup.Retry()
+	h.waitAuthCalls(2)
+	st := h.until("renewal succeeded", time.Millisecond, time.Second, func(s Status) bool {
+		return s.RenewBlocked == "" && s.TokenExpiresAt.After(h.clk.Now().Add(100*24*time.Hour))
+	})
+	if !st.Ready {
+		t.Errorf("status = %+v", st)
+	}
+}
+
+// With the password known to be bad, a dead token must not send it to Steam
+// again through the reconnect path either.
+func TestKnownBadPasswordIsNotResubmitted(t *testing.T) {
+	h := renewHarness(t, deniedErr("BeginAuthSessionViaCredentials", gc.EResultInvalidPassword))
+	if err := h.store.Delete(); err != nil { // the token the machine would use is gone
+		t.Fatal(err)
+	}
+	h.fc.Emit(gc.Disconnected{Conn: h.fc.ConnSeq()})
+	h.untilState(StateNeedsAttention, 10*time.Minute)
+	if got := h.sup.Status().Reason; got != auth.ReasonBadCredential {
+		t.Errorf("reason = %q", got)
+	}
+	if n := h.fc.CallCount("Authenticate"); n != 1 {
+		t.Errorf("Authenticate called %d times; the refused password was sent again", n)
+	}
+}

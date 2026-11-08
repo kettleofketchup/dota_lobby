@@ -50,6 +50,10 @@ type Status struct {
 	TokenExpiresAt time.Time `json:"token_expires_at,omitzero"`
 	Attempt        int       `json:"attempt"`
 	QueuePosition  int32     `json:"queue_position,omitempty"`
+	// RenewBlocked is set while background token renewal is stopped for a
+	// reason only an operator can fix (bad_credentials, guard_required,
+	// totp_mismatch, ...). The connection is not affected.
+	RenewBlocked string `json:"renew_blocked,omitempty"`
 }
 
 // SupervisorOptions configures a Supervisor. Store is required.
@@ -106,6 +110,15 @@ type Supervisor struct {
 	renewCancel context.CancelFunc
 	renewGen    uint64
 	beatTimer   Timer
+
+	// Background renewal's own failure policy, also owned by the run
+	// goroutine. renewBlocked is the error that stopped renewal for good
+	// until an operator retries; renewNotBefore and renewRetries pace the
+	// retryable failures (cooldowns, TOTP window misses).
+	renewBlocked   error
+	renewReason    string
+	renewNotBefore time.Time
+	renewRetries   int
 
 	// lastBeat is when the run loop last finished an input (unix nanos on
 	// clock); beatArmed is set while a heartbeat timer is pending.
@@ -383,6 +396,9 @@ func (s *Supervisor) handle(in Input) {
 		case StateNeedsAttention, StateBackoff, StateCoolingDown:
 			s.snap.HasToken = s.loadToken()
 		}
+		// The operator has had their say about the credentials too.
+		s.clearRenewBlock()
+		s.maybeRenew()
 	}
 	queue := []Input{in}
 	for len(queue) > 0 {
@@ -531,6 +547,13 @@ func (s *Supervisor) startAuth() {
 	}
 	s.authGen++
 	gen := s.authGen
+	if s.renewBlocked != nil && s.renewReason == auth.ReasonBadCredential {
+		// Steam already refused this password; submitting it again is what
+		// gets an IP throttled. Fail the same way until an operator retries.
+		err := s.renewBlocked
+		go s.push(authDone{gen: gen, err: err})
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, s.opts.AuthTimeout)
 	s.authCancel = cancel
 	go func() {
@@ -558,12 +581,15 @@ func (s *Supervisor) authFinished(d authDone) (Input, bool) {
 		}
 		s.renewCancel = nil
 		s.renewGen++
-		if d.err == nil {
-			d.err = s.saveToken(d.tok)
-		}
 		if d.err != nil {
-			s.log.Warn("token renewal failed; will retry", "err", d.err)
+			s.renewFailed(d.err)
+			return nil, false
 		}
+		if err := s.saveToken(d.tok); err != nil {
+			s.log.Warn("token renewal failed; will retry", "err", err)
+			return nil, false
+		}
+		s.clearRenewBlock()
 		return nil, false
 	}
 	if d.gen != s.authGen {
@@ -572,6 +598,9 @@ func (s *Supervisor) authFinished(d authDone) (Input, bool) {
 	s.authCancel = nil
 	if d.err == nil {
 		d.err = s.saveToken(d.tok)
+		if d.err == nil {
+			s.clearRenewBlock() // the credentials work
+		}
 	}
 	return AuthResult{Err: d.err}, true
 }
@@ -619,6 +648,8 @@ func (s *Supervisor) maybeRenew() {
 	switch {
 	case s.renewCancel != nil, !s.bot.Credentials.Headless():
 		return
+	case s.renewBlocked != nil, s.clock.Now().Before(s.renewNotBefore):
+		return
 	case s.snap.State == StateAuthenticating, s.snap.State == StateStopped:
 		return
 	}
@@ -636,4 +667,74 @@ func (s *Supervisor) maybeRenew() {
 		tok, err := s.authenticate(ctx)
 		s.push(authDone{gen: gen, renew: true, tok: tok, err: err})
 	}()
+}
+
+// renewFailed applies the same classifier as a logon to a failed background
+// renewal, so a refusal is never retried blindly:
+//
+//   - a refused password (5), a missing Steam Guard answer or other
+//     needs-attention verdict stops renewal and sets Status.RenewBlocked.
+//     The connection is left alone: its token still works until it expires,
+//     and dropping a working bot would turn a credential problem into an
+//     outage. If the token does expire first, the normal reconnect path
+//     reports needs_attention.
+//   - a rate limit (84/87) pauses logons for every bot, like a logon would,
+//     and renewal waits out the cooldown.
+//   - a TOTP miss (88) retries in a new code window, a limited number of
+//     times, then stops like a refused password.
+//   - anything else is transient: retry at the next check.
+func (s *Supervisor) renewFailed(err error) {
+	p := classifyAuthError(err, s.snap.HasSharedSecret, s.snap.Params.Classifier)
+	now := s.clock.Now()
+	switch p.Action {
+	case auth.ActionNeedsAttention:
+		s.blockRenew(err, p.Reason)
+	case auth.ActionCoolDown:
+		s.renewNotBefore = now.Add(p.Cooldown)
+		if p.Reason == auth.ReasonRateLimited {
+			s.log.Warn("pausing logons for every bot", "for", s.snap.Params.RateLimitPause)
+			s.gate.Pause(now.Add(s.snap.Params.RateLimitPause))
+		}
+		s.log.Warn("token renewal refused; backing off", "reason", p.Reason, "for", p.Cooldown, "err", err)
+		s.scheduleRenewIn(p.Cooldown)
+	case auth.ActionRetryThenAlert:
+		s.renewRetries++
+		if s.renewRetries > p.MaxRetries {
+			s.blockRenew(err, p.Reason)
+			return
+		}
+		delay := s.snap.Params.TOTPRetryDelay
+		s.renewNotBefore = now.Add(delay)
+		s.log.Warn("token renewal needs a new Steam Guard code; retrying", "reason", p.Reason, "in", delay, "err", err)
+		s.scheduleRenewIn(delay)
+	default:
+		s.log.Warn("token renewal failed; will retry", "err", err)
+	}
+}
+
+func (s *Supervisor) blockRenew(err error, reason string) {
+	s.renewBlocked, s.renewReason = err, reason
+	s.mu.Lock()
+	s.status.RenewBlocked = reason
+	s.mu.Unlock()
+	s.log.Error("token renewal stopped; fix the credentials, then retry the bot", "reason", reason, "err", err)
+}
+
+// clearRenewBlock forgets every renewal failure: after a successful save or
+// an operator retry.
+func (s *Supervisor) clearRenewBlock() {
+	s.renewBlocked, s.renewReason = nil, ""
+	s.renewNotBefore, s.renewRetries = time.Time{}, 0
+	s.mu.Lock()
+	s.status.RenewBlocked = ""
+	s.mu.Unlock()
+}
+
+// scheduleRenewIn brings the next renewal check forward to d from now; the
+// check itself reschedules the regular period.
+func (s *Supervisor) scheduleRenewIn(d time.Duration) {
+	if s.renewTimer != nil {
+		s.renewTimer.Stop()
+	}
+	s.renewTimer = s.clock.AfterFunc(d, func() { s.push(renewTick{}) })
 }

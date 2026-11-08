@@ -240,14 +240,16 @@ func TestBots(t *testing.T) {
 	exp := time.Date(2027, 5, 21, 0, 0, 0, 0, time.UTC)
 	a := ready("league_bot_1")
 	a.TokenExpiresAt = exp
+	blocked := backoff("league_bot_4")
+	blocked.RenewBlocked = "bad_credentials"
 	q := bot.Status{Name: "league_bot_2", Username: "lb2", State: bot.StateGCQueued, Since: since, QueuePosition: 7}
-	bots.set(a, backoff("league_bot_3"), q)
+	bots.set(a, backoff("league_bot_3"), q, blocked)
 	s := newTestServer(t, testKey, 1, bots)
 	auth := map[string]string{"X-API-Key": testKey}
 
 	r := do(t, s, http.MethodGet, "/v1/bots", auth)
 	list, _ := r.body["bots"].([]any)
-	if r.code != 200 || len(list) != 3 {
+	if r.code != 200 || len(list) != 4 {
 		t.Fatalf("bots = %d %v", r.code, r.body)
 	}
 	tests := []struct {
@@ -257,7 +259,7 @@ func TestBots(t *testing.T) {
 		{0, map[string]any{
 			"name": "league_bot_1", "state": "gc_ready", "ready": true, "steam_id": "76561198000000001",
 			"token_expires_at": "2027-05-21T00:00:00Z", "last_error": nil, "reason": nil,
-			"since": "2026-11-07T12:00:00Z", "limited": false, "gc_queue_position": nil,
+			"since": "2026-11-07T12:00:00Z", "limited": false, "gc_queue_position": nil, "renew_blocked": nil,
 		}},
 		{1, map[string]any{
 			"name": "league_bot_3", "state": "backoff", "ready": false, "steam_id": nil,
@@ -265,6 +267,7 @@ func TestBots(t *testing.T) {
 			"last_error_message": "logon failed", "attempt": float64(2),
 		}},
 		{2, map[string]any{"name": "league_bot_2", "state": "gc_queued", "gc_queue_position": float64(7)}},
+		{3, map[string]any{"name": "league_bot_4", "renew_blocked": "bad_credentials"}},
 	}
 	for _, tt := range tests {
 		got, _ := list[tt.i].(map[string]any)
