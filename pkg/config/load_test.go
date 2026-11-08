@@ -526,3 +526,18 @@ func TestLoadAcceptsLooseSharedSecret(t *testing.T) {
 		}
 	}
 }
+
+// The shipped example must load with the current keys and defaults.
+func TestExampleConfigLoads(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.yaml.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := load(t, files{config: string(example)})
+	if err != nil {
+		t.Fatalf("config.yaml.example: %v", err)
+	}
+	if fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[caster self_kick]" || cfg.Store.Retention != 720*time.Hour || cfg.Lobby.MaxLaunchAttempts != 3 {
+		t.Errorf("example values: %v %s %d", cfg.Lobby.HostSeatStrategy, cfg.Store.Retention, cfg.Lobby.MaxLaunchAttempts)
+	}
+}

@@ -157,6 +157,77 @@ Configured leagues are only a fallback, because a lobby created for a league the
 not administer is refused by the game coordinator. `league.allow_unverified: true` keeps them in
 use anyway; only set it when you know the game coordinator list is wrong.
 
+## Lobby problems
+
+Every lobby keeps its history. `GET /v1/lobbies/{id}` shows the current `state`, `state_reason`,
+`host_seat` and each player's `status`; the logs carry the same lobby ID:
+
+```bash
+docker compose logs | grep lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+```
+
+### The lobby failed with `league_rejected`
+
+The game coordinator would not create a lobby in that league for that bot: it sent a
+`NOT_LEAGUE_ADMIN` popup, or the created lobby came back with a different league, in which case
+the bot destroyed it. The bot's account is not an admin of the league, although the service
+thought it was. That happens when only `bots[].leagues` lists the league (`league_verified:
+false`) or the account was removed from the league's admins since the last refresh. See
+[A bot does not list my league](#a-bot-does-not-list-my-league), then send the request again
+with the same `external_ref`.
+
+### `409 host_not_seated` on launch
+
+The bot still sits on Radiant or Dire, or not where the confirmed strategy put it. Look at
+`host_seat` in the lobby and for `host seat not confirmed; trying the next strategy` in the
+logs:
+
+- `"confirmed": false` with every strategy tried means the game coordinator ignored all of
+  them. The bot tries again every 30 s while the lobby waits. Add more strategies to
+  `lobby.host_seat_strategy`, for example `[caster, self_kick, player_pool, spectator]`.
+- The strategy is retried automatically before each launch; retry the launch after a few
+  seconds.
+
+### The launch goes back to the lobby screen
+
+A `lobby.launch_failed` event with `reason`:
+
+| `reason` | Meaning | What happens |
+|---|---|---|
+| `ignored` | Still in the lobby screen `lobby.launch_settle_timeout` (2 min) after the launch | Back to `waiting`; the next launch moves the bot with the next strategy |
+| `load_failed` | A server was assigned, then the lobby went back to the lobby screen: a member, possibly the bot, never loaded | The same |
+| `host_not_seated` | The bot could not be moved off its team right before the launch | Back to `waiting` |
+| `server_stall` | No game server within `lobby.server_stall_timeout` (10 min) | The lobby ends as `timed_out` |
+
+Reports say a bot in the caster slot can block the load. If launches with `caster` keep
+failing, put another strategy first: `lobby.host_seat_strategy: [player_pool, self_kick, caster]`.
+After `lobby.max_launch_attempts` (3) failed launches, `state_reason` is
+`launch_attempts_exhausted` and only `{"force": true}` launches again. A real player on each
+side is reported to be needed for a launch.
+
+### Invites do not arrive
+
+- `teams.*.players[].invites_sent` counts the invites sent, and `invite_confirmed` turns `true`
+  when the game coordinator confirms one. Unconfirmed invites are in `pending_invites`.
+- A player who blocks invites from people who are not friends never sees one. They can join from
+  the lobby browser with the lobby name and password.
+- Limited accounts (no purchase on record) may not be able to invite; `limited` in `/v1/bots`
+  shows it.
+- Invites are sent once automatically. Resend with `POST /v1/lobbies/{id}/invite`, at most every
+  `lobby.invite.min_resend` (30 s) and `lobby.invite.max_per_player` (5) times per player.
+
+### A lobby stays `pending`
+
+No ready bot that holds the league is free: every holder hosts another lobby or is not
+`gc_ready`. Check `lobby` and `state` in `/v1/bots`. After `lobby.pending_timeout` (10 min) the
+lobby ends as `timed_out` (`pending_timeout`).
+
+### A lobby failed after a restart
+
+On startup a lobby whose bot no longer hosts it fails: `lobby_lost` (not launched),
+`lost_in_game` (launched; `match.match_id` is kept) or `create_interrupted` (the create had not
+finished). The bot gets `lobby.readopt_timeout` (5 min) to be ready again before that happens.
+
 ## Other symptoms
 
 | Symptom | Cause | Fix |
@@ -177,6 +248,8 @@ use anyway; only set it when you know the game coordinator list is wrong.
 | `unauthorized` (or `denied`) on pull | The image package is private. This happens with a fork whose repository is private, or before a maintainer has made the package public | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
 | `401` with `missing or invalid API key` | Key header missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` |
 | `410 gone` on `/bots` or `/lobby/...` | The old endpoints were removed | Use `/v1/bots` |
+| `422 league_not_held` from `POST /v1/lobbies` | No enabled bot holds the league | See [A bot does not list my league](#a-bot-does-not-list-my-league) |
+| `409 conflict` from `POST /v1/lobbies` | An active lobby already uses that `external_ref` with a different request | Close it, or send exactly the same request to get it back |
 | `503 unavailable` from `/v1/leagues/{id}/nodes` | Bots hold the league, but none is `gc_ready` | Check `/v1/bots`, then retry |
 | `404 not_found` from `/v1/leagues/{id}/nodes` | No enabled bot holds that league | See [A bot does not list my league](#a-bot-does-not-list-my-league) |
 | Startup fails with `open store ...` | `store.path` (default `<state_dir>/dota_lobby.db`) cannot be created or opened, for example a read-only state volume | Make the state volume writable by the service user |
