@@ -187,6 +187,8 @@ logs:
   `lobby.host_seat_strategy`, for example `[caster, self_kick, player_pool, spectator]`.
 - The strategy is retried automatically before each launch; retry the launch after a few
   seconds.
+- A bot that is moved back onto a team after its seat was confirmed seats itself again
+  (`host left its seat; seating it again` in the logs).
 
 ### The launch goes back to the lobby screen
 

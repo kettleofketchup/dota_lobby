@@ -588,6 +588,24 @@ func TestHostSeatFallsThrough(t *testing.T) {
 	}
 }
 
+// A host seen back on a team after its seat was confirmed is seated again.
+func TestHostSeatRestoredAfterAMove(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	l, b := h.toWaiting(spec("game-1"))
+	b.fc.UpdateLobby(func(v *gc.LobbyView) {
+		for i := range v.Members {
+			if v.Members[i].SteamID == b.host {
+				v.Members[i].Team = gc.TeamRadiant
+			}
+		}
+	})
+	h.waitCalls(b, "JoinBroadcastChannel", 2)
+	l = h.waitFor(l.ID, "the seat back", func(l Lobby) bool { return l.HostSeat.Confirmed && l.HostSeat.Team == "broadcaster" })
+	if l.HostSeat.Strategy != SeatCaster {
+		t.Errorf("host seat %+v", l.HostSeat)
+	}
+}
+
 func TestHostSeatAllFail(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	b := h.bot("bot1")

@@ -465,7 +465,13 @@ func (m *Manager) observeMembers(e *entry, l Lobby, v *gc.LobbyView, host uint64
 // prepare is the work of waiting and ready: get the host out of the
 // player slots, invite the roster once, and enforce seating.
 func (m *Manager) prepare(ctx context.Context, e *entry, h bot.Handle, l Lobby, v *gc.LobbyView, host uint64) {
-	if !l.HostSeat.Confirmed && (e.seatFailedAt.IsZero() || m.now().Sub(e.seatFailedAt) >= seatRetry) {
+	confirmed := l.HostSeat.Confirmed
+	if mem, ok := hostMember(v, host); confirmed && ok && mem.TeamKnown && !seatSatisfied(l.HostSeat.Strategy, mem) {
+		// Moved after the seat was confirmed, by a shuffle or the GC.
+		m.log.Warn("host left its seat; seating it again", "lobby", l.ID, "strategy", l.HostSeat.Strategy, "team", mem.Team.String())
+		confirmed, e.seatFailedAt = false, time.Time{}
+	}
+	if !confirmed && (e.seatFailedAt.IsZero() || m.now().Sub(e.seatFailedAt) >= seatRetry) {
 		hs := m.seatHost(ctx, h, l, host)
 		e.seatFailedAt = time.Time{}
 		if !hs.Confirmed {
