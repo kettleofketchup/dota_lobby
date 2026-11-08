@@ -317,6 +317,7 @@ func TestPlanEnforcement(t *testing.T) {
 		{"coach never kicked", rostered(StateWaiting, t0), []gc.Member{coach}, nil, []string{}},
 		{"stranger on a side", rostered(StateWaiting, t0), []gc.Member{mem(8, gc.TeamDire), mem(9, gc.TeamPlayerPool)}, nil, []string{"kick_from_team:8"}},
 		{"kick_strangers removes them", kickStrangers, []gc.Member{mem(8, gc.TeamDire), mem(9, gc.TeamPlayerPool)}, nil, []string{"kick:8", "kick:9"}},
+		{"kick_strangers spares casters and spectators", kickStrangers, []gc.Member{mem(8, gc.TeamBroadcaster), mem(9, gc.TeamSpectator), mem(10, gc.TeamNoTeam)}, nil, []string{}},
 		{"open lobby has no strangers", open, []gc.Member{mem(8, gc.TeamDire)}, nil, []string{}},
 		{"cooldown", rostered(StateWaiting, t0), []gc.Member{mem(1, gc.TeamDire)}, map[uint32]enforceState{1: {Last: now.Add(-5 * time.Second), Count: 1}}, []string{}},
 		{"after the cooldown", rostered(StateWaiting, t0), []gc.Member{mem(1, gc.TeamDire)}, map[uint32]enforceState{1: {Last: now.Add(-11 * time.Second), Count: 1}}, []string{"kick_from_team:1"}},

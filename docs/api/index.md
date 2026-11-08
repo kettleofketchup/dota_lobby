@@ -371,7 +371,7 @@ background; follow it with `GET /v1/lobbies/{id}`.
 | `allow_cheats` | no | Default `false` |
 | `launch` | no | `manual` (default): launch through the API. `auto`: launch `lobby.auto_launch_delay` (10 s) after the lobby is `ready` |
 | `allow_short_handed` | no | `ready` without every rostered player, as long as each side has one and nobody sits wrong |
-| `kick_strangers` | no | Remove members who are not rostered from the lobby, not only from the teams |
+| `kick_strangers` | no | Remove members who are not rostered from the lobby, not only from the teams, when they sit on a side or in the pool. The caster and spectator slots are left alone |
 | `ready_check` | no | Stored; used by lobby chat in a later version |
 | `admins` | no | Account IDs allowed to run admin chat commands (a later version) |
 | `metadata` | no | Up to 16 string pairs, returned in every response |
@@ -579,7 +579,8 @@ is not rostered sits on Radiant or Dire. For an open lobby, one player on each s
 The bot itself and coaches are never counted.
 
 While a lobby is `waiting` or `ready`, the bot moves rostered players who sit on the wrong side,
-and strangers on a side, back to the pool (out of the lobby with `kick_strangers`). It acts on a
+and strangers on a side, back to the pool. With `kick_strangers`, strangers on a side or in the
+pool are removed from the lobby; casters and spectators stay. It acts on a
 member at most once per `lobby.enforce_cooldown` (10 s) and stops after five tries. A member
 whose team the game coordinator does not send is never moved.
 

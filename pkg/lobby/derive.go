@@ -475,7 +475,9 @@ type enforceState struct {
 
 // planEnforcement lists the seating kicks for a lobby in waiting or ready:
 // rostered players on the other side and strangers on a side are kicked to
-// the pool (strangers out of the lobby with kick_strangers). The host,
+// the pool. With kick_strangers, strangers on a side or in the pool are
+// kicked out of the lobby; the caster and spectator slots are left alone.
+// The host,
 // members without a known team and coaches are never touched, and each
 // member gets at most one action per lobby.enforce_cooldown and
 // maxEnforcements in all.
@@ -501,7 +503,7 @@ func planEnforcement(l Lobby, v *gc.LobbyView, host uint64, now time.Time, histo
 			switch {
 			case roster.Empty():
 				continue
-			case l.Spec.KickStrangers:
+			case l.Spec.KickStrangers && (onSide || m.Team == gc.TeamPlayerPool):
 				a = action{Kind: actKick, Account: account, Reason: "stranger"}
 			case onSide:
 				a = action{Kind: actKickFromTeam, Account: account, Reason: "stranger"}
