@@ -62,7 +62,7 @@ func TestColdStartAuthenticatesWithTOTP(t *testing.T) {
 	ac := auths[0].Args[0].(gc.Credentials)
 	// The clock has moved by well under one 30 s window since the call.
 	want, _ := auth.Code(testSharedSecret, newFakeClock().Now())
-	if ac.Username != "bota" || ac.Password.Reveal() != "hunter2" || len(ac.TwoFactorCode) != 5 || ac.TwoFactorCode != want {
+	if ac.Username != "bota" || ac.Password.Reveal() != "hunter2" || len(ac.TwoFactorCode.Reveal()) != 5 || ac.TwoFactorCode.Reveal() != want {
 		t.Errorf("Authenticate creds = %+v (code want %s)", ac, want)
 	}
 	if creds := connectCreds(t, h.fc); len(creds) != 1 || creds[0].AccessToken.Reveal() != minted {
@@ -461,7 +461,7 @@ func TestGuardWithoutSharedSecretNeedsAttention(t *testing.T) {
 	if st.Reason != auth.ReasonGuardRequired {
 		t.Errorf("reason = %q", st.Reason)
 	}
-	if ac := h.fc.Calls("Authenticate")[0].Args[0].(gc.Credentials); ac.TwoFactorCode != "" {
+	if ac := h.fc.Calls("Authenticate")[0].Args[0].(gc.Credentials); ac.TwoFactorCode.IsSet() {
 		t.Errorf("TOTP code sent without a shared secret: %q", ac.TwoFactorCode)
 	}
 	if h.fc.CallCount("Connect") != 0 {

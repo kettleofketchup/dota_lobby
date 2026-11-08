@@ -568,7 +568,7 @@ func TestAuthenticate(t *testing.T) {
 	}{
 		{
 			name:      "password and totp",
-			creds:     Credentials{Username: "bot_a", Password: "hunter2", TwoFactorCode: "BC7K9", DeviceName: "dota_lobby"},
+			creds:     Credentials{Username: "bot_a", Password: "hunter2", TwoFactorCode: config.Secret("BC7K9"), DeviceName: "dota_lobby"},
 			wantToken: "new.refresh.token",
 		},
 		{

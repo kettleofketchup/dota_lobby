@@ -464,8 +464,8 @@ func logOnDetails(c Credentials, useToken bool) *steam.LogOnDetails {
 		return d
 	}
 	d.Password = c.Password.Reveal()
-	d.TwoFactorCode = c.TwoFactorCode
-	d.AuthCode = c.AuthCode
+	d.TwoFactorCode = c.TwoFactorCode.Reveal()
+	d.AuthCode = c.AuthCode.Reveal()
 	prompt := c.SteamGuard
 	d.ConfirmSteamGuard = func(ctx context.Context, confs []steam.SteamGuardConfirmation) (string, unified.EAuthSessionGuardType, error) {
 		kinds := guardKinds(confs)

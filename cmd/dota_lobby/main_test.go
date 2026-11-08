@@ -268,7 +268,7 @@ func TestAuthCommand(t *testing.T) {
 					t.Fatalf("Authenticate calls = %d", len(calls))
 				}
 				creds := calls[0].Args[0].(gc.Credentials)
-				if creds.Username != "bota" || creds.Password.Reveal() != "hunter2" || len(creds.TwoFactorCode) != 5 {
+				if creds.Username != "bota" || creds.Password.Reveal() != "hunter2" || len(creds.TwoFactorCode.Reveal()) != 5 {
 					t.Errorf("credentials: user %q, code %q", creds.Username, creds.TwoFactorCode)
 				}
 				// No terminal and no --code: a guard prompt must fail fast.

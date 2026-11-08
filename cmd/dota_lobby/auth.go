@@ -89,7 +89,7 @@ func (c cli) auth(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("shared_secret: %w", err)
 		}
-		creds.TwoFactorCode = totp
+		creds.TwoFactorCode = config.Secret(totp)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, *timeout)

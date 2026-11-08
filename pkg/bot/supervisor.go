@@ -593,7 +593,7 @@ func (s *Supervisor) authenticate(ctx context.Context) (auth.Token, error) {
 			// A broken shared_secret will not fix itself.
 			return auth.Token{}, fmt.Errorf("%w: shared_secret: %w", gc.ErrNoCredentials, err)
 		}
-		creds.TwoFactorCode = code
+		creds.TwoFactorCode = config.Secret(code)
 	}
 	raw, err := s.client.Authenticate(ctx, creds)
 	if err != nil {

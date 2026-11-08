@@ -7,6 +7,7 @@ package gc
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
@@ -109,15 +110,28 @@ type Credentials struct {
 	Password    config.Secret
 	// TwoFactorCode is the current TOTP code, computed by the caller just
 	// before the call (pkg/auth owns the shared_secret).
-	TwoFactorCode string
+	TwoFactorCode config.Secret
 	// AuthCode is an emailed Steam Guard code, for accounts without TOTP.
-	AuthCode string
+	AuthCode config.Secret
 	// SteamGuard is asked for a code inside the same auth session when Steam
 	// wants one that TwoFactorCode/AuthCode did not cover (an operator
 	// prompt). Nil fails fast with ErrSteamGuardRequired.
 	SteamGuard func(ctx context.Context, kinds []GuardKind) (string, error)
 	// DeviceName labels the session in the account's authorized devices.
 	DeviceName string
+}
+
+// LogValue keeps slog from reflecting into the struct, which JSON cannot
+// encode (SteamGuard is a func). The secrets stay redacted Secrets.
+func (c Credentials) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("username", c.Username),
+		slog.String("device_name", c.DeviceName),
+		slog.Any("password", c.Password),
+		slog.Any("access_token", c.AccessToken),
+		slog.Any("two_factor_code", c.TwoFactorCode),
+		slog.Any("auth_code", c.AuthCode),
+	)
 }
 
 // GuardKind names a Steam Guard confirmation type Steam will accept.
