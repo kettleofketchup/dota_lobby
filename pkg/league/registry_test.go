@@ -438,6 +438,19 @@ func TestNodes(t *testing.T) {
 				panic(err)
 			}
 		}, 100, "bot2", nil},
+		{"next holder answers when the first drops", func(e *env, r *Registry) {
+			bothHold(e, r)
+			e.fcs["bot2"].FailNext("LeagueNodes", gc.ErrNotReady)
+		}, 100, "bot1", nil},
+		{"next holder answers when the first fails", func(e *env, r *Registry) {
+			bothHold(e, r)
+			e.fcs["bot2"].FailNext("LeagueNodes", errors.New("gc said no"))
+		}, 100, "bot1", nil},
+		{"every holder dropped", func(e *env, r *Registry) {
+			bothHold(e, r)
+			e.fcs["bot1"].FailNext("LeagueNodes", gc.ErrNotConnected)
+			e.fcs["bot2"].FailNext("LeagueNodes", gc.ErrNotReady)
+		}, 100, "bot1", ErrNoReadyHolder},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -463,15 +476,30 @@ func TestNodes(t *testing.T) {
 	}
 }
 
-func TestNodesTimeout(t *testing.T) {
-	bc := botCfg("bot1", 100)
-	e := newEnv(bc)
-	r := e.registry(nil, leagueCfg(false), bc)
+// bothHold makes bot1 (config, unverified) and bot2 (GC, verified) ready
+// holders of league 100, so bot2 is tried first.
+func bothHold(e *env, r *Registry) {
 	e.bots["bot1"].SetReady(t0)
+	e.bots["bot2"].SetReady(t0)
+	e.fcs["bot2"].SetLeagues(infos(100))
+	if err := r.Refresh(context.Background(), "bot2"); err != nil {
+		panic(err)
+	}
+}
+
+func TestNodesTimeout(t *testing.T) {
+	b1, b2 := botCfg("bot1", 100), botCfg("bot2", 100)
+	e := newEnv(b1, b2)
+	r := e.registry(nil, leagueCfg(false), b1, b2)
+	e.bots["bot1"].SetReady(t0)
+	e.bots["bot2"].SetReady(t0)
 	e.fcs["bot1"].BlockUntilDone("LeagueNodes", true)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	if _, _, err := r.Nodes(ctx, 100); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Nodes on a stuck GC = %v, want DeadlineExceeded", err)
+	}
+	if n := e.fcs["bot2"].CallCount("LeagueNodes"); n != 0 {
+		t.Errorf("tried the next holder %d times after a timeout", n)
 	}
 }

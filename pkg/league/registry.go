@@ -456,7 +456,12 @@ func (r *Registry) All() []League {
 }
 
 // Nodes fetches league L's lobby nodes through a ready holder, verified
-// holders first. It returns the bot that answered.
+// holders first. It returns the bot that answered. A holder that fails for
+// any reason but a timeout or the caller's ctx ending is skipped for the
+// next one, so one dropped or failing bot does not fail the request; a
+// timeout stays terminal so the caller's deadline holds. When every holder
+// failed, the last error is returned, wrapped in ErrNoReadyHolder if that
+// holder was no longer ready.
 func (r *Registry) Nodes(ctx context.Context, l uint32) (string, []gc.LeagueNode, error) {
 	holders := r.Holders(l)
 	if l == 0 || len(holders) == 0 {
@@ -472,6 +477,8 @@ func (r *Registry) Nodes(ctx context.Context, l uint32) (string, []gc.LeagueNode
 			return 1
 		}
 	})
+	var lastBot string
+	var lastErr error
 	for _, hd := range holders {
 		h, ok := r.bots.Bot(hd.Bot)
 		if !ok {
@@ -486,10 +493,27 @@ func (r *Registry) Nodes(ctx context.Context, l uint32) (string, []gc.LeagueNode
 			nodes, err = c.LeagueNodes(ctx, l)
 			return err
 		})
-		if err != nil {
-			return hd.Bot, nil, fmt.Errorf("league %d nodes via %s: %w", l, hd.Bot, err)
+		if err == nil {
+			return hd.Bot, nodes, nil
 		}
-		return hd.Bot, nodes, nil
+		lastBot, lastErr = hd.Bot, fmt.Errorf("league %d nodes via %s: %w", l, hd.Bot, err)
+		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+			return lastBot, nil, lastErr
+		}
 	}
-	return "", nil, fmt.Errorf("league %d: %w", l, ErrNoReadyHolder)
+	switch {
+	case lastErr == nil:
+		return "", nil, fmt.Errorf("league %d: %w", l, ErrNoReadyHolder)
+	case notReady(lastErr):
+		return lastBot, nil, fmt.Errorf("%w: %w", ErrNoReadyHolder, lastErr)
+	default:
+		return lastBot, nil, lastErr
+	}
+}
+
+// notReady reports whether err means the bot dropped out of gc_ready
+// between the Status check and the call.
+func notReady(err error) bool {
+	return errors.Is(err, bot.ErrNotReady) || errors.Is(err, bot.ErrStopped) ||
+		errors.Is(err, gc.ErrNotReady) || errors.Is(err, gc.ErrNotConnected)
 }
