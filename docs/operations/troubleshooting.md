@@ -119,7 +119,7 @@ Then [retry](#recovering-a-bot-in-needs_attention) the bot.
 | Warning `secrets.bots entry matches no configured bot` | Credentials for a bot name that is not in `bots:` | Fix the name, or remove the entry |
 | Warning `stored token unusable; will authenticate` or `stored token has expired` | The token in the state volume cannot be used | Nothing, if the bot has a password and `shared_secret` |
 | Warning `token renewal failed; will retry` | Background renewal (under 14 days left) failed | Nothing at first. If `token_expires_at` keeps getting closer, check the password and `shared_secret` |
-| Container `unhealthy` but running | `/livez` failing: see above, or `server.port` changed without `DOTA_LOBBY_SERVER_PORT` | See [Changing the port](../deployment/docker-compose.md#changing-the-port) |
+| Container `unhealthy` but running | `/livez` failing: see above, or the healthcheck cannot read the same `config.yaml` or `DOTA_LOBBY_SERVER_*` as the service | See [Changing the port](../deployment/docker-compose.md#changing-the-port) |
 | No health status under Podman | The image was built in OCI format, which drops `HEALTHCHECK` | Build with `just docker build` |
 | Port unreachable | `server.host` is not `0.0.0.0` in the container, or you connect from another machine to a `127.0.0.1` binding | Keep `host: 0.0.0.0`, change the host side of the mapping |
 | `manifest unknown` on `pull` / `up` | `DOTA_LOBBY_TAG` has a leading `v`, or no image exists for that version | Use `1.2.3`, not `v1.2.3`. If it still fails, [build locally](../deployment/docker.md#build-the-image-locally) |

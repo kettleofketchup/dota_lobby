@@ -100,10 +100,50 @@ func TestHealthcheck(t *testing.T) {
 }
 
 func TestDefaultHealthURL(t *testing.T) {
-	t.Setenv("DOTA_LOBBY_SERVER_PORT", "9123")
-	if got := defaultHealthURL(); got != "http://127.0.0.1:9123/livez" {
-		t.Errorf("defaultHealthURL() = %q", got)
+	tests := []struct {
+		name   string
+		config string // config.yaml contents; empty means no file
+		env    map[string]string
+		want   string
+	}{
+		{"defaults", "", nil, "http://127.0.0.1:8080/livez"},
+		{"port from config.yaml", "server:\n  port: 9321\n", nil, "http://127.0.0.1:9321/livez"},
+		{"env beats config.yaml", "server:\n  port: 9321\n", map[string]string{"DOTA_LOBBY_SERVER_PORT": "9123"}, "http://127.0.0.1:9123/livez"},
+		{"wildcard host becomes loopback", "server:\n  host: 0.0.0.0\n  port: 9321\n", nil, "http://127.0.0.1:9321/livez"},
+		{"empty host becomes loopback", "server:\n  host: \"\"\n  port: 9321\n", nil, "http://127.0.0.1:9321/livez"},
+		{"ipv6 wildcard", "server:\n  host: \"::\"\n", nil, "http://[::1]:8080/livez"},
+		{"specific host kept", "server:\n  host: 10.1.2.3\n  port: 9321\n", nil, "http://10.1.2.3:9321/livez"},
+		// The probe must not need the secrets or the bots to be valid.
+		{"unreadable secrets are not needed", "server:\n  port: 9321\n", map[string]string{"DOTA_LOBBY_SECRETS_FILE": "/nonexistent/secrets.yaml"}, "http://127.0.0.1:9321/livez"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, k := range []string{"CONFIG_FILE", "CONFIG_DIR", "SECRETS_FILE", "SECRETS_DIR", "SERVER_PORT", "SERVER_HOST"} {
+				t.Setenv("DOTA_LOBBY_"+k, "")
+			}
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			var cf configFlags
+			if tt.config != "" {
+				cf.configFile = filepath.Join(t.TempDir(), "config.yaml")
+				if err := os.WriteFile(cf.configFile, []byte(tt.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := defaultHealthURL(cf)
+			if err != nil || got != tt.want {
+				t.Errorf("defaultHealthURL() = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+	t.Run("bad port is an error", func(t *testing.T) {
+		t.Setenv("DOTA_LOBBY_SERVER_PORT", "70000")
+		t.Setenv("DOTA_LOBBY_CONFIG_FILE", "")
+		if _, err := defaultHealthURL(configFlags{}); err == nil {
+			t.Error("want an error for port 70000")
+		}
+	})
 }
 
 func freeAddr(t *testing.T) string {

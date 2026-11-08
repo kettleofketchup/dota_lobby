@@ -39,7 +39,7 @@ WORKDIR /app
 ENV DOTA_LOBBY_STATE_DIR=/app/state
 USER 65532:65532
 EXPOSE 8080
-# GET /livez on 127.0.0.1:${DOTA_LOBBY_SERVER_PORT:-8080}. Liveness only: it
+# GET /livez on loopback at the configured server.port (default 8080). Liveness only: it
 # does not depend on Steam, so a bot that cannot log on never restarts the
 # container. Readiness is /readyz.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

@@ -7,22 +7,35 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
 
 // healthcheck is for Docker's HEALTHCHECK, which has no curl in a
-// distroless image: GET /livez and exit 0 only on 200. It reads no config
-// file, since the probe must not depend on secrets being readable; the port
-// comes from DOTA_LOBBY_SERVER_PORT when set.
+// distroless image: GET /livez and exit 0 only on 200. Without --url it
+// finds the port the way serve does (--config, DOTA_LOBBY_CONFIG_FILE, the
+// config search path and DOTA_LOBBY_SERVER_*), but reads only the server
+// section: the probe must not depend on secrets or bot credentials being
+// readable. --secrets is accepted for the same command line as serve and
+// ignored.
 func (c cli) healthcheck(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
-	url := fs.String("url", defaultHealthURL(), "URL to probe")
+	var cf configFlags
+	cf.register(fs)
+	url := fs.String("url", "", "URL to probe (default: /livez on the configured server port)")
 	timeout := fs.Duration("timeout", 5*time.Second, "request timeout")
 	if err := c.parse(fs, args); err != nil {
 		return err
+	}
+	if *url == "" {
+		u, err := defaultHealthURL(cf)
+		if err != nil {
+			return err
+		}
+		*url = u
 	}
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
@@ -42,10 +55,23 @@ func (c cli) healthcheck(ctx context.Context, args []string) error {
 	return nil
 }
 
-func defaultHealthURL() string {
-	port := "8080"
-	if p := os.Getenv(config.EnvPrefix + "_SERVER_PORT"); p != "" {
-		port = p
+// defaultHealthURL is /livez on the configured server port, reached over
+// loopback when the server listens on every interface.
+func defaultHealthURL(cf configFlags) (string, error) {
+	sc, err := config.LoadServer(config.Options{ConfigFile: cf.configFile})
+	if err != nil {
+		return "", fmt.Errorf("find server address: %w", err)
 	}
-	return "http://" + net.JoinHostPort("127.0.0.1", port) + "/livez"
+	return "http://" + net.JoinHostPort(probeHost(sc.Host), strconv.Itoa(sc.Port)) + "/livez", nil
+}
+
+// probeHost maps a wildcard listen host to loopback.
+func probeHost(host string) string {
+	switch strings.Trim(host, "[]") {
+	case "", "0.0.0.0":
+		return "127.0.0.1"
+	case "::":
+		return "::1"
+	}
+	return host
 }

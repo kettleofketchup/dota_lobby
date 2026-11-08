@@ -399,8 +399,9 @@ Compose merges volumes by their container path, so this replaces the mount from
 ## Health checks
 
 The image has a Docker `HEALTHCHECK` that runs `dota_lobby healthcheck` every 30 seconds. The
-subcommand needs no shell or curl: it does `GET http://127.0.0.1:8080/livez` (the port follows
-`DOTA_LOBBY_SERVER_PORT` if you set it) and exits `0` only on `200`. `just docker ps` shows the
+subcommand needs no shell or curl: it does `GET /livez` on the loopback address and the port
+from `server.port` (`config.yaml` or `DOTA_LOBBY_SERVER_PORT`, default 8080) and exits `0` only
+on `200`. It reads only the `server` section, never the secrets. `just docker ps` shows the
 result.
 
 | Endpoint | Meaning | Use it for |
@@ -488,9 +489,10 @@ services:
 `!override` replaces the port list from `compose.yaml` instead of adding to it (Docker
 Compose 2.24.4 or newer).
 
-If you change `server.port` anyway, the container side of the mapping must match, and the
-healthcheck needs `DOTA_LOBBY_SERVER_PORT` set to the same value (it does not read
-`config.yaml`). Setting only `DOTA_LOBBY_SERVER_PORT` in `environment:` covers both.
+If you change `server.port` anyway, the container side of the mapping must match. The
+healthcheck reads the same `server.port` as the service, from `config.yaml` or
+`DOTA_LOBBY_SERVER_PORT`, so it follows the change. Setting only `DOTA_LOBBY_SERVER_PORT` in
+`environment:` covers both.
 
 ## Exposing it beyond localhost
 

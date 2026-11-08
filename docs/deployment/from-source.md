@@ -118,7 +118,7 @@ the credentials in `$RUNTIME_DIRECTORY` or through `LoadCredential=`. Or use
 ```text
 dota_lobby [serve] [--config FILE] [--secrets FILE]
 dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
-dota_lobby healthcheck [--url URL] [--timeout 5s]
+dota_lobby healthcheck [--url URL] [--timeout 5s] [--config FILE]
 dota_lobby version
 ```
 
@@ -126,6 +126,8 @@ dota_lobby version
   `state_dir`. With a `shared_secret` it needs no input; without one it takes `--code` or asks
   on the terminal. It refuses to run while `serve` holds the state directory unless you pass
   `--force`.
-- **healthcheck** does `GET /livez` on `127.0.0.1` and exits `0` only on `200`.
+- **healthcheck** does `GET /livez` on the loopback address and the `server.port` from the config
+  (same `--config`, `DOTA_LOBBY_CONFIG_FILE` and search path as `serve`; secrets are not read) and
+  exits `0` only on `200`. `--url` overrides the address.
 
 Exit codes: `0` success, `1` failure, `2` usage error.

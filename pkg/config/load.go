@@ -454,3 +454,38 @@ func applyFileEnv(v *viper.Viper) error {
 	}
 	return nil
 }
+
+// LoadServer reads only the server section (host and port) from the same
+// defaults, config file and DOTA_LOBBY_SERVER_* env that Load uses. It never
+// opens the secrets file, bot credentials or state_dir, so a probe such as
+// the container healthcheck can find the listen address without depending on
+// them. It does not validate the rest of the config.
+func LoadServer(opts Options) (ServerConfig, error) {
+	v := viper.NewWithOptions(viper.KeyDelimiter(keyDelim))
+	for k, val := range defaults() {
+		v.SetDefault(k, val)
+	}
+	v.SetEnvPrefix(EnvPrefix)
+	v.SetEnvKeyReplacer(envReplacer)
+	v.AutomaticEnv()
+
+	search := opts.SearchPaths
+	if search == nil {
+		search = defaultSearchPaths()
+	}
+	cfgPath, err := locate(opts.ConfigFile, "CONFIG_FILE", "config", search)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	if cfgPath != "" {
+		v.SetConfigFile(cfgPath)
+		if err := v.ReadInConfig(); err != nil {
+			return ServerConfig{}, fmt.Errorf("read config %s: %w", cfgPath, err)
+		}
+	}
+	sc := ServerConfig{Host: v.GetString("server::host"), Port: v.GetInt("server::port")}
+	if sc.Port < 1 || sc.Port > 65535 {
+		return ServerConfig{}, fmt.Errorf("server.port %d out of range 1-65535", sc.Port)
+	}
+	return sc, nil
+}
