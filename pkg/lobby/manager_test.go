@@ -977,6 +977,71 @@ func TestCloseAndKickAndFlip(t *testing.T) {
 	}
 }
 
+// flipAfter makes the GC swap Radiant and Dire delay after a flip request,
+// as the SO update arrives a round trip later.
+func flipAfter(b *testBot, delay time.Duration) {
+	b.fc.OnCall("FlipTeams", func([]any) {
+		go func() {
+			time.Sleep(delay)
+			b.fc.UpdateLobby(func(v *gc.LobbyView) {
+				for i := range v.Members {
+					switch v.Members[i].Team {
+					case gc.TeamRadiant:
+						v.Members[i].Team = gc.TeamDire
+					case gc.TeamDire:
+						v.Members[i].Team = gc.TeamRadiant
+					}
+				}
+			})
+		}()
+	})
+}
+
+// A flip of a seated lobby kicks nobody: the roster is swapped only once
+// the lobby shows the flip.
+func TestFlipSeatedLobby(t *testing.T) {
+	tests := []struct {
+		name    string
+		delay   time.Duration
+		swapped bool // the response already has the swapped roster
+	}{
+		{"shown within the request", 100 * time.Millisecond, true},
+		{"shown after the request", 1500 * time.Millisecond, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, 1, nil)
+			l, b := h.toWaiting(spec("game-1"))
+			h.seatAll(b)
+			h.waitState(l.ID, StateReady)
+			flipAfter(b, tt.delay)
+			out, err := h.m.FlipTeams(context.Background(), l.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := out.Spec.Teams.Radiant.TeamRef == "team-9"; got != tt.swapped {
+				t.Errorf("response roster swapped = %v", got)
+			}
+			if !tt.swapped {
+				if _, err := h.m.SetRoster(context.Background(), l.ID, spec("x").Teams); !errors.Is(err, ErrInvalidState) {
+					t.Errorf("roster change during the flip = %v", err)
+				}
+				if _, err := h.m.FlipTeams(context.Background(), l.ID); !errors.Is(err, ErrInvalidState) {
+					t.Errorf("second flip = %v", err)
+				}
+			}
+			l = h.waitFor(l.ID, "the swapped roster", func(l Lobby) bool { return l.Spec.Teams.Radiant.TeamRef == "team-9" })
+			time.Sleep(100 * time.Millisecond)
+			if n := b.fc.CallCount("KickFromTeam"); n != 0 {
+				t.Errorf("%d players kicked after the flip", n)
+			}
+			if l = h.waitState(l.ID, StateReady); slices.Contains(h.rec.types(l.ID), "lobby.player_kicked") {
+				t.Errorf("kick events %v", h.rec.types(l.ID))
+			}
+		})
+	}
+}
+
 func TestUpdateResendsMergedDetails(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	s := spec("game-1")

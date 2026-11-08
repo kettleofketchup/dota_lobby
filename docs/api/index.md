@@ -565,7 +565,11 @@ lobby in `launching`.
 ### `POST /v1/lobbies/{id}/teams/flip`
 
 Swaps Radiant and Dire in the lobby and in the rosters, so each team keeps its players and
-`team_ref`. `202`, in `waiting` and `ready`.
+`team_ref`. `202`, in `waiting` and `ready`. The rosters are swapped when the lobby shows the
+flip, so seated players are not moved in between. The response waits for that up to
+`gc.request_timeout`; if it comes later, the response still has the old sides and
+`lobby.teams_flipped` marks the swap. While a flip has not shown, another flip or a
+`roster` call answers `409 invalid_state`.
 
 ### `POST /v1/lobbies/{id}/teams/shuffle`
 

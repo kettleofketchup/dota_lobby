@@ -113,6 +113,7 @@ type entry struct {
 	launchFor    time.Time // StateSince of the launching state we sent for
 	destroyFor   time.Time // StateSince of the closing state we destroyed for
 	seatFailedAt time.Time // when every host seat strategy last failed
+	flip         *pendingFlip
 	enforce      map[uint32]enforceState
 	members      map[uint32]gc.Member
 	membersInit  bool
@@ -1002,6 +1003,9 @@ func (m *Manager) SetRoster(ctx context.Context, id string, r Roster) (Lobby, er
 	if err := stateErr(l, StateWaiting, StateReady); err != nil {
 		return Lobby{}, err
 	}
+	if e.flip != nil {
+		return Lobby{}, fmt.Errorf("%w: a flip has not shown in the lobby yet", ErrInvalidState)
+	}
 	h, v, err := m.handle(l)
 	if err != nil {
 		return Lobby{}, err
@@ -1113,8 +1117,34 @@ func (m *Manager) Launch(ctx context.Context, id string, req LaunchRequest) (Lob
 	return out, nil
 }
 
+// flipWatch is how long a flip the lobby has not shown yet is waited for
+// after FlipTeams returned.
+const flipWatch = 30 * time.Second
+
+// pendingFlip is a flip sent to the GC that the lobby has not shown yet.
+// Until it does, the roster keeps its sides and seating is not enforced:
+// against the old seats the swapped roster would have everyone on the
+// wrong side.
+type pendingFlip struct {
+	before map[uint32]gc.Team // seated players and their side when the flip was sent
+	until  time.Time
+}
+
+// shown reports whether v shows the flip: no player is still on the side
+// it had before.
+func (f *pendingFlip) shown(v *gc.LobbyView) bool {
+	for _, mem := range v.Members {
+		if t, ok := f.before[gc.AccountID(mem.SteamID)]; ok && mem.TeamKnown && mem.Team == t {
+			return false
+		}
+	}
+	return true
+}
+
 // FlipTeams swaps the sides in the lobby and in the roster, so each team
-// keeps its players and its team_ref.
+// keeps its players and its team_ref. The roster is swapped once the lobby
+// shows the flip, which it waits for up to gc.request_timeout; after that
+// the tracker swaps it when the flip shows.
 func (m *Manager) FlipTeams(ctx context.Context, id string) (Lobby, error) {
 	e, err := m.activeEntry(ctx, id)
 	if err != nil {
@@ -1126,13 +1156,53 @@ func (m *Manager) FlipTeams(ctx context.Context, id string) (Lobby, error) {
 	if err := stateErr(l, StateWaiting, StateReady); err != nil {
 		return Lobby{}, err
 	}
-	h, _, err := m.handle(l)
+	if e.flip != nil {
+		return Lobby{}, fmt.Errorf("%w: the last flip has not shown in the lobby yet", ErrInvalidState)
+	}
+	h, v, err := m.handle(l)
 	if err != nil {
 		return Lobby{}, err
+	}
+	host := h.Status().SteamID
+	f := &pendingFlip{before: map[uint32]gc.Team{}}
+	if v != nil {
+		for _, mem := range v.Members {
+			if player(mem, host) && (mem.Team == gc.TeamRadiant || mem.Team == gc.TeamDire) {
+				f.before[gc.AccountID(mem.SteamID)] = mem.Team
+			}
+		}
 	}
 	if err := m.do(ctx, h, "flip teams", func(c gc.Client) error { return c.FlipTeams() }); err != nil {
 		return Lobby{}, err
 	}
+	e.flip = f
+	wctx, cancel := context.WithTimeout(ctx, m.opts.GC.RequestTimeout)
+	defer cancel()
+	poll := time.NewTicker(seatPoll)
+	defer poll.Stop()
+	for {
+		if v := lobbyView(h, l.GCLobbyID); v != nil && f.shown(v) {
+			out, err := m.applyFlip(e)
+			if err != nil {
+				return Lobby{}, err
+			}
+			e.wakeUp()
+			return out, nil
+		}
+		select {
+		case <-wctx.Done():
+			m.log.Warn("flip not shown in the lobby yet; the roster follows when it is", "lobby", l.ID)
+			f.until = m.now().Add(flipWatch)
+			e.wakeUp()
+			return e.snapshot(), nil
+		case <-poll.C:
+		}
+	}
+}
+
+// applyFlip swaps the roster sides for a flip the lobby shows. The caller
+// holds op.
+func (m *Manager) applyFlip(e *entry) (Lobby, error) {
 	out, err := m.commit(e, func(cur *Lobby) ([]newEvent, error) {
 		cur.Spec.Teams.Radiant, cur.Spec.Teams.Dire = cur.Spec.Teams.Dire, cur.Spec.Teams.Radiant
 		return []newEvent{{Type: "lobby.teams_flipped", Data: map[string]any{
@@ -1142,7 +1212,7 @@ func (m *Manager) FlipTeams(ctx context.Context, id string) (Lobby, error) {
 	if err != nil {
 		return Lobby{}, err
 	}
-	e.wakeUp()
+	e.flip = nil
 	return out, nil
 }
 

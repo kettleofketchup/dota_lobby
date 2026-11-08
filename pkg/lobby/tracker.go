@@ -301,6 +301,20 @@ func (m *Manager) step(ctx context.Context, e *entry, h bot.Handle) {
 		view = lobbyView(h, l.GCLobbyID)
 	}
 
+	if f := e.flip; f != nil && view != nil && botReady {
+		switch {
+		case f.shown(view):
+			if next, err := m.applyFlip(e); err != nil {
+				m.log.Warn("flip not saved", "lobby", l.ID, "err", err)
+			} else {
+				l = next
+			}
+		case now.After(f.until):
+			m.log.Warn("the lobby never showed the flip; the roster keeps its sides", "lobby", l.ID)
+			e.flip = nil
+		}
+	}
+
 	if botReady && view == nil {
 		if e.missingSince.IsZero() {
 			e.missingSince = now
@@ -493,7 +507,9 @@ func (m *Manager) prepare(ctx context.Context, e *entry, h bot.Handle, l Lobby, 
 	if err := m.autoInvite(ctx, e, h, v); err != nil {
 		m.log.Warn("invites incomplete", "lobby", l.ID, "err", err)
 	}
-	m.enforceSeating(ctx, e, h, v, host)
+	if e.flip == nil {
+		m.enforceSeating(ctx, e, h, v, host)
+	}
 }
 
 // autoInvite sends the one automatic invite to rostered players who never
