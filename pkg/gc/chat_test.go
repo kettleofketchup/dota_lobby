@@ -31,6 +31,9 @@ func TestJoinLobbyChat(t *testing.T) {
 		{"reply with our job id", []reply{{job: true, name: name, id: 556, result: success}}, 556, ""},
 		{"other channel ignored", []reply{{name: "Lobby_1", id: 1, result: success}, {name: name, id: 557, result: success}}, 557, ""},
 		{"refused", []reply{{name: name, result: full}}, 0, "refused"},
+		{"refused without a channel name", []reply{{name: "", result: full}}, 0, "refused"},
+		{"other channel refused", []reply{{name: "Lobby_3", result: full}}, 0, "timeout"},
+		{"success without a channel name ignored", []reply{{name: "", id: 9, result: success}}, 0, "timeout"},
 		{"no reply", nil, 0, "timeout"},
 		{"only other channels", []reply{{name: "Lobby_2", id: 2, result: success}}, 0, "timeout"},
 	}
