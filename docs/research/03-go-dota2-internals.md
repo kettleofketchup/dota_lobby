@@ -439,7 +439,7 @@ The wire carries integers. Sending `protocol.LobbyDotaTVDelay_LobbyDotaTV_300` f
 
 ### 8.3 `CMsgPracticeLobbyLaunch.nonce` (verified present upstream, effect uncertain)
 
-The field was added in SteamDatabase `623ebf57b33a` (2026-09-25). It is absent from the pin and from upstream HEAD. REPORTED: an open-source league bot that sends an empty launch body (the same zero bytes as go-dota2's `LaunchLobby()`) kept reaching `RUN` with league matches through Oct 2026 ([field notes](https://github.com/timothyjjcrow/under-5k-league/blob/main/docs/DOTA-LOBBY-BOT.md)), so the nonce looks optional for now. Not yet tested by us (Q5 covers the first live launch); keep a launch-to-RUN timeout as a guard. If launches start failing, hand-add the field (proto2 unknown fields are fine to add).
+The field was added in SteamDatabase `623ebf57b33a` (2026-09-25). It is absent from the pin and from upstream HEAD. REPORTED: an open-source league bot that sends an empty launch body (the same zero bytes as go-dota2's `LaunchLobby()`) kept reaching `RUN` with league matches through Oct 2026 (field notes, October 2026), so the nonce looks optional for now. Not yet tested by us (Q5 covers the first live launch); keep a launch-to-RUN timeout as a guard. If launches start failing, hand-add the field (proto2 unknown fields are fine to add).
 
 ### 8.4 Overall risk assessment
 

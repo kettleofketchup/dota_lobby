@@ -255,7 +255,7 @@ func (a *Adapter) Connect(ctx context.Context, creds Credentials) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 	c.status.Store(int32(GCNoSession))
 	// The tap goes first so it sees packets before go-dota2 acts on them,
-	// and both are registered before the dial (D11, gap-01 §5).
+	// and both are registered before the dial (gap-01 §5).
 	c.tap = newTap(a.log, c.emitEvent)
 	c.t.RegisterPacketHandler(c.tap)
 	c.d = dota2.NewWithCoordinator(c.t, c.emitDota, newLogrus(a.log))
@@ -709,7 +709,7 @@ func (a *Adapter) CreateLobby(ctx context.Context, d LobbyDetails) (*LobbyView, 
 	defer stopPopups()
 
 	// go-dota2's CreateLobby sends no source job, and whether the GC then
-	// replies at all is unknown, so we send it ourselves (D5, gap-05 §5.2).
+	// replies at all is unknown, so we send it ourselves (gap-05 §5.2).
 	job := c.tap.nextJob()
 	msg := gamecoordinator.NewGCMsgProtobuf(dota2.AppID, msgPracticeLobbyCreate,
 		&protocol.CMsgPracticeLobbyCreate{PassKey: details.PassKey, LobbyDetails: details})

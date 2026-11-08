@@ -4,13 +4,12 @@ This version keeps a set of Steam bot accounts logged in to Steam and the Dota 2
 coordinator without anyone at a keyboard, and reports their state. It does not host lobbies
 yet. Read this list before you use real accounts.
 
-1. **Not yet run against live Steam.** The headless login (password plus a computed Steam
-   Guard code, then a stored refresh token) and the game coordinator session are built and
-   tested against fakes of Steam and the game coordinator, not against a real account. The
-   open questions are listed under
-   [What is still unverified](configuration/bot-accounts.md#what-is-still-unverified); the most
-   important are whether token login works on the current go-steam master (Q1) and whether an
-   account that never launched Dota 2 gets a game coordinator welcome (Q21).
+1. **The service itself has not run against live Steam yet.** The headless login and game
+   coordinator session that `pkg/gc` uses were verified live with the probe on 2026-11-08
+   (token login, login after a restart, and an account that never launched Dota 2; see
+   [live probe results](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/09-live-probe.md)), but the bot manager as a whole is only tested against
+   fakes. The remaining open questions are listed under
+   [What is still unverified](configuration/bot-accounts.md#what-is-still-unverified).
 2. **Lobbies are not created.** Everything under `/v1/lobbies` answers `501`. League discovery,
    lobby hosting and match results come in later phases.
 3. **Account setup is manual.** Creating a Steam account and linking its authenticator with

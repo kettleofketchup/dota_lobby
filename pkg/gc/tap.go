@@ -21,7 +21,7 @@ const noJob = uint64(^sprotocol.JobId(0))
 // tap is a GCPacketHandler that sees every Dota GC packet, including ones a
 // pending MakeRequest claims (go-steam hands each packet to every handler).
 // It turns 7055 into PracticeLobbyResponse events and lets callers wait for
-// packets by type, for the job-addressed create (D5) and the 7634 fallback
+// packets by type, for the job-addressed create and the 7634 fallback
 // (Q18). It runs on the Steam reader goroutine, so it never blocks.
 type tap struct {
 	log  *slog.Logger

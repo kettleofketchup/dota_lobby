@@ -243,14 +243,14 @@ Still start with one bot, and add the next one once the first is `gc_ready`.
 
 ## What is still unverified
 
-Everything above is built and tested against fakes. These depend on a live account and are
-open until the live probe has been run
+A live run on 2026-11-08 ([live probe results](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/09-live-probe.md)) confirmed that password plus a
+computed Steam Guard code returns a refresh token with no prompt, that the token alone logs on
+again after a restart, and that an account which never launched Dota 2 gets a game coordinator
+session, so no manual Dota launch is needed. These are still open
 ([open questions](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/README.md)):
 
 | Question | What is assumed | If it is wrong |
 |---|---|---|
-| **Q1** token login | Password + TOTP returns a refresh token, the token alone logs on, the bot reaches the game coordinator, and the same token works after a restart | The core of headless login fails; the adapter needs changes |
-| **Q21** account that never launched Dota | A fresh account gets a game coordinator welcome without ever running Dota 2 | Each new bot needs one manual Dota 2 launch, added to this runbook |
 | **Q22** limited accounts | Unknown whether a limited bot's lobby invites arrive | Fund every bot |
 | Phone-less authenticator | `steamguard setup` works with email codes only | Add a phone number in step 4 |
 | Tokens across hosts | A token minted on your workstation works from the server | The service mints its own (it needs password and `shared_secret`) |

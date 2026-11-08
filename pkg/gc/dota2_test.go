@@ -117,7 +117,7 @@ func TestDisconnectThenReconnect(t *testing.T) {
 		t.Errorf("first Disconnected.Conn = %d, want 1", d.Conn)
 	}
 	// The pair is dropped before Disconnected is delivered, so a supervisor
-	// can reconnect straight away, on a fresh transport (D11).
+	// can reconnect straight away, on a fresh transport.
 	if err := a.Connect(t.Context(), tokenCreds); err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}

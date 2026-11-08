@@ -212,7 +212,7 @@ sequenceDiagram
 
 ### 3.3 Field reports from a league bot that stays to postgame (Oct 2026) [R]
 
-An open-source league bot that hosts ticketed lobbies with one account and stays in the lobby until postgame reports ([field notes](https://github.com/timothyjjcrow/under-5k-league/blob/main/docs/DOTA-LOBBY-BOT.md)):
+An open-source league bot that hosts ticketed lobbies with one account and stays in the lobby until postgame reports (field notes, October 2026):
 
 - The GC ignores a Leave (7040) while the lobby is in `RUN`; the bot was still in the lobby at every postgame.
 - `game_state` in lobby updates went from `WAIT_FOR_PLAYERS_TO_LOAD` (1) straight to the postgame (6). Intermediate states appeared only after a forced GC session cycle (`SetPlaying(false)` then `(true)`, which replays the lobby in the welcome).

@@ -83,7 +83,7 @@ type GCConfig struct {
 	CreateTimeout  time.Duration `mapstructure:"create_timeout"`
 }
 
-// LeagueConfig controls league discovery (D2).
+// LeagueConfig controls league discovery.
 type LeagueConfig struct {
 	Sources          []string      `mapstructure:"sources"`
 	RefreshInterval  time.Duration `mapstructure:"refresh_interval"`
@@ -112,7 +112,7 @@ type InviteConfig struct {
 	MaxPerPlayer int           `mapstructure:"max_per_player"`
 }
 
-// ChatConfig toggles lobby chat (D10).
+// ChatConfig toggles lobby chat.
 type ChatConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 }
@@ -174,7 +174,7 @@ type BotConfig struct {
 	// the bot's credentials file, then to Name.
 	Username string
 	Enabled  bool
-	// Leagues is the static, unverified league fallback (D2).
+	// Leagues is the static, unverified league fallback.
 	Leagues []uint32
 	Tags    []string
 	// Credentials are resolved from every layer; see Load.

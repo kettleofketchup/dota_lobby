@@ -427,7 +427,7 @@ type LobbyDetails struct {
 	FillWithBots    bool
 	AllChat         bool
 	// TVDelaySeconds is 10, 60, 120, 300 or 900; 0 leaves it unset (the GC
-	// default). It is mapped through the D6 table in wire.go.
+	// default). It is mapped through the TV-delay table in wire.go.
 	TVDelaySeconds uint32
 }
 
@@ -441,7 +441,7 @@ type LobbyView struct {
 	ServerRegion, GameMode               uint32
 	GameName                             string
 	Visibility                           Visibility
-	// TVDelaySeconds is field 53 decoded through the D6 table; 0 when the
+	// TVDelaySeconds is field 53 decoded through the TV-delay table; 0 when the
 	// wire value is not in the table (TVDelayWire keeps it).
 	TVDelaySeconds uint32
 	TVDelayWire    int32

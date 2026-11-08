@@ -230,7 +230,7 @@ func member(m *protocol.CSODOTALobbyMember) Member {
 }
 
 // detailsProto builds CMsgPracticeLobbySetDetails. TV delay goes through the
-// D6 table; an unknown value is an error rather than a silent default.
+// TV-delay table; an unknown value is an error rather than a silent default.
 func detailsProto(d LobbyDetails) (*protocol.CMsgPracticeLobbySetDetails, error) {
 	vis := protocol.DOTALobbyVisibility(d.Visibility)
 	p := &protocol.CMsgPracticeLobbySetDetails{

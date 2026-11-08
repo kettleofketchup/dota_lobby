@@ -70,7 +70,7 @@ func TestTVDelayRejectsUnknown(t *testing.T) {
 }
 
 // The vendored enum is the stale numbering. If go-dota2 regenerates its
-// protos this fails, and the D6 table can be checked against the new enum.
+// protos this fails, and the TV-delay table can be checked against the new enum.
 func TestVendoredTVEnumIsStale(t *testing.T) {
 	w120, _ := TVDelayToWire(120)
 	if int32(protocol.LobbyDotaTVDelay_LobbyDotaTV_120) == w120 {
