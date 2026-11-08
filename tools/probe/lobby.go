@@ -456,21 +456,41 @@ func parseGameMode(v string) (uint32, error) {
 // the Lobby channel type comes from other libraries and is unverified (D10);
 // without the type the GC would make a new custom channel of that name.
 func (s *session) joinLobbyChat(ctx context.Context, lobbyID uint64) error {
-	jctx, cancel := context.WithTimeout(ctx, s.cfg.replyTimeout)
-	defer cancel()
 	name := fmt.Sprintf("Lobby_%d", lobbyID)
-	resp, err := s.d.JoinChatChannel(jctx, name, protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby, false)
-	if err != nil {
-		return fmt.Errorf("join %s: %w", name, err)
+	// The GC does not echo the job ID on 7010 (seen live 2026-11-08), so
+	// go-dota2's JoinChatChannel never completes. Send the join ourselves
+	// and match the reply by channel name instead.
+	replies, stop := s.watch(protocol.EDOTAGCMsg_k_EMsgGCJoinChatChannelResponse)
+	defer stop()
+	s.send(protocol.EDOTAGCMsg_k_EMsgGCJoinChatChannel, &protocol.CMsgDOTAJoinChatChannel{
+		ChannelName: new(name),
+		ChannelType: protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby.Enum(),
+	}, true)
+
+	timer := time.NewTimer(s.cfg.replyTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case p := <-replies:
+			resp := &protocol.CMsgDOTAJoinChatChannelResponse{}
+			if err := resp.UnmarshalVT(p.Body); err != nil || resp.GetChannelName() != name {
+				continue
+			}
+			fields := chatJoinFields(resp)
+			fields["requested_name"] = name
+			fields["target_job"] = uint64(p.TargetJobId)
+			s.rep.emit("D10", "chat_join", fields)
+			if resp.GetResult() != protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
+				return fmt.Errorf("join %s: %s", name, resp.GetResult())
+			}
+			s.chatChannel.Store(resp.GetChannelId())
+			return nil
+		case <-timer.C:
+			return fmt.Errorf("join %s: no reply within %s", name, s.cfg.replyTimeout)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	fields := chatJoinFields(resp)
-	fields["requested_name"] = name
-	s.rep.emit("D10", "chat_join", fields)
-	if resp.GetResult() != protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
-		return fmt.Errorf("join %s: %s", name, resp.GetResult())
-	}
-	s.chatChannel.Store(resp.GetChannelId())
-	return nil
 }
 
 func chatJoinFields(r *protocol.CMsgDOTAJoinChatChannelResponse) map[string]any {
