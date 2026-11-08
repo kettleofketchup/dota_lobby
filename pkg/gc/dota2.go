@@ -938,7 +938,7 @@ func (a *Adapter) Destroy(ctx context.Context) error {
 // go-dota2's JoinChatChannel, whose MakeRequest waits for a job ID the GC
 // never echoes on 7010, and watches the tap for the reply with our
 // channel name. A refusal that names no channel is taken as the answer to
-// this join too: the lobby manager runs one join per bot at a time, and
+// this join too: the bot's GC worker runs one join at a time, and
 // waiting it out would only hide the result.
 func (a *Adapter) JoinLobbyChat(ctx context.Context, gcLobbyID uint64) (uint64, error) {
 	c, err := a.session("join lobby chat")
