@@ -104,9 +104,16 @@ store:
   path: ""                 # empty = <state_dir>/dota_lobby.db
   retention: 720h          # ended lobbies and their events
 
+# Signed event deliveries; see docs/operations/webhooks.md. Each URL needs
+# a signing secret in secrets.webhook_secrets.
 # webhooks:
 #   - url: https://league.internal/hooks/dota
-#     events: ["lobby.*", "match.*"]
+#     events: ["lobby.*", "match.*"]  # globs on the event type; ["*"] = all
+#     token_header: X-Internal-Token  # optional; value from secrets.webhook_tokens
+
+webhook_delivery:
+  timeout: 10s             # one attempt, response included
+  max_age: 24h             # retry a failing delivery this long after the event
 
 bots:
   - name: league_bot_1       # used in the API, logs and env names

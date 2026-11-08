@@ -36,6 +36,7 @@ the API.
 | `POST` | `/v1/lobbies/{id}/launch` | When an API key is set | Start the match |
 | `POST` | `/v1/lobbies/{id}/teams/flip` | When an API key is set | Swap the sides |
 | `POST` | `/v1/lobbies/{id}/teams/shuffle` | When an API key is set | Balanced shuffle of an open lobby |
+| `GET` | `/v1/lobbies/{id}/events` | When an API key is set | A lobby's events, oldest first |
 | any | `/bots`, `/lobby/create`, `/lobby/info` | When an API key is set | `410`, the old endpoints are gone |
 
 `GET` endpoints also answer `HEAD`. A known path with the wrong method gets `405` with an
@@ -613,8 +614,9 @@ lobby shows it where the strategy puts it, within `lobby.host_seat_confirm_timeo
 ### Events
 
 Every change is stored as an event with a `seq` that grows by one per lobby, written together
-with the change. They are kept with the lobby and will be delivered as webhooks in a later
-version.
+with the change. Events are kept with the lobby, listed by
+[`GET /v1/lobbies/{id}/events`](#get-v1lobbiesidevents) and pushed to the configured
+[webhooks](../operations/webhooks.md), which also lists the `data` of each type.
 
 | Type | When |
 |---|---|
@@ -630,6 +632,39 @@ version.
 | `lobby.finished`, `lobby.failed`, `lobby.closed`, `lobby.timed_out` | The lobby ended (`reason`) |
 
 No event carries the password.
+
+### `GET /v1/lobbies/{id}/events`
+
+The lobby's events with `seq` above `after`, oldest first. Each is the same envelope a webhook
+delivers (see [the request](../operations/webhooks.md#the-request)), including the lobby as it
+was right after that change.
+
+| Query | Default | Meaning |
+|---|---|---|
+| `after` | `0` | Only events with a higher `seq` |
+| `limit` | `100` | 1-500 |
+
+```bash
+curl -s -H "X-API-Key: $API_KEY" \
+  'http://127.0.0.1:8080/v1/lobbies/lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V/events?after=7'
+```
+
+```json
+{
+  "events": [
+    {"id": "evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0", "type": "lobby.state_changed", "seq": 8,
+     "occurred_at": "2026-11-08T18:05:00Z",
+     "lobby": {"id": "lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V", "external_ref": "game-42", "state": "in_game",
+               "bot": "bot1", "gc_lobby_id": "27110012345678901", "league_id": 17929, "metadata": {}},
+     "data": {"from": "launching", "to": "in_game", "reason": null}}
+  ],
+  "next_after": 8
+}
+```
+
+`next_after` is the last `seq` returned, or `after` when there is nothing new: pass it as
+`after` to read on. Unknown lobby: `404 not_found`. A bad `after` or `limit`: `400`. Events of
+lobbies the retention sweep deleted are gone with them.
 
 ### Restarts
 

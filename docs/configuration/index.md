@@ -94,6 +94,9 @@ fatal error. A secrets file that is still sops-encrypted is refused with
 | `league.allow_unverified` | bool | `false` | Keep using a bot's configured leagues after the game coordinator list is known, even those the game coordinator does not list. Leave it off unless the game coordinator list is wrong |
 | `store.path` | path | empty | The SQLite database. Empty means `<state_dir>/dota_lobby.db`. Created mode `0600`; keep it on the persistent state volume. It holds the lobby passwords |
 | `store.retention` | duration | `720h` | How long ended lobbies and their events are kept before an hourly sweep deletes them |
+| `webhooks` | list | empty | Event receivers, see [`webhooks[]`](#webhooks) |
+| `webhook_delivery.timeout` | duration | `10s` | How long one delivery attempt may take, response included |
+| `webhook_delivery.max_age` | duration | `24h` | How long after an event a failing delivery is retried before it is given up |
 | `bots` | list | empty | The bots, see below |
 
 ### `lobby`
@@ -140,11 +143,24 @@ How lobbies run. See [Lobbies](../api/index.md#lobbies) for what each step does.
 With no `bots:` list, every file in `credentials_dir` becomes an enabled bot named after the
 file. Two bots may not use the same Steam account.
 
+### `webhooks[]`
+
+Each entry is one receiver of signed event deliveries; see [Webhooks](../operations/webhooks.md).
+
+| Key | Meaning |
+|---|---|
+| `url` | Absolute `http` or `https` URL. Each URL may appear once (compared case-insensitively). Use `https` beyond a private network |
+| `events` | Event types to send, as globs: `["lobby.*", "match.*"]`, `["match.ended"]`, `["*"]` for every event. Must not be empty |
+| `token_header` | Optional request header that carries `secrets.webhook_tokens[url]`, for a receiver that already checks a static token. `Content-Type`, `User-Agent` and `X-Dota-Lobby-*` are taken |
+
+A webhook without `secrets.webhook_secrets[url]` stops startup, as does a `token_header`
+without its token or a token without a `token_header`.
+
 ### Accepted, not used yet
 
 These keys are validated so a config written now keeps working, but nothing reads them in this
 version: `metrics.addr` (no metrics listener yet), `league.webapi_enrichment`,
-`lobby.series_types`, `match.*` and `webhooks`. Their defaults are in
+`lobby.series_types` and `match.*`. Their defaults are in
 [`config.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/config.yaml.example).
 
 ## Secrets
@@ -152,7 +168,9 @@ version: `metrics.addr` (no metrics listener yet), `league.webapi_enrichment`,
 | Key | Meaning |
 |---|---|
 | `secrets.api_key` | API key for everything under `/v1`. Without it `/v1` is public and the service logs `API key authentication disabled; /v1 endpoints are public` |
-| `secrets.webapi_key`, `secrets.opendota_key`, `secrets.webhook_secrets` | Accepted, used from later phases |
+| `secrets.webapi_key`, `secrets.opendota_key` | Accepted, used from later phases |
+| `secrets.webhook_secrets` | Map from webhook URL to its signing secret. Required for every entry in `webhooks` |
+| `secrets.webhook_tokens` | Map from webhook URL to the token sent in its `token_header` |
 | `secrets.bots.<name>.password` | The bot's Steam password |
 | `secrets.bots.<name>.shared_secret` | The authenticator's base64 `shared_secret`. With it the bot re-authenticates on its own |
 | `secrets.bots.<name>.refresh_token` | Seeds the token store, see [Bot accounts](bot-accounts.md#how-the-service-uses-the-credentials) |

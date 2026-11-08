@@ -23,8 +23,10 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
 4. **One game per lobby.** Series (Bo3, Bo5), bots that fill empty slots, team names shown in
    the client, and a host that leaves after the launch are not supported. The bot stays in the
    lobby until the match ends, so you need one bot per game played at the same time.
-5. **No webhooks yet.** Lobby events are stored and visible in the lobby's `seq`, but not
-   delivered anywhere. Poll `GET /v1/lobbies/{id}` or `GET /v1/lobbies?active=true`.
+5. **Webhooks are delivered at least once.** A receiver can see an event twice and must
+   de-duplicate on its `id`. A delivery that keeps failing is given up after
+   `webhook_delivery.max_age` (24 h); the event stays readable in
+   `GET /v1/lobbies/{id}/events`. See [Webhooks](operations/webhooks.md).
 6. **Account setup is manual.** Creating a Steam account and linking its authenticator with
    steamguard-cli is done by a person, once per bot (about 15 to 20 minutes); see
    [Bot accounts](configuration/bot-accounts.md). Creating accounts automatically is against the
@@ -48,8 +50,9 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
    its time.
 13. **No metrics yet.** `metrics.addr` is accepted but no metrics listener runs. Token expiry is
     shown in `/v1/bots` and renewals are logged.
-14. **Several config keys are accepted but unused**: `lobby.series_types`, `match`, `webhooks`,
-    `metrics` and `league.webapi_enrichment`. They are validated so configs keep working once the
+14. **Several config keys are accepted but unused**: `lobby.series_types`, `match`, `metrics` and
+    `league.webapi_enrichment`. The `match` keys belong to the match result lookup (Steam Web
+    API, OpenDota), which does not run yet. They are validated so configs keep working once the
     features arrive.
 15. **No TLS.** Put a reverse proxy in front of the API before exposing it beyond localhost.
 
@@ -58,7 +61,6 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
 Planned work, in order. No dates are promised.
 
 - Run the Phase 0 probe against real bot accounts and fix whatever it finds.
-- Signed webhooks for lobby and match events.
 - Match results from the game coordinator, the Steam Web API and OpenDota.
 - Prometheus metrics.
 - Move the docs site from Material for MkDocs to Zensical before 2027-05.
