@@ -3,8 +3,9 @@
 > Track: running `dota_lobby` as an internal Go Docker image, headless, with multiple Steam bot
 > accounts at once.
 > Status: research and design only. No Go code was changed. Code snippets are proposals.
-> Date: 2026-11-06. Pinned deps: `go-steam@v0.0.0-20250502043548-f167ff28a93a`,
-> `go-dota2@v0.0.0-20250623204622-532cb1851217` (see `go.mod`).
+> Date: 2026-11-06. Module versions studied (the pre-PR pin): `go-steam@v0.0.0-20250502043548-f167ff28a93a`,
+> `go-dota2@v0.0.0-20250623204622-532cb1851217`. Paths written `go-steam/...` or `go-dota2/...` are
+> relative to those module roots.
 
 Throughout this doc, **[V]** means verified in source, in docs, or by running something.
 **[I]** means inferred from common practice or from other libraries' behavior, and still needs
@@ -18,9 +19,9 @@ confirming against a live account.
 |---|---|
 | Image | Multi-stage build. Stage 1 is `golang:1.24` (matching `go.mod`'s `go 1.24.11`) with `CGO_ENABLED=0 -trimpath` and the same `-ldflags` as `Makefile`. Stage 2 is `gcr.io/distroless/static-debian12:nonroot` (CA certs and tzdata included, UID 65532). |
 | Replicas | **Exactly one process per Steam account, ever.** Use Compose with one service, or K8s with `replicas: 1` and `strategy: Recreate`. Never use `RollingUpdate` and never run two replicas against the same accounts. To scale out, give each replica its own set of bots. |
-| Config layers | `config.yaml` (not secret, ConfigMap) < `secrets.yaml` (Secret, mounted file) < env `DOTA_LOBBY_*` (overrides) < `*_FILE` env indirection for secrets. Today Viper does **not** read env at all, so this needs to be added. |
+| Config layers | `config.yaml` (not secret, ConfigMap) < `secrets.yaml` (Secret, mounted file) < env `DOTA_LOBBY_*` (overrides) < `*_FILE` env indirection for secrets. The pre-PR Viper setup read no env at all. |
 | Persistent state | One volume at `/var/lib/dota_lobby`, with a per-bot directory holding the refresh/access token (modern auth), the legacy sentry hash, and a cached CM list. Files are `0600`, owned by 65532. |
-| Auth | The pinned go-steam has **only legacy password, sentry and login-key logon** [V]. Valve stopped issuing login keys and moved to JWT refresh tokens in 2023 [V, web]. Upstream go-steam (Sep 2026) now has `LogOnDetails.AccessToken` and `Auth.Authenticate` [V, pkg.go.dev]. **Bumping go-steam is a deployment prerequisite.** |
+| Auth | The pinned go-steam has **only legacy password, sentry and login-key logon** [V]. Valve stopped issuing login keys and moved to JWT refresh tokens in 2023 [V, web]. Upstream go-steam (Sep 2026) now has `LogOnDetails.AccessToken` and `Auth.Authenticate` [V, pkg.go.dev]. **Bumping go-steam is a deployment prerequisite**; the token login works live on master ([09](09-live-probe.md) §2). |
 | Probes | `/livez` checks only that the process and its event loops are alive. `/readyz` passes when at least `min_ready_bots` bots are at GC `HAVE_SESSION`. `/health` stays as is for compatibility and gains a detailed body. Liveness must **not** depend on Steam or the GC, or the Tuesday maintenance window turns into a restart loop and a login storm. |
 | Shutdown | SIGTERM: stop accepting API calls, then per bot: `DestroyLobby` and `LeaveLobby` for lobbies still in `UI` state that we own (leave `RUN` lobbies alone), then `SetPlaying(false)`, then `steamClient.Disconnect()`. Total budget about 25s, with `terminationGracePeriodSeconds: 30`. |
 | Egress | TCP 27017 to Valve CMs (what go-steam uses) and TCP 443 to `api.steampowered.com` (CM directory, Web API). Optionally allow TCP/UDP 27015-27050 and 443/27018 for WebSocket CMs if the library ever gains them. No inbound ports except the API. |
@@ -28,28 +29,16 @@ confirming against a live account.
 
 ---
 
-## 1. Current-state audit (what exists today)
+## 1. Library and config behaviour that shapes deployment
 
-Repo files read: `Makefile`, `justfile` and `just/*.just`, `.github/workflows/{lint,release}.yml`,
-`config.yaml.example`, `secrets.yaml.example`, `.gitignore`, `pkg/**`, `cmd/dota_lobby/main.go`,
-`docs/plans/2026-01-22-status-system-design.md`.
+Findings that hold regardless of the service code (IDs are referenced below):
 
 | # | Finding | Evidence | Deployment impact |
 |---|---|---|---|
-| A1 | There is no `Dockerfile` for the service and no `.dockerignore`. `just/docs.just` refers to a `Dockerfile.docs` that is also not in git. | `git ls-files`; `just/docs.just:4,10` | Must be written (section 2). |
-| A2 | The build already uses `-trimpath -ldflags "-s -w -X main.version... main.commit... main.buildDate"`. | `Makefile:12-17,31`; `just/go.just:6,13` | Reuse the same ldflags in the Dockerfile as build args. |
-| A3 | CI has only lint and a GitHub release of a bare binary. Nothing builds or pushes an image. | `.github/workflows/release.yml:23-29` | Add an image job (section 2.4). |
-| A4 | Viper reads `config.yaml` and `secrets.yaml` from `.`, `./config` and `$HOME/.config/dota_lobby`. There is **no env binding** (`AutomaticEnv`, `SetEnvPrefix` and `BindEnv` are all absent). | `pkg/config/config.go:58-62,89-94` | Containers need `/etc/dota_lobby` or a `--config-dir` flag, plus env overrides (section 3). |
-| A5 | `BotConfig.SentryHash` is **never loaded and never used**. The field has no `mapstructure` tag, and mapstructure's case-insensitive name match does not strip underscores, so the `sentry_hash` key in `secrets.yaml.example` does not map to it (it needs `mapstructure:"sentry_hash"`). Even if it were populated, `connectBot` passes only Username and Password to `LogOn`. | `pkg/bot/manager.go:81-84`; `pkg/config/config.go:49-53`; `secrets.yaml.example:5,8` | Every restart is a fresh password login, which triggers Steam Guard and login throttling. |
-| A6 | `dota2.New(...)` is created on **every** `LoggedOnEvent`. It calls `client.GC.RegisterPacketHandler(c)`, which **appends**, so every reconnect leaks another handler, and duplicate handlers process every GC packet. | `pkg/bot/manager.go:95`; go-dota2 `client.go:52-66`; go-steam `gamecoordinator.go:28-29` | Create the Dota2 client once per bot and reuse it across reconnects. |
-| A7 | The code never calls `SetPlaying(true)` or `SayHello()`, so the GC session never starts. `connected=true` means only "Steam logged on". | `pkg/bot/manager.go:86-99`; go-dota2 `client_session.go:14-38` | Readiness must track GC status, not just Steam (section 5). |
-| A8 | `steam.FatalErrorEvent` is not handled. On a **dial failure**, `ConnectToBind` calls `Fatalf` while `c.conn == nil`, so `Disconnect()` returns early and **no `DisconnectedEvent`** is emitted. The bot never reconnects. | go-steam `client.go:156-167,171-176,94-97`; `pkg/bot/manager.go:78-146` | A brief network blip at startup leaves a bot dead for good. A liveness or readiness signal plus a reconnect on `FatalErrorEvent` are needed. |
-| A9 | The go-steam event channel is buffered (30) and `Emit` **blocks**. `Disconnect()` emits while holding `c.mutex`. After `m.ctx` is cancelled, `connectBot` stops reading events. | go-steam `client.go:64-66,89-91,171-190`; `pkg/bot/manager.go:72-76` | A shutdown hang is possible if more than 30 events are queued. Keep draining events until Disconnect returns. |
-| A10 | The shutdown order in `main.go` is: API shutdown with a 10s ctx, then the deferred `botManager.Shutdown()` (Disconnect only). It never leaves or destroys lobbies and never calls `SetPlaying(false)`. | `cmd/dota_lobby/main.go:35,61-75`; `pkg/bot/manager.go:216-233` | See section 6. |
-| A11 | `/health` always returns `healthy`, whatever the bot or GC state. | `pkg/api/server.go:105-120` | Split into livez, readyz and a detailed status (section 5). |
-| A12 | Logging uses stdlib `log` for the app and a separate `logrus.New()` per bot for go-dota2, with no JSON and no bot field. | `pkg/bot/manager.go:92-95`; `main.go:23` | Unify on structured logging (section 7). |
-| A13 | `Secret` redacts `%v`, `%s`, `%q`, JSON and slog Text/JSON, **but leaks under `%#v`**, including when nested in a struct. | Ran a standalone copy of `pkg/config/config.go:9-28` on Go 1.27.1. Output: `#v="hunter2"` and `main.BotConfig{Username:"u", Password:"hunter2"}`. | Add `GoString()` and `LogValue()` (section 9). |
-| A14 | `Secret.MarshalJSON` always emits `"***REDACTED***"`. | `pkg/config/config.go:26-28` | **Never** use `Secret` in a struct you persist with `encoding/json` (for example the token store), or the token on disk is replaced by the literal redaction string. |
+| A8 | On a **dial failure**, go-steam's `ConnectToBind` calls `Fatalf` while `c.conn == nil`, so `Disconnect()` returns early and **no `DisconnectedEvent`** is emitted; only `FatalErrorEvent` arrives. | go-steam `client.go:156-167,171-176,94-97` | A reconnect loop that waits for `DisconnectedEvent` leaves the bot dead after a network blip at startup. Reconnect on `FatalErrorEvent` too. |
+| A9 | The go-steam event channel is buffered (30) and `Emit` **blocks**. `Disconnect()` emits while holding `c.mutex`. | go-steam `client.go:64-66,89-91,171-190` | A shutdown hang is possible if more than 30 events are queued. Keep draining events until Disconnect returns. |
+| A13 | `config.Secret` redacts `%v`, `%s`, `%q`, JSON and slog Text/JSON, **but leaks under `%#v`**, including when nested in a struct. | Ran a standalone copy of the type on Go 1.27.1: `#v="hunter2"` and `main.BotConfig{Username:"u", Password:"hunter2"}`. | Add `GoString()` and `LogValue()` (section 9). |
+| A14 | `Secret.MarshalJSON` always emits `"***REDACTED***"`. | `pkg/config` | **Never** use `Secret` in a struct you persist with `encoding/json` (for example the token store), or the token on disk is replaced by the literal redaction string. |
 
 ---
 
@@ -221,9 +210,7 @@ secrets:
 
 The existing format (a `secrets.bots` list containing `username`, `password` and `sentry_hash`)
 [V, `secrets.yaml.example`] can be kept for `username` and `password`, but its `sentry_hash`
-does **not** work today: the untagged `BotConfig.SentryHash` field never receives it (see A5).
-Keeping it as a fallback would require adding `mapstructure:"sentry_hash"` and passing it to
-`LogOnDetails.SentryFileHash`. In any case `sentry_hash` should move out of secrets entirely, because it is **state** that Steam rewrites. It belongs in the volume (section 4).
+is obsolete with token logon. `sentry_hash` should move out of secrets entirely, because it is **state** that Steam rewrites. It belongs in the volume (section 4).
 
 ### 3.2 Viper changes needed (proposal, not implemented)
 
@@ -321,11 +308,11 @@ sensitive secret in the system, because it is equivalent to the account's second
 
 ## 5. Health, readiness and status endpoints
 
-### 5.1 Bot state machine (from the existing design, refined with GC status)
+### 5.1 Bot state machine (refined with GC status)
 
-The states from `docs/plans/2026-01-22-status-system-design.md` are `disconnected`, `connecting`,
-`steam_online`, `gc_connected`, `in_lobby` and `in_game`. Add `needs_auth` (needs a human) and
-`gc_queued` (`NO_SESSION_IN_LOGON_QUEUE`).
+Base states: `disconnected`, `connecting`, `steam_online`, `gc_connected`, `in_lobby` and `in_game`.
+Add `needs_auth` (needs a human) and `gc_queued` (`NO_SESSION_IN_LOGON_QUEUE`, which the live run saw on a
+first login before `HAVE_SESSION`, [09](09-live-probe.md) §2).
 
 GC statuses that exist in go-dota2 [V, `protocol/gcsdk_gcmessages.pb.go:141-150`]:
 
@@ -341,7 +328,7 @@ GC statuses that exist in go-dota2 [V, `protocol/gcsdk_gcmessages.pb.go:141-150`
 
 Change detection: go-dota2 emits `*events.GCConnectionStatusChanged{OldState, NewState, Update}`
 on the **steam client's event channel** [V, `client_session.go:98-116`, `client.go:121-123`], so the
-same `for event := range steamClient.Events()` loop in `manager.go` can handle it. It also emits
+same `for event := range steamClient.Events()` loop can handle it. It also emits
 `*events.ClientWelcomed` on welcome [V, `client_session.go:76-77`]. Every status change clears
 lobby and party state (`ns.ClearState()`) [V, `client_session.go:117`]. After a GC blip the bot must
 re-read the lobby from SOCache, because the lobby itself usually still exists on the GC side [I].
@@ -372,7 +359,7 @@ traffic while bots reconnect on their own.
 ```
 SIGTERM / SIGINT
  1. mark draining=true                 -> /readyz 503, new /lobby/create -> 503 Retry-After
- 2. http.Server.Shutdown(ctx 5s)       -> finish in-flight requests (existing code, main.go:71)
+ 2. http.Server.Shutdown(ctx 5s)       -> finish in-flight requests
  3. for each bot in parallel (errgroup, ctx 15s total):
       a. lob := current lobby from SOCache (cso.Lobby)
       b. if lob != nil && we created it (lobby.json) :
@@ -402,7 +389,6 @@ go-dota2 primitives used, all verified:
 | Bot drain ctx | 15s | `DestroyLobby` is a GC round-trip. Steam disconnect is immediate. |
 | Total in-process | at most 25s | |
 | `terminationGracePeriodSeconds` / `stop_grace_period` | 30s | must exceed the in-process total |
-| Replace `main.go:68`'s 10s | split into the stages above | today the bots get no shutdown budget at all |
 
 ### 6.3 Crash recovery (non-graceful exit)
 
@@ -486,7 +472,7 @@ Rules:
 - Two distinct conflicts apply, according to node-steam-user and its maintainer [web, I for go-steam: https://github.com/DoctorMcKay/node-steam-user, https://dev.doctormckay.com/topic/1518-loggedinelsewhere/, https://github.com/DoctorMcKay/node-steam-user/issues/271]:
   - **Logon replacement.** A second logon from the **same public IP with the same logonID** (`obfuscated_private_ip`) kicks the first with `EResult_LogonSessionReplaced` (34) [V, enum at `enums.go:3502`]. The pinned go-steam never sets `CMsgClientLogon.ObfustucatedPrivateIp` (sic) in `LogOn` [V, `auth.go:61-76`], so every go-steam instance sends logonID 0 and two replicas on the same host or egress NAT *will* replace each other.
   - **Playing-session conflict.** Logons from different IPs or with different logonIDs can stay connected at the same time, but only one session can be in-game. When the second calls `SetPlaying` for Dota 2, one session gets `EResult_LoggedInElsewhere` (6) [V, enum at `enums.go:3474`] or is blocked from playing. Only the in-game session gets a GC session. So replicas on different nodes fight over the GC session, not necessarily over the logon.
-  - Treat both 6 and 34 as "another instance owns this account": log loudly, stop, and back off for minutes. Do **not** reconnect in the 5s loop (`manager.go:123-143`), which makes two replicas knock each other off forever.
+  - Treat both 6 and 34 as "another instance owns this account": log loudly, stop, and back off for minutes. Do **not** reconnect on a short fixed delay, which makes two replicas knock each other off forever.
   - UNCERTAIN: the exact go-steam event and EResult seen in each case has not been tested here. A live test with two processes on one host and on two hosts would settle it.
 - The GC session, the bot's SOCache and its **lobby membership** belong to the account. Two processes would both believe they own the bot's lobby.
 - Rapid re-logins from two IPs raise the chance of Steam Guard challenges and throttling (`RateLimitExceeded` 84, `AccountLoginDeniedThrottle` 87).
@@ -623,7 +609,7 @@ Notes:
 - Steam's weekly maintenance is on **Tuesday, US Pacific**. The most commonly reported time is **about 4 PM PT**, which is 23:00 UTC under PDT and 00:00 UTC Wednesday under PST (steamstatus.app, the third-party site steamdb.com (not SteamDB at steamdb.info), the Steam Community forum). Some outlets report between noon and 3 PM PT (esports.gg, CNET) or 1 PM PT (Windows Report). Reported durations range from 10-30 minutes to about an hour, and the Dota 2 GC goes down with Steam [web; Valve publishes no official schedule, so the time and length are UNCERTAIN and should be confirmed by logging actual GC disconnects over a few weeks].
 - Expected sequence: `STEAM_GOING_DOWN` or `GC_GOING_DOWN` status, then a disconnect or `FatalErrorEvent`, then failed reconnects (`ServiceUnavailable` or `TryAnotherCM` produce a `SteamFailureEvent` [V, `auth.go:126-130`]), then recovery.
 - Handling:
-  1. **Reconnect backoff**: exponential with full jitter, from 5s up to a 5m cap, per bot. Today it is a fixed 5s or 30s (`manager.go:111,133`), which hammers Steam during outages. Reset it after a stable session of 2 minutes or more.
+  1. **Reconnect backoff**: exponential with full jitter, from 5s up to a 5m cap, per bot. A fixed short delay hammers Steam during outages. Reset it after a stable session of 2 minutes or more.
   2. **Handle `SteamFailureEvent` and `FatalErrorEvent`**, not just `DisconnectedEvent` (A8). On a `TryAnotherCM`, pick a different CM.
   3. **GC hello loop**: after `LoggedOnEvent`, call `SetPlaying(true)` and then `SayHello()` every `gc.hello_interval` until a `ClientWelcomed` arrives. This is the standard pattern in node-dota2 and ValvePython dota2, where the client re-sends hello until it gets a welcome [I].
   4. **API behaviour**: `POST /lobby/create` returns `503` with `Retry-After: 60` and `{"error":"gc_unavailable"}` when no bot has `HAVE_SESSION`. Callers (the league backend) should queue.
@@ -666,7 +652,7 @@ defaults [I] and should be made configurable.
 
 1. Bump `github.com/paralin/go-steam` to the 2026-09 version (or later) and adopt `AccessToken`. Adapt to `LogOn(ctx, details) error`.
 2. Token and state store (section 4) with atomic writes, plus an `auth` subcommand.
-3. Bot lifecycle fixes: create the Dota2 client once (A6), `SetPlaying` plus the hello loop (A7), handle `FatalErrorEvent` and `SteamFailureEvent` (A8), drain events on shutdown (A9), backoff with jitter.
+3. Bot lifecycle: create the Dota2 client once per Steam client, `SetPlaying` plus the hello loop, handle `FatalErrorEvent` and `SteamFailureEvent` (A8), drain events on shutdown (A9), backoff with jitter.
 4. Viper env and `_FILE` support, plus `/etc/dota_lobby` (section 3).
 5. `/livez`, `/readyz`, extended `/status` (section 5).
 6. Graceful drain (section 6).
@@ -683,10 +669,10 @@ defaults [I] and should be made configurable.
 
 - The pinned go-steam `LogOnDetails` has `Username, Password, AuthCode, TwoFactorCode, SentryFileHash, LoginKey, ShouldRememberPassword` and no access-token field. `LogOn` always sends the password. (`go-steam/auth.go:22-82`)
 - go-steam is TCP-only with `VT01` framing, and its built-in CM list is all port 27017. (`connection.go:24-41`, `servers.go:14-33`)
-- `InitializeSteamDirectory` calls `https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellId=0`, and `manager.go` never calls it. (`steam_directory.go:30-34`, `pkg/bot/manager.go`)
-- A dial failure emits `FatalErrorEvent` without a `DisconnectedEvent`, and the manager doesn't handle it, so the bot stops reconnecting. (`client.go:156-176`, `manager.go:78-146`)
+- `InitializeSteamDirectory` calls `https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellId=0`. (`steam_directory.go:30-34`)
+- A dial failure emits `FatalErrorEvent` without a `DisconnectedEvent`. (`client.go:156-176`)
 - `Emit` blocks on a channel buffered at 30. `Disconnect` emits while holding the mutex. (`client.go:64-66,89-91,171-190`)
-- `dota2.New` appends a GC packet handler, and the manager calls it on every logon. (`go-dota2/client.go:52-66`, `go-steam/gamecoordinator.go:28-29`, `manager.go:95`)
+- `dota2.New` appends a GC packet handler that is never removed. (`go-dota2/client.go:52-66`, `go-steam/gamecoordinator.go:28-29`)
 - The `GCConnectionStatus` enum values 0-6 and the `CMsgConnectionStatus` queue fields. (`go-dota2/protocol/gcsdk_gcmessages.pb.go:141-158,2148-2158`)
 - `GCConnectionStatusChanged` and `ClientWelcomed` are emitted on the steam event channel, and every status change clears lobby state. (`client_session.go:76-130`, `client.go:121-123`)
 - `DestroyLobby(ctx)`, `LeaveLobby()`, `AbandonLobby()`, `SetPlaying(bool)`, `SayHello()` and `Close()` exist with the signatures cited.
@@ -700,7 +686,6 @@ defaults [I] and should be made configurable.
 
 ### Inferred or uncertain
 
-- Whether legacy password-only logon (the current code) still succeeds for these specific accounts in late 2026. It needs a live test, and is expected to be unreliable.
 - That an explicit LogOff revokes refresh tokens. No source supports this and it is probably wrong. It is moot because no go-steam version has LogOff.
 - How duplicate sessions fail with go-steam: same-IP logon replacement (`LogonSessionReplaced`, 34) versus a cross-host playing conflict (`LoggedInElsewhere`, 6). This is documented for node-steam-user but not tested with go-steam here.
 - Steam and GC rate-limit thresholds. Valve does not publish them, so all numbers are conservative guesses.
@@ -708,23 +693,17 @@ defaults [I] and should be made configurable.
 - Whether `RUN`-state lobbies fully survive the host bot disconnecting. The expectation is that they do, because the game server is Valve's, but leaguestat and match result reporting may depend on the lobby leader.
 - That RWO PVC plus `Recreate` is enough on its own. It is not on a single node, hence the lock or lease recommendation.
 - Valve CM CIDR ranges. They are taken from current directory output, not an official list.
-- That the upstream 2026 go-steam's `Authenticate` works reliably over CM. The gg-cr fork reports EOF issues with CM-based non-authed service calls and recommends HTTP `IAuthenticationService`.
+- That the upstream 2026 go-steam's `Authenticate` works reliably over CM (it worked for one account on 2026-11-08, [09](09-live-probe.md) §2). The gg-cr fork reports EOF issues with CM-based non-authed service calls and recommends HTTP `IAuthenticationService`.
 - That the Steam Guard TOTP algorithm matches `steam-totp`. This is a common community implementation, not checked against source here.
 
 ---
 
 ## 17. Sources
 
-Local (file:line):
+Module source (file:line):
 
-- `/home/kettle/git_repos/dota_lobby/pkg/bot/manager.go:46-233`
-- `/home/kettle/git_repos/dota_lobby/pkg/api/server.go:26-120`
-- `/home/kettle/git_repos/dota_lobby/pkg/config/config.go:9-110`
-- `/home/kettle/git_repos/dota_lobby/cmd/dota_lobby/main.go:22-76`
-- `/home/kettle/git_repos/dota_lobby/Makefile`, `justfile`, `just/go.just`, `just/docs.just`, `.github/workflows/release.yml`, `.github/workflows/lint.yml`, `config.yaml.example`, `secrets.yaml.example`, `.gitignore`
-- `/home/kettle/git_repos/dota_lobby/docs/plans/2026-01-22-status-system-design.md`
-- go-steam (`~/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/`): `auth.go:22-182`, `client.go:63-270`, `client_events.go`, `connection.go:24-41`, `servers.go:14-45`, `steam_directory.go:17-76`, `gamecoordinator.go:28-79`, `protocol/steamlang/enums.go:3473-3561`
-- go-dota2 (`~/.local/share/go/pkg/mod/github.com/paralin/go-dota2@v0.0.0-20250623204622-532cb1851217/`): `client.go:52-196`, `client_session.go:14-131`, `client_lobby.go:13-72`, `client_generated.go:14,516-531,2073-2076`, `events/session.go`, `state/state.go`, `protocol/gcsdk_gcmessages.pb.go:141-158,2148-2158`, `protocol/dota_gcmessages_client_match_management.pb.go:874,900`
+- go-steam (`go-steam@f167ff28a93a/`): `auth.go:22-182`, `client.go:63-270`, `client_events.go`, `connection.go:24-41`, `servers.go:14-45`, `steam_directory.go:17-76`, `gamecoordinator.go:28-79`, `protocol/steamlang/enums.go:3473-3561`
+- go-dota2 (`go-dota2@532cb1851217/`): `client.go:52-196`, `client_session.go:14-131`, `client_lobby.go:13-72`, `client_generated.go:14,516-531,2073-2076`, `events/session.go`, `state/state.go`, `protocol/gcsdk_gcmessages.pb.go:141-158,2148-2158`, `protocol/dota_gcmessages_client_match_management.pb.go:874,900`
 
 Web:
 
@@ -748,11 +727,3 @@ Web:
 - Kubernetes leader election (client-go): https://pkg.go.dev/k8s.io/client-go/tools/leaderelection
 - Viper: https://github.com/spf13/viper
 
----
-
-## Verification notes
-
-- **A5 / sentry hash**: corrected. `SentryHash` is not only unused but never loaded, because the untagged field does not match the `sentry_hash` key (`config.go:49-53`). The claim that the existing `sentry_hash` format "can keep working as a fallback" was withdrawn.
-- **Section 10.1 (replicas)**: the mechanism was rewritten. A same-IP duplicate logon gets `LogonSessionReplaced` (34), because go-steam never sets `ObfustucatedPrivateIp` (`auth.go:61-76`). A cross-host duplicate gets `LoggedInElsewhere` (6) only on the playing/GC session. Both are handled as "owned elsewhere" with a long backoff. The single replica, `Recreate`, lock or lease, and sharding advice is unchanged. The go-steam behavior is marked UNCERTAIN until a live test.
-- **Section 6.1 (shutdown)**: the "LogOff revokes refresh tokens" rationale is marked unsupported and probably wrong. No go-steam version (pinned or upstream) has LogOff, so `Disconnect()` is the only option and is sufficient. The DestroyLobby, LeaveLobby, AbandonLobby, SetPlaying and Close references were re-checked and are unchanged.
-- **Section 12 (maintenance)**: the timing now uses the most common report (about 4 PM PT Tuesday, 23:00 or 00:00 UTC) and notes the noon-3 PM PT outliers and durations of 10-60 minutes. The figure is credited to steamdb.com and steamstatus.app, not SteamDB. The time is marked UNCERTAIN, since there is no official Valve schedule. The 19:00-02:00 UTC alert-silence window is kept, because it covers both reports. EResult 84 and 87 were re-checked (`enums.go:3555,3560`).
