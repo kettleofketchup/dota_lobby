@@ -13,3 +13,6 @@
   variants.
 - `just secrets` and `just docker` recipes that keep bot credentials in local sops files and
   decrypt them to a tmpfs directory only while the stack runs.
+- `renew_blocked` in `/v1/bots`: why background token renewal stopped. A refused password is
+  never sent to Steam again, a rate limit pauses logons for every bot, and a rejected Steam
+  Guard code is retried in the next code window at most twice.
