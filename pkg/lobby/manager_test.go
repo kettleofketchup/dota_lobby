@@ -776,6 +776,25 @@ func TestIdleTimeoutDestroysBeforeRelease(t *testing.T) {
 	}
 }
 
+// A lobby that ended while its bot was away is destroyed when the bot
+// comes back with it still in its cache.
+func TestOrphanedLobbyClearedOnReconnect(t *testing.T) {
+	h := newHarness(t, 1, func(c *config.LobbyConfig) { c.IdleTimeout = 500 * time.Millisecond })
+	l, b := h.toWaiting(spec("game-1"))
+	b.handle.SetReady(time.Time{})
+	l = h.waitState(l.ID, StateTimedOut)
+	time.Sleep(50 * time.Millisecond)
+	if n := b.fc.CallCount("Destroy"); n != 0 {
+		t.Fatalf("destroyed %d times while the bot was away", n)
+	}
+	b.handle.SetReady(time.Now())
+	h.waitCalls(b, "Destroy", 1)
+	h.waitCalls(b, "Leave", 1)
+	if _, ok := b.fc.CurrentLobby(); ok {
+		t.Error("the bot still holds the lobby")
+	}
+}
+
 func TestServerStall(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	l, b := h.toWaiting(spec("game-1"))

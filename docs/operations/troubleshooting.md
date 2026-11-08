@@ -238,6 +238,15 @@ full disk: `could not record the created lobby` in the logs): the lobby moves on
 works. A lobby whose bot is gone and whose failure cannot be written at startup stays as it is
 in the database (`could not fail lobby; leaving it for the next start`).
 
+### A bot leaves a lobby on its own after a reconnect
+
+`bot is in a lobby no active lobby holds; leaving it` in the logs. A lobby that ended while its
+bot was away (for example `idle_timeout` during a Steam outage, or a lobby that failed because
+its bot was not back within `lobby.readopt_timeout`) could not be destroyed then. When the bot is
+`gc_ready` again and hosts no lobby, it destroys that lobby if it is still in the lobby screen,
+or only leaves it if the match launched, so the game goes on. It tries again every 30 s while
+the lobby is still there.
+
 ## Other symptoms
 
 | Symptom | Cause | Fix |

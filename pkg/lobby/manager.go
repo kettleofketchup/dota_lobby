@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,8 @@ const (
 	storeTimeout = 5 * time.Second
 	// seatRetry spaces host seat attempts when every strategy failed.
 	seatRetry = 30 * time.Second
+	// orphanRetry spaces attempts to clear one free bot's leftover lobby.
+	orphanRetry = 30 * time.Second
 )
 
 // Store is the lobby repository; *store.Lobbies implements it.
@@ -93,6 +96,10 @@ type Manager struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	wake     chan struct{}
+
+	// orphanTried is when each free bot's leftover lobby was last
+	// cleared; owned by the scheduler goroutine.
+	orphanTried map[string]time.Time
 }
 
 // entry is one active lobby.
@@ -170,8 +177,9 @@ func New(opts Options) *Manager {
 	return &Manager{
 		opts:   opts,
 		log:    opts.Logger,
-		active: map[string]*entry{},
-		wake:   make(chan struct{}, 1),
+		active:      map[string]*entry{},
+		wake:        make(chan struct{}, 1),
+		orphanTried: map[string]time.Time{},
 	}
 }
 
@@ -370,6 +378,7 @@ func (m *Manager) schedule() {
 	m.sweep()
 	for {
 		m.schedulePending()
+		m.clearOrphans()
 		select {
 		case <-m.ctx.Done():
 			return
@@ -393,6 +402,68 @@ func (m *Manager) sweep() {
 		m.log.Warn("lobby retention sweep failed", "err", err)
 	case n > 0:
 		m.log.Info("deleted old lobbies", "count", n, "retention", m.opts.Retention)
+	}
+}
+
+// clearOrphans has every ready bot that no active lobby holds leave the
+// lobby in its cache: a lobby that ended while its bot was away (an
+// idle_timeout or a failed re-adoption during an outage) was never
+// destroyed, and the GC hands it back on reconnect. A lobby still in the
+// lobby screen is destroyed; one that launched is only left, so the match
+// goes on. It runs on the scheduler goroutine, the only one that leases
+// bots, so a bot it finds free stays free meanwhile.
+func (m *Manager) clearOrphans() {
+	m.mu.Lock()
+	if m.draining {
+		m.mu.Unlock()
+		return
+	}
+	entries := make([]*entry, 0, len(m.active))
+	for _, e := range m.active {
+		entries = append(entries, e)
+	}
+	m.mu.Unlock()
+	owned := map[string]bool{}
+	for _, e := range entries {
+		if b := e.snapshot().Bot; b != "" {
+			owned[strings.ToLower(b)] = true
+		}
+	}
+	now := m.now()
+	for _, name := range m.opts.Bots.Names() {
+		if owned[strings.ToLower(name)] {
+			delete(m.orphanTried, name)
+			continue
+		}
+		h, ok := m.opts.Bots.Bot(name)
+		if !ok {
+			continue
+		}
+		st := h.Status()
+		v, ok := h.CurrentLobby()
+		if !st.Ready || st.LobbyStale || !ok || v == nil {
+			continue
+		}
+		if t, ok := m.orphanTried[name]; ok && now.Sub(t) < orphanRetry {
+			continue
+		}
+		m.orphanTried[name] = now
+		destroy := v.LeaderID == st.SteamID && v.State == gc.LobbyUI
+		m.log.Warn("bot is in a lobby no active lobby holds; leaving it", "bot", name,
+			"gc_lobby_id", v.LobbyID, "state", v.State, "destroy", destroy)
+		ctx, cancel := context.WithTimeout(m.ctx, m.opts.GC.RequestTimeout)
+		err := h.Do(ctx, "leave stale lobby", func(ctx context.Context, c gc.Client) error {
+			var err error
+			if destroy {
+				err = c.Destroy(ctx)
+			}
+			c.Leave()
+			return err
+		})
+		cancel()
+		if err != nil {
+			m.log.Warn("could not leave the stale lobby", "bot", name, "gc_lobby_id", v.LobbyID, "err", err)
+		}
 	}
 }
 
