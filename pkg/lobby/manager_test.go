@@ -695,6 +695,16 @@ func TestInvitePolicy(t *testing.T) {
 	if !slices.Equal(res.Invited, []uint32{12}) || len(res.Skipped) != 2 || res.Skipped[0].Reason != SkipInLobby || res.Skipped[1].Reason != SkipNotRostered {
 		t.Errorf("invite result = %+v", res)
 	}
+	// A repeated account is one invite, within the cooldown like any other.
+	time.Sleep(250 * time.Millisecond)
+	before := b.fc.CallCount("Invite")
+	res, err = h.m.Invite(context.Background(), l.ID, InviteRequest{Players: []uint32{21, 21, 21, 21, 21}})
+	if err != nil || !slices.Equal(res.Invited, []uint32{21}) || len(res.Skipped) != 0 {
+		t.Errorf("repeated account = %+v, %v", res, err)
+	}
+	if n := b.fc.CallCount("Invite") - before; n != 1 {
+		t.Errorf("repeated account sent %d invites", n)
+	}
 	// max_per_player (3) counts the automatic invite.
 	time.Sleep(250 * time.Millisecond)
 	if _, err := h.m.Invite(context.Background(), l.ID, InviteRequest{Missing: true}); err != nil {

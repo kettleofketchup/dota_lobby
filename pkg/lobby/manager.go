@@ -829,11 +829,18 @@ func (m *Manager) Invite(ctx context.Context, id string, req InviteRequest) (Inv
 		return InviteResult{}, err
 	}
 	now := m.now()
-	targets := req.Players
+	var targets []uint32
 	if req.Missing {
-		targets = nil
 		for _, p := range l.Spec.Teams.All() {
 			targets = append(targets, p.AccountID)
+		}
+	} else {
+		// Each copy would pass the same per-player limits, so a repeated
+		// account counts once.
+		for _, a := range req.Players {
+			if !slices.Contains(targets, a) {
+				targets = append(targets, a)
+			}
 		}
 	}
 	res := InviteResult{Invited: []uint32{}, Skipped: []InviteSkip{}}
