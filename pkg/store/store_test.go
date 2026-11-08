@@ -123,6 +123,64 @@ func TestOpenPermissions(t *testing.T) {
 	}
 }
 
+func TestOpenPathWithURICharacters(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct{ name, dir, file string }{
+		{"hash", "dl#1", "dota_lobby.db"},
+		{"question mark", "dl", "a?b.db"},
+		{"percent escape", "dl%20x", "dota_lobby.db"},
+		{"space", "dl x", "dota_lobby.db"},
+		{"relative", "", "rel#1.db"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, tt.dir, tt.file)
+			if tt.dir == "" {
+				t.Chdir(root)
+				path = tt.file
+			}
+			s, err := Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Leagues().ReplaceBotLeagues(ctx, "b", "gc", []uint32{1}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					rel, _ := filepath.Rel(root, p)
+					got = append(got, rel)
+				}
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(tt.dir, tt.file)
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("files = %q, want only %q", got, want)
+			}
+			s, err = Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = s.Close() }()
+			bl, err := s.Leagues().BotLeagues(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(bl) != 1 {
+				t.Errorf("reopened store has %d bot rows, want 1", len(bl))
+			}
+		})
+	}
+}
+
 func TestOpenRefusesNewerSchema(t *testing.T) {
 	ctx := context.Background()
 	s, path := openTemp(t)

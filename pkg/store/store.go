@@ -87,7 +87,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Set("_txlock", "immediate")
-	dsn := "file:" + path + "?" + q.Encode()
+	// SQLite reads the DSN as a URI: escape the path so '?', '#' and '%'
+	// in it name the file created above, not a different one. A URI path
+	// must be absolute.
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs), RawQuery: q.Encode()}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
