@@ -123,6 +123,6 @@ Then [retry](#recovering-a-bot-in-needs_attention) the bot.
 | No health status under Podman | The image was built in OCI format, which drops `HEALTHCHECK` | Build with `just docker build` |
 | Port unreachable | `server.host` is not `0.0.0.0` in the container, or you connect from another machine to a `127.0.0.1` binding | Keep `host: 0.0.0.0`, change the host side of the mapping |
 | `manifest unknown` on `pull` / `up` | `DOTA_LOBBY_TAG` has a leading `v`, or no image exists for that version | Use `1.2.3`, not `v1.2.3`. If it still fails, [build locally](../deployment/docker.md#build-the-image-locally) |
-| `unauthorized` (or `denied`) on pull | The image package is not public yet | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
+| `unauthorized` (or `denied`) on pull | The image package is private. This happens with a fork whose repository is private, or before a maintainer has made the package public | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
 | `401` with `missing or invalid API key` | Key header missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` |
 | `410 gone` on `/bots` or `/lobby/...` | The old endpoints were removed | Use `/v1/bots` |

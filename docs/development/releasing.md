@@ -68,15 +68,19 @@ does them once, in this order.
 1. **Before the first push to `main` that includes `docs.yml`:** go to Settings → Pages →
    Build and deployment and set **Source** to **GitHub Actions**. Without it, the first docs
    run on `main` fails at the deploy step.
-2. **After the first `v*` tag has been pushed and `container.yml` has finished:** open the
-   `dota_lobby` package under the owner's Packages on GitHub, go to Package settings, set its
-   visibility to **Public**, and link it to the repository if it is not linked already. New
-   GHCR packages start private, so until you do this everyone else gets `unauthorized` when
-   they pull the image.
+2. **After the first `v*` tag has been pushed and `container.yml` has finished:** check
+   that the image pulls without logging in (step 5 of the [checklist](#checklist)). When the
+   repository is public, GHCR links the new `dota_lobby` package to it and makes it public
+   on the first push, so there is usually nothing to do. This was confirmed with the
+   `v0.0.0-test.1` tag. If the pull fails with `unauthorized`, open the package under the
+   owner's Packages on GitHub, go to Package settings and set its visibility to **Public**.
+   That happens when the repository is private, or when an organization restricts public
+   packages.
 
 !!! note
-    Until the first tag exists and the package is public, there is no image anyone can
-    pull. Users who arrive before that should
+    `latest` only exists once a tag without a pre-release suffix (such as `v0.1.0`) has
+    been pushed. A pre-release tag like `v0.0.0-test.1` publishes only its own version
+    tag and `sha-<short>`. Until then, users should pull a specific tag or
     [build the image locally](../deployment/docker.md#build-the-image-locally).
 
 ## Checklist
@@ -84,6 +88,6 @@ does them once, in this order.
 1. On `main`: CI is green (tests, lint and the docs build) and `make test` passes locally.
 2. Cut the release (repo admin): `just release::upgrade|hotfix|major`.
 3. Check that both `release.yml` and `container.yml` succeeded on the Actions tab.
-4. If this is the first release, do step 2 of [One-time setup](#one-time-setup).
+4. If this is the first release, check step 2 of [One-time setup](#one-time-setup).
 5. Check the image pulls without logging in:
    `docker pull ghcr.io/kettleofketchup/dota_lobby:X.Y.Z` (no `v`).

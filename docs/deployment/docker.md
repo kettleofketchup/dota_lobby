@@ -83,8 +83,9 @@ Image tags have **no leading `v`**: the git tag `v1.2.3` becomes the image tag `
 | `latest` | The newest release (pre-releases excluded). Moves on every release |
 | `sha-<short>` | The image built from that commit |
 
-There is no image until the first release has been tagged and the package made public. Until
-then, [build the image locally](#build-the-image-locally).
+`latest`, `1.2` and `1` only exist once a release without a pre-release suffix has been
+tagged. If the tag you want is not published yet, pull a specific version or
+[build the image locally](#build-the-image-locally).
 
 ## Platforms
 
