@@ -36,6 +36,10 @@ type Worker struct {
 	stop chan struct{}
 	done chan struct{}
 	once sync.Once
+
+	// abortCtx ends the running call's ctx when Shutdown gives up waiting.
+	abortCtx context.Context
+	abort    context.CancelFunc
 }
 
 type job struct {
@@ -59,6 +63,7 @@ func NewWorker(client gc.Client, ready func() bool, timeout time.Duration) *Work
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
+	w.abortCtx, w.abort = context.WithCancel(context.Background())
 	go w.run()
 	return w
 }
@@ -97,10 +102,22 @@ func (w *Worker) Do(ctx context.Context, op string, fn func(ctx context.Context,
 }
 
 // Close stops the worker. Queued calls fail with ErrStopped; a running call
-// is waited for. It is safe to call more than once.
-func (w *Worker) Close() {
+// is waited for, however long it takes. It is safe to call more than once.
+func (w *Worker) Close() { _ = w.Shutdown(context.Background()) }
+
+// Shutdown stops the worker like Close, but waits for the running call only
+// until ctx ends. Then it cancels that call's ctx and returns ctx's error
+// without waiting further, so a request stuck on a dead connection cannot
+// hold up a bounded shutdown. Queued calls fail with ErrStopped.
+func (w *Worker) Shutdown(ctx context.Context) error {
 	w.once.Do(func() { close(w.stop) })
-	<-w.done
+	select {
+	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		w.abort()
+		return fmt.Errorf("stop worker: %w", ctx.Err())
+	}
 }
 
 func (w *Worker) run() {
@@ -130,7 +147,10 @@ func (w *Worker) exec(j *job) error {
 	if !w.ready() {
 		return fmt.Errorf("%s: %w", j.op, ErrNotReady)
 	}
-	ctx := j.ctx
+	ctx, cancelAbort := context.WithCancel(j.ctx)
+	defer cancelAbort()
+	// Shutdown cancels the call when it gives up waiting.
+	defer context.AfterFunc(w.abortCtx, cancelAbort)()
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, w.timeout)

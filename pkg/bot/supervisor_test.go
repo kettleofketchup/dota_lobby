@@ -534,6 +534,46 @@ func TestStopBudget(t *testing.T) {
 	}
 }
 
+// Stop must not wait out a GC request that is stuck: the running call is
+// cancelled when the stop budget ends.
+func TestStopCutsRunningRequest(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.Script("Connect", logonOK()...)
+		welcomeOnHello(h)
+	})
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+
+	started := make(chan struct{})
+	cut := make(chan struct{})
+	go func() {
+		_ = h.sup.Worker().Do(context.Background(), "stuck", func(ctx context.Context, _ gc.Client) error {
+			close(started)
+			<-ctx.Done() // waiting on a reply that never comes (request_timeout is 10s)
+			close(cut)
+			return ctx.Err()
+		})
+	}()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	if err := h.sup.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop = %v, want deadline exceeded", err)
+	}
+	if d := time.Since(begin); d > 2*time.Second {
+		t.Errorf("Stop took %s with a stuck request", d)
+	}
+	select {
+	case <-cut:
+	case <-time.After(2 * time.Second):
+		t.Error("the stuck request was not cancelled")
+	}
+}
+
 func TestRenewalBeforeExpiry(t *testing.T) {
 	now := newFakeClock().Now()
 	old := jwt(t, "1", now.Add(10*24*time.Hour)) // inside the 14-day window

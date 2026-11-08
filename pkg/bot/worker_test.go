@@ -189,3 +189,54 @@ func TestWorkerClose(t *testing.T) {
 	}
 	w.Close() // idempotent
 }
+
+// A running call that ignores nothing but its ctx is cut when the shutdown
+// budget ends, instead of holding Shutdown forever.
+func TestWorkerShutdownBounded(t *testing.T) {
+	tests := []struct {
+		name    string
+		budget  time.Duration
+		wantErr bool
+	}{
+		{"budget ends first", 20 * time.Millisecond, true},
+		{"already expired", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWorker(fake.New(), func() bool { return true }, time.Hour)
+			started := make(chan struct{})
+			ctxEnded := make(chan struct{})
+			held := make(chan error, 1)
+			go func() {
+				held <- w.Do(t.Context(), "stuck", func(ctx context.Context, _ gc.Client) error {
+					close(started)
+					<-ctx.Done() // a request waiting on a reply that never comes
+					close(ctxEnded)
+					return ctx.Err()
+				})
+			}()
+			<-started
+
+			ctx, cancel := context.WithTimeout(t.Context(), tt.budget)
+			defer cancel()
+			begin := time.Now()
+			err := w.Shutdown(ctx)
+			if (err != nil) != tt.wantErr || (err != nil && !errors.Is(err, context.DeadlineExceeded)) {
+				t.Fatalf("Shutdown = %v", err)
+			}
+			if d := time.Since(begin); d > 2*time.Second {
+				t.Errorf("Shutdown took %s", d)
+			}
+			select {
+			case <-ctxEnded:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the running call's ctx was not cancelled")
+			}
+			if err := <-held; err == nil {
+				t.Error("cut call returned nil")
+			}
+			<-w.done
+			w.Close() // still safe afterwards
+		})
+	}
+}

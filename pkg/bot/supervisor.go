@@ -235,7 +235,7 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 	s.startOnce.Do(func() {}) // a never-started supervisor has nothing to stop
 	s.stopOnce.Do(func() {
 		if s.cancel == nil {
-			s.worker.Close()
+			err = s.worker.Shutdown(ctx)
 			return
 		}
 		// A wedged loop with a full input queue must not hold Stop past
@@ -253,7 +253,10 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 			<-s.done
 		}
 		s.cancel()
-		s.worker.Close()
+		// The running GC request gets what is left of ctx, then is cut.
+		if werr := s.worker.Shutdown(ctx); werr != nil && err == nil {
+			err = fmt.Errorf("stop bot %s: %w", s.bot.Name, werr)
+		}
 	})
 	return err
 }
