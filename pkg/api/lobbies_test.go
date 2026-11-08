@@ -387,6 +387,10 @@ func TestLobbyActions(t *testing.T) {
 			if tt.check != nil {
 				tt.check(t, f)
 			}
+			// Only the create and GET responses carry the password.
+			if strings.Contains(r.raw, "k3tt1e") || strings.Contains(r.raw, `"password"`) {
+				t.Errorf("response carries the password: %s", r.raw)
+			}
 		})
 	}
 }

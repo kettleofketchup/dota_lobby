@@ -6,7 +6,7 @@
   `422 league_not_held`.
 - `GET /v1/lobbies` (filters, cursor paging), `GET`, `PATCH` and `DELETE /v1/lobbies/{id}`,
   and `invite`, `kick`, `roster`, `launch`, `teams/flip` and `teams/shuffle` under it. The
-  lobby password is only in single-lobby responses.
+  lobby password is only in the create and `GET /v1/lobbies/{id}` responses.
 - Rostered players get one invite each, recorded before it is sent so a restart never repeats
   it; resends are limited by `lobby.invite.min_resend` and `max_per_player`. Players on the
   wrong side and strangers on a side are moved back to the pool, at most once per

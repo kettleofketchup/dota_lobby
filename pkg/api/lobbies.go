@@ -393,7 +393,7 @@ func (s *Server) hostAccount(l lobby.Lobby) uint32 {
 }
 
 // lobbyView builds the API form of a lobby. withPassword is set only for
-// single-lobby responses; list responses never carry the password.
+// the create and GET responses; no other response carries the password.
 func (s *Server) lobbyView(l lobby.Lobby, withPassword bool) lobbyView {
 	sp := l.Spec
 	v := lobbyView{
@@ -512,8 +512,10 @@ func (s *Server) gcContext(r *http.Request) (context.Context, context.CancelFunc
 	return context.WithTimeout(r.Context(), s.opts.GCRequestTimeout)
 }
 
-func (s *Server) writeLobby(w http.ResponseWriter, status int, l lobby.Lobby) {
-	writeJSON(w, status, s.lobbyView(l, true))
+// writeLobby answers with one lobby. Only the create and GET responses
+// carry the password.
+func (s *Server) writeLobby(w http.ResponseWriter, status int, l lobby.Lobby, withPassword bool) {
+	writeJSON(w, status, s.lobbyView(l, withPassword))
 }
 
 func (s *Server) handleLobbyCreate(w http.ResponseWriter, r *http.Request) {
@@ -537,7 +539,7 @@ func (s *Server) handleLobbyCreate(w http.ResponseWriter, r *http.Request) {
 	if created {
 		status = http.StatusAccepted
 	}
-	s.writeLobby(w, status, l)
+	s.writeLobby(w, status, l, true)
 }
 
 func (s *Server) handleLobbyList(w http.ResponseWriter, r *http.Request) {
@@ -587,7 +589,7 @@ func (s *Server) handleLobbyGet(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusOK, l)
+	s.writeLobby(w, http.StatusOK, l, true)
 }
 
 func (s *Server) handleLobbyPatch(w http.ResponseWriter, r *http.Request) {
@@ -603,7 +605,7 @@ func (s *Server) handleLobbyPatch(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusOK, l)
+	s.writeLobby(w, http.StatusOK, l, false)
 }
 
 func (s *Server) handleLobbyDelete(w http.ResponseWriter, r *http.Request) {
@@ -616,7 +618,7 @@ func (s *Server) handleLobbyDelete(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		status = http.StatusAccepted
 	}
-	s.writeLobby(w, status, l)
+	s.writeLobby(w, status, l, false)
 }
 
 func (s *Server) handleLobbyInvite(w http.ResponseWriter, r *http.Request) {
@@ -667,7 +669,7 @@ func (s *Server) handleLobbyKick(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusAccepted, l)
+	s.writeLobby(w, http.StatusAccepted, l, false)
 }
 
 func (s *Server) handleLobbyRoster(w http.ResponseWriter, r *http.Request) {
@@ -692,7 +694,7 @@ func (s *Server) handleLobbyRoster(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusOK, l)
+	s.writeLobby(w, http.StatusOK, l, false)
 }
 
 func (s *Server) handleLobbyLaunch(w http.ResponseWriter, r *http.Request) {
@@ -706,7 +708,7 @@ func (s *Server) handleLobbyLaunch(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusAccepted, l)
+	s.writeLobby(w, http.StatusAccepted, l, false)
 }
 
 func (s *Server) handleLobbyFlip(w http.ResponseWriter, r *http.Request) {
@@ -717,7 +719,7 @@ func (s *Server) handleLobbyFlip(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusAccepted, l)
+	s.writeLobby(w, http.StatusAccepted, l, false)
 }
 
 func (s *Server) handleLobbyShuffle(w http.ResponseWriter, r *http.Request) {
@@ -728,7 +730,7 @@ func (s *Server) handleLobbyShuffle(w http.ResponseWriter, r *http.Request) {
 		s.writeLobbyError(w, r, err)
 		return
 	}
-	s.writeLobby(w, http.StatusAccepted, l)
+	s.writeLobby(w, http.StatusAccepted, l, false)
 }
 
 // noLobbies stands in when no lobby manager is wired.
