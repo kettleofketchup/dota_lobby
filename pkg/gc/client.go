@@ -66,7 +66,7 @@ type Client interface {
 	JoinTeam(team Team, slot uint32)
 	FlipTeams()
 	BalancedShuffle()
-	// Launch sends an empty CMsgPracticeLobbyLaunch (no nonce, gap-02).
+	// Launch sends an empty CMsgPracticeLobbyLaunch (no nonce, research 03 §8.3).
 	Launch()
 	Leave()
 	// Abandon is only for the experimental in-game delete path (Q14).
@@ -458,7 +458,7 @@ type Member struct {
 	SteamID uint64
 	Team    Team
 	// TeamKnown is false when the wire omitted team; an unset team decodes
-	// as Radiant and must not be acted on (05 §3.3).
+	// as Radiant and must not be acted on (research 05 §2).
 	TeamKnown bool
 	Slot      uint32
 	Leaver    int32

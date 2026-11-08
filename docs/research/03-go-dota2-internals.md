@@ -1,23 +1,22 @@
 # 03: go-dota2 client internals, SOCache, and protobuf staleness
 
 **Track:** go-dota2 used as a library: client lifecycle, events, state, SOCache, request/response matching, generated API, raw GC messages, library health, and how stale the protobufs are.
-**Pinned versions in this repo** (`go.mod`):
+**Versions studied** (the pre-PR `go.mod` pin):
 `github.com/paralin/go-dota2 v0.0.0-20250623204622-532cb1851217` (tag `7.39b` era) and
 `github.com/paralin/go-steam v0.0.0-20250502043548-f167ff28a93a`.
 **Research date:** 2026-11-06.
 
-Path shorthands used below:
+Paths:
 
-- `$D2` = `/home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-dota2@v0.0.0-20250623204622-532cb1851217`
-- `$GS` = `/home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a`
-- "upstream HEAD" = `paralin/go-dota2@master`, commit `6d32dc38d075` (2026-09-22), read through the GitHub API.
+- `go-dota2@532cb1851217/...` and `go-steam@f167ff28a93a/...` are relative to the pinned module roots.
+- "upstream HEAD" = `paralin/go-dota2@master`, commit `6d32dc38d075` (2026-09-22), read through the GitHub API. This PR now builds on it.
 
 ---
 
 ## 0. TL;DR
 
 1. **The pinned go-dota2 is 16 months and about 50 commits behind upstream.** Upstream was rewritten in 2026: new protobuf generator, a switch from `golang/protobuf` to `aperturerobotics/protobuf-go-lite`, GC job-ID request correlation, session-cancellation fixes, and Go 1.26. Moving to it means a **breaking API migration**, not a version bump.
-2. **The pinned go-steam probably cannot log in any more.** It uses the legacy `CMsgClientLogon` username+password flow (`$GS/auth.go:56-62`). In June 2026 users reported that this flow fails with `EResult_InvalidPassword` ([go-dota2#78](https://github.com/paralin/go-dota2/issues/78), [go-steam#11](https://github.com/paralin/go-steam/pull/11)). Upstream go-steam fixed it in `6b06e91640b1` (2026-06-27, "new token authentication method"). **This is the most urgent dependency problem for the service.**
+2. **The pinned go-steam probably cannot log in any more.** It uses the legacy `CMsgClientLogon` username+password flow (`go-steam@f167ff28a93a/auth.go:56-62`). In June 2026 users reported that this flow fails with `EResult_InvalidPassword` ([go-dota2#78](https://github.com/paralin/go-dota2/issues/78), [go-steam#11](https://github.com/paralin/go-steam/pull/11)). Upstream go-steam fixed it in `6b06e91640b1` (2026-06-27, "new token authentication method"). The service now uses the upstream token flow, and a token login works live ([09](09-live-probe.md) §2).
 3. **The vendored protos are stale for lobby messages, and so are upstream HEAD's protos.** Two changes matter on the wire:
    - `LobbyDotaTVDelay` was **renumbered** in SteamDatabase on 2026-08-12. Vendored and upstream-HEAD protos both say `LobbyDotaTV_120 = 1`, but current Valve protos say `LobbyDotaTV_60 = 1`, `LobbyDotaTV_120 = 2`, and so on. Setting `dota_tv_delay` from the vendored constants gives the wrong delay.
    - `CMsgPracticeLobbyLaunch` gained `fixed64 nonce = 6` on 2026-09-25.
@@ -25,9 +24,8 @@ Path shorthands used below:
    Upstream's automatic proto-refresh workflow has **failed on every run since 2026-04-19** (last success 2026-04-16), so upstream will not pick these up on its own. The `lstat src/google/protobuf` error is confirmed only in the readable logs (2026-08-22 onward); older logs have expired.
 4. **The SOCache has structural limits that matter for a lobby bot.** It stores objects under the **owner SOID**, not the object's key field, and keeps only `object_data[0]` from each subscribed type. It is **never cleared** when the GC session ends, and subscriber channels are lossy (buffer of 10, oldest event dropped first). Upstream HEAD made it thread-safe but kept all of these limits.
 5. **`MakeRequest` in the pinned version matches responses by message type only.** It sends no job ID, so two concurrent requests that expect the same response type can get each other's replies. Upstream HEAD fixes this with `jobid_source`/`jobid_target` correlation.
-6. **The event pipeline can deadlock.** go-steam calls GC handlers synchronously on its network read goroutine. `Emit` blocks on a channel with a buffer of 30 (`$GS/client.go:65,89-91`). If the goroutine that drains `client.Events()` also blocks in `MakeRequest`, the read loop stops and the response never arrives.
-7. **Lobby creation is fire-and-forget in the library.** The GC's `k_EMsgGCPracticeLobbyResponse` (7055) has no handler, so it surfaces only as `events.UnhandledGCPacket`. Section 6.3 shows how to capture the raw reply (the snippet was compile-checked), but the reply's decode type is UNCERTAIN; the SOCache lobby Create event is the reliable success signal.
-8. **The skill notes at `~/.claude/skills/go-dota2-steam/references/go-dota2*.md` contain API calls that do not exist:** `client.On(...)`, `d.GetState()` and `e.Msg`. They also call `KickLobbyMember(memberId, team)` with two arguments; the method exists, but its real signature takes one argument, `KickLobbyMember(accountID uint32)` (`$D2/client_generated.go:1967`). See section 11.
+6. **The event pipeline can deadlock.** go-steam calls GC handlers synchronously on its network read goroutine. `Emit` blocks on a channel with a buffer of 30 (`go-steam@f167ff28a93a/client.go:65,89-91`). If the goroutine that drains `client.Events()` also blocks in `MakeRequest`, the read loop stops and the response never arrives.
+7. **Lobby creation is fire-and-forget in the library.** The GC's `k_EMsgGCPracticeLobbyResponse` (7055) has no handler, so it surfaces only as `events.UnhandledGCPacket`. Section 6.3 shows how to capture the raw reply. It decodes as `CMsgGenericResult` with `eresult` 1 on success (VERIFIED live, [09](09-live-probe.md) §5); the SOCache lobby Create event plus field read-back stays the authoritative success signal.
 
 ---
 
@@ -40,7 +38,7 @@ Path shorthands used below:
 | `state` | `Dota2State` snapshot type | `state/state.go` |
 | `socache` | Shared Object cache: containers per type ID, subscriptions | `socache.go`, `socache_container.go`, `socache_sub.go` |
 | `cso` | SO type IDs and type-ID → protobuf constructor map | `cso/cso_types.go` |
-| `protocol` | Generated `.pb.go` plus the patched `.proto` sources (package `protocol`, proto2) | 40 `.proto` files (and 40 `.pb.go`); the header says `protoc-gen-go v1.36.6`, `protoc v5.29.3` (`$D2/protocol/dota_gcmessages_client.pb.go:1-4`) |
+| `protocol` | Generated `.pb.go` plus the patched `.proto` sources (package `protocol`, proto2) | 40 `.proto` files (and 40 `.pb.go`); the header says `protoc-gen-go v1.36.6`, `protoc v5.29.3` (`go-dota2@532cb1851217/protocol/dota_gcmessages_client.pb.go:1-4`) |
 | `apigen` | Code generator: classifies `EDOTAGCMsg` into client requests, GC responses and events, and emits `client_generated.go` and `events/generated.go` | `msg_overrides.go`, `msg_response.go`, `snapshot-*.txt` |
 | `generator` | `update_protos.bash`: copies protos from the `SteamDatabase/Protobufs` submodule and patches them | `generator/update_protos.bash` |
 
@@ -50,7 +48,7 @@ The project's [README](https://github.com/paralin/go-dota2) says the protos come
 
 ## 2. The `Dota2` client struct and lifecycle
 
-### 2.1 Struct and constructor (verified, `$D2/client.go:32-66`)
+### 2.1 Struct and constructor (verified, `go-dota2@532cb1851217/client.go:32-66`)
 
 ```go
 type Dota2 struct {
@@ -71,18 +69,18 @@ type Dota2 struct {
 func New(client *steam.Client, le logrus.FieldLogger) *Dota2 // registers itself via client.GC.RegisterPacketHandler
 ```
 
-- `New` builds the handler map, then calls `client.GC.RegisterPacketHandler(c)` (`client.go:64`). go-steam **appends** to a plain slice and has no unregister function (`$GS/gamecoordinator.go:28-30`). Every call to `dota2.New` on the same `steam.Client` therefore adds another live handler.
-  - **This affects our code today.** `pkg/bot/manager.go:95` calls `dota2.New` on **every** `LoggedOnEvent`. After N reconnects, N `Dota2` instances all decode every GC packet and emit duplicate events (verified by reading). The fix is to create one `Dota2` per `steam.Client`, once, before `Connect()`.
+- `New` builds the handler map, then calls `client.GC.RegisterPacketHandler(c)` (`client.go:64`). go-steam **appends** to a plain slice and has no unregister function (`go-steam@f167ff28a93a/gamecoordinator.go:28-30`). Every call to `dota2.New` on the same `steam.Client` therefore adds another live handler.
+  - Calling `dota2.New` on every `LoggedOnEvent` therefore leaves N `Dota2` instances decoding every GC packet after N reconnects. Create one `Dota2` per `steam.Client`, once, before `Connect()`.
 - `Close()` (`client.go:74-80`) only cancels the connection context. It does not unregister the handler or clear the cache.
 - `GetCache()` is the only public accessor for internal state. **There is no `GetState()`** (grep shows no `func (d *Dota2) GetState`). State is visible only through `events.ClientStateChanged`.
 
 ### 2.2 Handshake: `SetPlaying` → `SayHello` → `ClientWelcome`
 
-Verified in `$D2/client_session.go`:
+Verified in `go-dota2@532cb1851217/client_session.go`:
 
 | Step | Code | What it does |
 |---|---|---|
-| `SetPlaying(true)` | `:14-17` | `client.GC.SetGamesPlayed(570)` sends `EMsg_ClientGamesPlayed` (`$GS/gamecoordinator.go:68-79`) |
+| `SetPlaying(true)` | `:14-17` | `client.GC.SetGamesPlayed(570)` sends `EMsg_ClientGamesPlayed` (`go-steam@f167ff28a93a/gamecoordinator.go:68-79`) |
 | `SayHello(haveVersions...)` | `:27-38` | Sends `k_EMsgGCClientHello` with `Engine=k_ESE_Source2`, `ClientLauncher=PARTNER_NONE`, `ClientSessionNeed=104`, and optional `SocacheHaveVersions`. It sends **exactly once**, with no retry. |
 | GC → `k_EMsgGCClientWelcome` | `:59-79` | For each `uptodate_subscribed_caches` entry it sends `k_ESOMsg_CacheSubscriptionRefresh` (`client_cache.go:10-14`). Each `outofdate_subscribed_caches` entry is fed to `cache.HandleSubscribed`. Then it sets `HAVE_SESSION` and emits `*events.ClientWelcomed{Welcome}`. |
 | GC → `k_EMsgGCClientConnectionStatus` | `:82-94` | Calls `setConnectionStatus(*stat.Status, stat)` |
@@ -95,11 +93,9 @@ Verified in `$D2/client_session.go`:
 
 Our bot manager should run a loop: `SayHello()` every 5–30 s until `ClientWelcomed` arrives or `GCConnectionStatusChanged{NewState: HAVE_SESSION}` is seen. It should restart the loop whenever the state drops away from `HAVE_SESSION`.
 
-> Current `pkg/bot/manager.go` never calls `SetPlaying(true)` or `SayHello()` (lines 86-99), so the GC session is never established today (verified by reading).
-
 ### 2.3 Connection status and state
 
-`state.Dota2State` (`$D2/state/state.go:8-29`):
+`state.Dota2State` (`go-dota2@532cb1851217/state/state.go:8-29`):
 
 | Field | Populated? |
 |---|---|
@@ -123,7 +119,7 @@ Our bot manager should run a loop: `SayHello()` every 5–30 s until `ClientWelc
 
 ### 2.4 Events, and how they are delivered
 
-All events go through `d.client.Emit(event)` (`client.go:121-123`), which is `c.events <- event` on a channel with a buffer of 30 (`$GS/client.go:65,89-91`). There is **no** `client.On(...)` API. You consume with `for ev := range steamClient.Events() { switch e := ev.(type) {...} }`.
+All events go through `d.client.Emit(event)` (`client.go:121-123`), which is `c.events <- event` on a channel with a buffer of 30 (`go-steam@f167ff28a93a/client.go:65,89-91`). There is **no** `client.On(...)` API. You consume with `for ev := range steamClient.Events() { switch e := ev.(type) {...} }`.
 
 | Event (package `events`) | Emitted when | Ptr? |
 |---|---|---|
@@ -134,7 +130,7 @@ All events go through `d.client.Emit(event)` (`client.go:121-123`), which is `c.
 | `ChatMessage`, `JoinedChatChannel`, `InvitationCreated` | Hand-registered (`client.go:98-109`) | `*` |
 | 71 generated events, e.g. `LeagueAdminList`, `LobbyMVPAwarded`, `MatchSignedOut`, `TeamInfo`, `PartySearchInvite` | `registerGeneratedHandlers` (`client_generated.go` tail) | `*` |
 
-**Deadlock hazard (verified by reading the code paths).** go-steam calls `GameCoordinator.HandlePacket` → every `GCPacketHandler.HandleGCPacket` synchronously on the TCP read goroutine (`$GS/gamecoordinator.go:32-49`, `$GS/client.go:206-222`). `HandleGCPacket` emits events *before* it delivers responses to pending requests (`client.go:162-176`). So if the single goroutine draining `Events()` is blocked in `MakeRequest` (or in anything that waits on GC traffic), the following happens:
+**Deadlock hazard (verified by reading the code paths).** go-steam calls `GameCoordinator.HandlePacket` → every `GCPacketHandler.HandleGCPacket` synchronously on the TCP read goroutine (`go-steam@f167ff28a93a/gamecoordinator.go:32-49`, `go-steam@f167ff28a93a/client.go:206-222`). `HandleGCPacket` emits events *before* it delivers responses to pending requests (`client.go:162-176`). So if the single goroutine draining `Events()` is blocked in `MakeRequest` (or in anything that waits on GC traffic), the following happens:
 
 1. More than 30 events pile up.
 2. `Emit` blocks.
@@ -148,7 +144,7 @@ All events go through `d.client.Emit(event)` (`client.go:121-123`), which is `c.
 
 ## 3. SOCache internals
 
-### 3.1 Data model (verified, `$D2/socache/*.go`)
+### 3.1 Data model (verified, `go-dota2@532cb1851217/socache/*.go`)
 
 ```
 SOCache
@@ -168,7 +164,7 @@ Public API:
 | `cache.GetContainerForTypeID(uint32(cso.Lobby))` | Returns an error for type IDs with no constructor |
 | `ctr.Get(id)`, `ctr.GetOne()`, `ctr.Range(cb)` | `GetOne` returns whatever `sync.Map.Range` yields first, which is arbitrary when more than one object exists |
 
-### 3.2 Known SO types (`$D2/cso/cso_types.go:17-86`)
+### 3.2 Known SO types (`go-dota2@532cb1851217/cso/cso_types.go:17-86`)
 
 | CSOType | ID | Constructor registered? | Proto |
 |---|---|---|---|
@@ -229,7 +225,7 @@ Upstream HEAD (`socache/socache_container.go@master`) replaced `sync.Map` with a
 
 ## 4. `MakeRequest`: request/response matching
 
-### 4.1 Pinned behaviour (verified, `$D2/client_request.go:17-106`)
+### 4.1 Pinned behaviour (verified, `go-dota2@532cb1851217/client_request.go:17-106`)
 
 ```go
 func (d *Dota2) MakeRequest(ctx context.Context, reqMsgID uint32, request proto.Message,
@@ -238,7 +234,7 @@ func (d *Dota2) MakeRequest(ctx context.Context, reqMsgID uint32, request proto.
 
 1. `validateConnectionContext()` returns `ErrNotReady` unless the client is `HAVE_SESSION` (`client_session.go:41-56`).
 2. A closure is registered under `pendReq[respMsgID][reqID]`. `reqID` is a **local counter only**. It is never put on the wire.
-3. `d.write(reqMsgID, request)` builds `NewGCMsgProtobuf` with **no `jobid_source`** (`client.go:116-118`; `$GS/protocol/gamecoordinator/msg.go:30-38`).
+3. `d.write(reqMsgID, request)` builds `NewGCMsgProtobuf` with **no `jobid_source`** (`client.go:116-118`; `go-steam@f167ff28a93a/protocol/gamecoordinator/msg.go:30-38`).
 4. Every incoming packet goes through `handleResponsePacket` (`:93-106`), which iterates *every* handler waiting on that `MsgType` in random map order. Each closure **unmarshals into the caller's shared `response` object**, then runs the `matchesRequest` predicates. The first predicate that returns true wins.
 5. `select` on `ctx.Done()` (returns `ctx.Err()`), `connectionCtx.Done()` (returns `ErrNotReady`), or the response channel.
 6. On error, a deferred cleanup removes the pending entry.
@@ -257,7 +253,7 @@ Consequences:
 ### 4.2 Upstream HEAD behaviour (verified from `client-request.go@master`, commit `f93daab554a5`)
 
 - Allocates `jobID := ++d.nextJobID` (monotonic across sessions) and calls `message.SetSourceJobId(jobID)`.
-- `handleResponsePacket` routes **only** when `pending[packet.TargetJobId]` exists and `messageType == packet.MsgType`. go-steam already parses `TargetJobId` from the header (`$GS/protocol/gamecoordinator/packet.go:12-19,38`).
+- `handleResponsePacket` routes **only** when `pending[packet.TargetJobId]` exists and `messageType == packet.MsgType`. go-steam already parses `TargetJobId` from the header (`go-steam@f167ff28a93a/protocol/gamecoordinator/packet.go:12-19,38`).
 - Decodes on the caller's goroutine, so late replies cannot mutate a returned result. Calls `msg.Reset()` before unmarshal.
 - `setConnectionStatus` now emits events **after** releasing the mutex, and `SetPlaying(false)` cancels pending calls.
 
@@ -290,7 +286,7 @@ Lobby fields relevant to leagues exist in the pinned protos: `CMsgPracticeLobbyS
 
 ### 6.1 Sending (any message, pinned version)
 
-`d.write` is unexported. Use go-steam directly. `GC.Write` sets the protobuf mask bit (`0x80000000`) for you (`$GS/gamecoordinator.go:51-65`).
+`d.write` is unexported. Use go-steam directly. `GC.Write` sets the protobuf mask bit (`0x80000000`) for you (`go-steam@f167ff28a93a/gamecoordinator.go:51-65`).
 
 ```go
 import (
@@ -325,8 +321,8 @@ For base-SDK messages (`EGCBaseClientMsg`, `EGCBaseMsg`, `ESOMsg`), cast those e
 ```go
 // The reply to k_EMsgGCPracticeLobbyCreate is k_EMsgGCPracticeLobbyResponse (7055).
 // Decode as CMsgGenericResult (eresult = EResult, 1 = OK; debug_message = field 2). See gap-05.
-// NOTE: go-dota2 sends no source job ID, and on upstream master MakeRequest matches by job ID,
-// so prefer a job-addressed send + GCPacketHandler tap (gap-05 §5.2).
+// NOTE: go-dota2 sends no source job ID. On upstream master MakeRequest matches by job ID; the GC
+// echoes it on 7055 when one is sent (09 §5), so use a job-addressed send + GCPacketHandler tap.
 func createAndWait(ctx context.Context, d *dota2.Dota2,
     details *protocol.CMsgPracticeLobbySetDetails) (*protocol.CMsgGenericResult, error) {
     res := &protocol.CMsgGenericResult{}
@@ -342,11 +338,11 @@ func createAndWait(ctx context.Context, d *dota2.Dota2,
 Caveats:
 
 - 7055 is shared by create, flip, shuffle, kick, launch and leave replies. The source is the node-dota2 comment "Received create/flip/shuffle/kick/launch/leave response" in `handlers/lobbies.js` `onPracticeLobbyResponse`. With the pinned type-only matching, **serialize lobby operations per bot**.
-- **Decode type: settled enough to implement ([gap-05](gap-05-7055-decode-and-league-rejection.md)).** 7055 is `CMsgGenericResult{eresult = 1 [default = 2], debug_message = 2}` (`$D2/protocol/econ_shared_enums.proto:37-40`), and `eresult` is a Steam EResult (1 = OK, 2 = Fail). node-dota2's own `.result === 1` check is broken (the field does not exist), but dota-ihl-bot checks `eresult === EResult.OK` in production, and node-dota2-user and under-5k also decode it as `CMsgGenericResult`. The GC addresses the create reply by job ID. Not every lobby op produces a 7055 (flip/shuffle/abandon do not, node-dota2 #654). A live capture is still wanted for golden tests.
+- **Decode type: settled enough to implement ([gap-05](gap-05-7055-decode-and-league-rejection.md)).** 7055 is `CMsgGenericResult{eresult = 1 [default = 2], debug_message = 2}` (`go-dota2@532cb1851217/protocol/econ_shared_enums.proto:37-40`), and `eresult` is a Steam EResult (1 = OK, 2 = Fail). node-dota2's own `.result === 1` check is broken (the field does not exist). VERIFIED live: a successful league create returns `{eresult: 1}` addressed to our source job ([09](09-live-probe.md) §5), and the captured bodies serve as golden files. Not every lobby op produces a 7055 (flip/shuffle/abandon do not, node-dota2 #654).
 - Because pinned `MakeRequest` matches by message type only, this call also accepts any other 7055 reply (launch, kick, leave and so on) that arrives first.
 - Treat a `CSODOTALobby` Create event in the SOCache as the authoritative success signal. Use the 7055 result to fail fast.
 
-The snippet, together with a custom tap handler, `SubscribeType(cso.Lobby)`, an event-switch over `GCConnectionStatusChanged`, `ClientWelcomed`, `ClientStateChanged`, `UnhandledGCPacket` and `LeagueAdminList`, and `RequestLeagueAvailableLobbyNodes`, passed `go vet` in a scratch module pinned to our `go.mod` versions (Go 1.27.1, `GOPROXY=off`).
+The snippet, together with a custom tap handler, `SubscribeType(cso.Lobby)`, an event-switch over `GCConnectionStatusChanged`, `ClientWelcomed`, `ClientStateChanged`, `UnhandledGCPacket` and `LeagueAdminList`, and `RequestLeagueAvailableLobbyNodes`, passes `go vet` against the pinned module versions.
 
 ---
 
@@ -400,7 +396,7 @@ Relevant issues:
 
 | | Pinned `f167ff28a93a` (2025-05-02) | Upstream master `336e824f8540` (2026-09-22) |
 |---|---|---|
-| Login | Legacy `CMsgClientLogon` with `Password`, `LoginKey`, `SentryFileHash`, `ShouldRememberPassword` (`$GS/auth.go:22-39,56-76`) | `IAuthenticationService` token flow (`6b06e91640b1`, 2026-06-27). PR #11's description says legacy logon returns `EResult_InvalidPassword`. |
+| Login | Legacy `CMsgClientLogon` with `Password`, `LoginKey`, `SentryFileHash`, `ShouldRememberPassword` (`go-steam@f167ff28a93a/auth.go:22-39,56-76`) | `IAuthenticationService` token flow (`6b06e91640b1`, 2026-06-27). PR #11's description says legacy logon returns `EResult_InvalidPassword`. |
 | Protobuf runtime | `github.com/golang/protobuf v1.5.4` | `protobuf-go-lite` (`c82323035020`) |
 | Heartbeat / reconnect | basic | `e882f1724962` "reconnect after unanswered heartbeats", `8c23cbb74e27` "bind transport work to connection lifetime", `908c060a` "expose playing session availability" |
 | CM list | static/random | Directory cache auto-init and HTTP error handling (`4263b220`, `9a903700`) |
@@ -418,7 +414,7 @@ Relevant issues:
 
 ### 8.1 Method
 
-I downloaded current `SteamDatabase/Protobufs@master/dota2/*.proto` for six files. I normalized both sides the way `update_protos.bash` does (strip leading `.` on type names and the `syntax`/`package`/`import`/`option` lines) and diffed them against `$D2/protocol/*.proto`. A second pass stripped the new Valve `boxed_type="..."` and `synthetic_default` field options.
+I downloaded current `SteamDatabase/Protobufs@master/dota2/*.proto` for six files. I normalized both sides the way `update_protos.bash` does (strip leading `.` on type names and the `syntax`/`package`/`import`/`option` lines) and diffed them against `go-dota2@532cb1851217/protocol/*.proto`. A second pass stripped the new Valve `boxed_type="..."` and `synthetic_default` field options.
 
 | File | Changed lines (raw) | Real semantic changes (after stripping options) |
 |---|---|---|
@@ -439,11 +435,11 @@ I downloaded current `SteamDatabase/Protobufs@master/dota2/*.proto` for six file
 | `LobbyDotaTV_300` | **2** | 3 |
 | `LobbyDotaTV_900` | **3** | 4 |
 
-The wire carries integers. Sending `protocol.LobbyDotaTVDelay_LobbyDotaTV_300` from our pin (value 2) is now interpreted as **120 s**, and the vendored `_120` (value 1) means **60 s**. This hits `CMsgPracticeLobbySetDetails.dota_tv_delay = 24` and its decode in `CSODOTALobby.dota_tv_delay = 53`. **Workaround without regenerating:** send raw integers using the current mapping, e.g. `protocol.LobbyDotaTVDelay(3)` for 300 s, and document it. Our code does not set `dota_tv_delay` today (grep finds nothing). The proto default `LobbyDotaTV_120` is an integer (1) on the client side but is not sent unless set, because proto2 optional fields are omitted when unset.
+The wire carries integers. Sending `protocol.LobbyDotaTVDelay_LobbyDotaTV_300` from our pin (value 2) is now interpreted as **120 s**, and the vendored `_120` (value 1) means **60 s**. This hits `CMsgPracticeLobbySetDetails.dota_tv_delay = 24` and its decode in `CSODOTALobby.dota_tv_delay = 53`. **Workaround without regenerating:** send raw integers using the current mapping, e.g. `protocol.LobbyDotaTVDelay(3)` for 300 s, and document it. The proto default `LobbyDotaTV_120` is an integer (1) on the client side but is not sent unless set, because proto2 optional fields are omitted when unset.
 
 ### 8.3 `CMsgPracticeLobbyLaunch.nonce` (verified present upstream, effect uncertain)
 
-The field was added in SteamDatabase `623ebf57b33a` (2026-09-25). It is absent from the pin and from upstream HEAD. We do not know whether the GC **requires** it, which would make `LaunchLobby()` silently fail, or whether it is optional anti-replay. Test `LaunchLobby()` on a live bot. If it fails, regenerate or hand-add the field (proto2 unknown fields are fine to add).
+The field was added in SteamDatabase `623ebf57b33a` (2026-09-25). It is absent from the pin and from upstream HEAD. REPORTED: an open-source league bot that sends an empty launch body (the same zero bytes as go-dota2's `LaunchLobby()`) kept reaching `RUN` with league matches through Oct 2026 ([field notes](https://github.com/timothyjjcrow/under-5k-league/blob/main/docs/DOTA-LOBBY-BOT.md)), so the nonce looks optional for now. Not yet tested by us (Q5 covers the first live launch); keep a launch-to-RUN timeout as a guard. If launches start failing, hand-add the field (proto2 unknown fields are fine to add).
 
 ### 8.4 Overall risk assessment
 
@@ -452,10 +448,10 @@ The field was added in SteamDatabase `623ebf57b33a` (2026-09-25). It is absent f
 | Session handshake (`Hello`/`Welcome`/`ConnectionStatus`) | Low | Fields unchanged; ClientSessionNeed 104 matches ValvePython's `UserInUINeverConnected` |
 | SOCache messages (`CMsgSOCacheSubscribed`, …) | Low | Only option annotations changed |
 | Lobby create and set details | **Medium** | Enum renumbering (DotaTV). New `LobbyType` value. Message IDs unchanged. |
-| Lobby launch | **Medium, unknown** | New `nonce` |
+| Lobby launch | Medium | New `nonce`; an empty body REPORTED to still work (section 8.3) |
 | League lobby fields (`leagueid`, `league_node_id`) | Low | Unchanged apart from `boxed_type` options |
 | League admin, info and node messages | Low–Medium | IDs 7434/7633/7634/7650/7651 unchanged; node/group schema churn |
-| Steam login (go-steam) | **High** | Legacy flow reportedly dead |
+| Steam login (go-steam) | High on the pin, resolved on master | Legacy flow reportedly dead; master's token flow VERIFIED live |
 
 General rule: proto2 is tolerant. Unknown fields are skipped and missing fields are unset. **Renumbered enums and new required semantics are the dangerous drifts**, and diff review will not catch them unless someone looks for them.
 
@@ -466,7 +462,7 @@ General rule: proto2 is tolerant. Unknown fields are skipped and missing fields 
 ### 9.1 Option A: upgrade to upstream HEAD, then patch
 
 1. `go get github.com/paralin/go-dota2@master github.com/paralin/go-steam@master` and bump `go` in `go.mod` to `1.26`.
-2. Port our code:
+2. Port the service code:
    - Replace `github.com/golang/protobuf/proto` helpers with pointer helpers or Go 1.26 `new(expr)`.
    - Messages become `protobuf-go-lite`.
    - Logon moves to the new auth flow (see go-steam `auth_session.go`).
@@ -509,7 +505,7 @@ Upstream the patches where possible.
 - It prepends `syntax="proto2"; package protocol;` and strips leading dots.
 - It deletes `CDotaMsgStructuredTooltipProperties` and `rsync`s into `protocol/`.
 - `genproto` runs `protoc --go_out` with an `M` mapping per file.
-- `apigen.bash` rebuilds `client_generated.go` and `events/generated.go` (`$D2/Makefile:58-82`, `$D2/generator/update_protos.bash:1-68`).
+- `apigen.bash` rebuilds `client_generated.go` and `events/generated.go` (`go-dota2@532cb1851217/Makefile:58-82`, `go-dota2@532cb1851217/generator/update_protos.bash:1-68`).
 
 Requires `protoc` and the tools under `tools/`, which are **not** included in the module zip. You need the git checkout.
 
@@ -539,30 +535,15 @@ These recommendations follow from the verified internals above.
 4. On `GCConnectionStatusChanged` away from `HAVE_SESSION`: mark the bot not ready, consider cached lobby data stale, and restart the hello loop.
 5. Per-bot GC request mutex in the pinned version: one in-flight request per response type. Always `context.WithTimeout`.
 6. Lobby truth comes from `GetCache()` `cso.Lobby` container `Get(lobbyID)` after a Create or Update event. Do not use `Dota2State`.
-7. Before going headless in production, decide the bot's in-lobby slot (caster or spectator, per #69 and #77) so `LaunchLobby()` does not hang in loading.
+7. Before going headless in production, decide the bot's in-lobby slot (caster or spectator, per #69 and #77) so `LaunchLobby()` does not hang in loading (Q5).
 
 ---
 
-## 11. Corrections to the local skill notes
-
-The notes are `~/.claude/skills/go-dota2-steam/references/go-dota2.md` and `go-dota2-client.md`.
-
-| Note says | Reality (pinned and HEAD) |
-|---|---|
-| `client.On(func(e *events.GCConnectionStatusChanged){...})` | No `On` method in go-steam. Use `for ev := range client.Events()` with a type switch. |
-| `ClientWelcomed` has `e.Msg` | The field is `e.Welcome` (`events/session.go:19-22`) |
-| `state := d.GetState()`, `state.Lobby` | No `GetState()`. `Lobby`, `Party` and `PartyInvite` are never populated. |
-| `d.KickLobbyMember(memberId, team)` | `KickLobbyMember(accountID uint32)`. `KickLobbyMemberFromTeam(accountID)` is separate. |
-| `d.InviteToLobby`, `SetLobbyTeamSlot` | The actual names are `InviteLobbyMember(steamid.SteamId)` and `JoinLobbyTeam(team, slot)` |
-| `GameMode: proto.Uint32(uint32(DOTA_GameMode_...))` | Pinned: OK (`game_mode` is uint32). HEAD: there is no `proto` package, so use a pointer helper. |
-
----
-
-## 12. Verified vs Uncertain
+## 11. Verified vs Uncertain
 
 ### Verified (read in source or API output)
 
-- Struct, `New`, handler registration, and the event set: `$D2/client.go:32-113`, `events/*.go`.
+- Struct, `New`, handler registration, and the event set: `go-dota2@532cb1851217/client.go:32-113`, `events/*.go`.
 - `SayHello` is a single send with `ClientSessionNeed=104` and the Source2 engine: `client_session.go:27-38`.
 - `SetPlaying(false)` does not cancel `connectionCtx` (pinned): `client_session.go:18-22`.
 - `Dota2State.Lobby/Party/PartyInvite/LastConnectionStatusUpdate` are never assigned (pinned). There is no `GetState`.
@@ -572,21 +553,23 @@ The notes are `~/.claude/skills/go-dota2-steam/references/go-dota2.md` and `go-d
 - `k_EMsgGCPracticeLobbyResponse` is overridden to no wrapper. `LeagueAdminList` is event-only.
 - Upstream: about 50 commits since the pin, the protobuf-go-lite migration, Go 1.26, job correlation, and proto-update workflow failures since 2026-04-19 (the quoted error is confirmed from 2026-08-22 on; earlier logs expired).
 - The `LobbyDotaTVDelay` renumbering (2026-08-12) and `CMsgPracticeLobbyLaunch.nonce` (2026-09-25) exist in current SteamDatabase protos and are missing from both the pin and upstream HEAD.
-- `pkg/bot/manager.go` calls `dota2.New` on every logon and never calls `SetPlaying` or `SayHello`.
 - The snippets in section 6 compile against the pinned modules.
 
 ### Likely (strong secondary evidence)
 
 - The pinned go-steam legacy logon no longer works. Source: issue #78 and PR #11. Not tested live here.
-- 7055 replies are job-addressed. Source: node-dota2 registers them as job callbacks on the create path.
 - The bot's own SO cache (owner = SteamID) holds invites and inventory, while the lobby is a separate owner cache.
+
+### VERIFIED live (2026-11-08, [09](09-live-probe.md))
+
+- 7634 and the create 7055 echo `jobid_target`, so HEAD's `MakeRequest` works for them. The chat join reply 7010 does **not**, so HEAD's `JoinChatChannel` never completes.
+- 7055 decodes as `CMsgGenericResult`, `eresult` 1 on a successful create.
 
 ### Uncertain (needs a live test)
 
-- Whether the GC requires `CMsgPracticeLobbyLaunch.nonce`.
-- Whether every reply type we need echoes `jobid_target`, which HEAD's `MakeRequest` depends on.
+- Whether the GC requires `CMsgPracticeLobbyLaunch.nonce` (REPORTED optional, section 8.3).
+- Which other reply types we need echo `jobid_target`.
 - The root cause of upstream's proto-workflow failures. `bd8f82df` is ruled out (the error predates it); April-August logs have expired.
-- The decode type of 7055 replies (`CMsgGenericResult` per node-dota2, whose own success check reads a `result` field the Valve proto lacks).
 - Whether league or ticket data relevant to goal (4) arrives through SO types 40 or 42, or through EconItems that the SOCache currently drops.
 - The about-60-minute lobby-update drop reported for other libraries (#72).
 
@@ -596,10 +579,8 @@ The notes are `~/.claude/skills/go-dota2-steam/references/go-dota2.md` and `go-d
 
 Local (pinned modules):
 
-- `$D2/client.go`, `client_session.go`, `client_request.go`, `client_cache.go`, `client_lobby.go`, `client_lobby_members.go`, `client_lobby_slot.go`, `client_party.go`, `client_generated.go`, `events/{event,session,state,invite,generated}.go`, `state/state.go`, `socache/{socache,socache_container,socache_sub}.go`, `cso/cso_types.go`, `apigen/{msg_overrides.go,apigen.bash,snapshot-messages.txt}`, `generator/update_protos.bash`, `Makefile`, `go.mod`, `protocol/*.proto`
-- `$GS/gamecoordinator.go`, `$GS/client.go`, `$GS/auth.go`, `$GS/protocol/gamecoordinator/{msg,packet}.go`
-- `/home/kettle/git_repos/dota_lobby/pkg/bot/manager.go`, `go.mod`
-- `~/.claude/skills/go-dota2-steam/references/go-dota2.md`, `go-dota2-client.md`
+- `go-dota2@532cb1851217/client.go`, `client_session.go`, `client_request.go`, `client_cache.go`, `client_lobby.go`, `client_lobby_members.go`, `client_lobby_slot.go`, `client_party.go`, `client_generated.go`, `events/{event,session,state,invite,generated}.go`, `state/state.go`, `socache/{socache,socache_container,socache_sub}.go`, `cso/cso_types.go`, `apigen/{msg_overrides.go,apigen.bash,snapshot-messages.txt}`, `generator/update_protos.bash`, `Makefile`, `go.mod`, `protocol/*.proto`
+- `go-steam@f167ff28a93a/gamecoordinator.go`, `go-steam@f167ff28a93a/client.go`, `go-steam@f167ff28a93a/auth.go`, `go-steam@f167ff28a93a/protocol/gamecoordinator/{msg,packet}.go`
 
 Upstream and web:
 
@@ -613,17 +594,3 @@ Upstream and web:
 - ValvePython dota2 hello loop: https://github.com/ValvePython/dota2/blob/master/dota2/client.py
 - node-dota2 hello loop and lobby response: https://github.com/Arcana/node-dota2/blob/master/index.js, https://github.com/Arcana/node-dota2/blob/master/handlers/lobbies.js
 
----
-
-## Verification notes
-
-Changes after verifier review (2026-11-06):
-
-- Package map: `protocol` has 40 `.proto` files, not 36 (`ls $D2/protocol/*.proto | wc -l`).
-- TL;DR 8: `KickLobbyMember` exists (`$D2/client_generated.go:1967`); only the skill notes' two-argument call is wrong. It is no longer listed with the truly missing `client.On`, `GetState` and `e.Msg`.
-- Section 5: the `k_EMsgGCPracticeLobbyResponse` override is at `apigen/msg_overrides.go:33`, not `:30`.
-- Section 6.3 and the evidence summary: the `CMsgGenericResult` decode for 7055 is now UNCERTAIN, because node-dota2 checks `.result` while the Valve proto field is `eresult`. Added that type-only `MakeRequest` also accepts other 7055 replies.
-- Section 7.1: open issues are #81 (Renovate PR) and #21 (human-filed user guide request), not two bot PRs.
-- Section 7.1 and 9.2: removed `bd8f82df2781` as a possible cause of the `lstat src/google/protobuf` failure (the error appears from 2026-08-22, six weeks earlier). The error is confirmed only in readable logs from 2026-08-22 to 2026-11-04; April-August causes are unknown.
-- Section 7.1 #72: reworded as a ValvePython question, not a go-dota2 bug.
-- Section 7.1 forks: added `gg-cr` (2 ahead) and `marceloarc` (1 ahead), both trivial and behind master. `amandladev` also changes `client_party.go`, `go.mod`, `go.sum` and `.gitignore`; its READMEs are under `examples/`.

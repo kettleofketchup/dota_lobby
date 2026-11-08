@@ -16,7 +16,7 @@ go test ./...
 ## Credentials
 
 Use the just recipes. They keep credentials in local sops files encrypted with the dota_lobby key from the main sops key file, all
-git-ignored (see the plan's "Secrets" section):
+git-ignored (see [Bot accounts](../../docs/configuration/bot-accounts.md)):
 
 ```bash
 just secrets init

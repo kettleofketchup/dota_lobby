@@ -3,9 +3,8 @@
 > Track: **Match tracking and results**. This covers how `dota_lobby` should follow a lobby from launch to a final result and report it to callers.
 > Scope: CSODOTALobby state transitions, `game_state`, `match_id`, `match_outcome`, GC match details, post-game notifications, lobby teardown, no-show timeouts, the Steam Web API, OpenDota and STRATZ fallbacks, league listings, replays, and the proposed webhook/event payloads.
 >
-> Pinned sources: `go-dota2@v0.0.0-20250623204622-532cb1851217` (abbreviated **GD2** below) at
-> `/home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-dota2@v0.0.0-20250623204622-532cb1851217`.
-> Proto paths are relative to `GD2/protocol/`.
+> Pinned sources: `github.com/paralin/go-dota2 v0.0.0-20250623204622-532cb1851217`. Code paths are relative to
+> that module's root and proto paths to its `protocol/` directory.
 >
 > Labels: **[V]** means verified in local source or an upstream document. **[R]** means reported by a real production bot (field experience, not Valve documentation). **[I]** means inferred or uncertain.
 
@@ -14,7 +13,7 @@
 ## 0. TL;DR
 
 1. **The lobby object is the primary result signal.** The bot that hosts the lobby gets `CSODOTALobby` shared-object (SO) updates. In those updates, `state` moves `UI -> SERVERSETUP/SERVERASSIGN -> RUN -> POSTGAME`, `match_id` is set when the launch happens, and `match_outcome` (`EMatchOutcome`) names the winner at the end. [V] (fields), [R] (sequence)
-2. **The host bot cannot reliably leave during `RUN`.** A production bot found that the GC ignores `PracticeLobbyLeave` (7040) during RUN [R]. Whether `AbandonCurrentGame` (7035) followed by Leave ("early leave") works is **UNCERTAIN**: there are only mixed third-party reports (node-dota2 #179), and the production bot's own live test has no published outcome [I]. After an early leave, the bot would no longer get lobby updates and would have to poll `GCMatchDetailsRequest` (7095/7096). That poll path is untested in production as well [I].
+2. **The host bot cannot reliably leave during `RUN`.** An open-source league bot found that the GC ignores `PracticeLobbyLeave` (7040) during RUN [R]. Whether `AbandonCurrentGame` (7035) followed by Leave ("early leave") works is **UNCERTAIN**: there are only mixed third-party reports (node-dota2 #179), and the production bot's own live test has no published outcome [I]. After an early leave, the bot would no longer get lobby updates and would have to poll `GCMatchDetailsRequest` (7095/7096). That poll path is untested in production as well [I].
 3. **Do not rely on `game_state` inside the lobby SO.** The same bot logged `WAIT_FOR_PLAYERS_TO_LOAD (1)`, and the next update was already the post-game. Intermediate game states (HERO_SELECTION, GAME_IN_PROGRESS) only showed up after a forced GC resync. [R]
 4. **The Steam Web API does not return unticketed practice lobbies.** A practice lobby without a ticket gets "Practice matches are not available via GetMatchDetails", or currently HTTP 500 `{}` [R, community reports]. Ticketed (league) matches are **generally** listed in `GetMatchHistory?league_id=` and `GetMatchDetails`, but this is not guaranteed. In node-dota2 #442 one league-tagged match (3491092220) was missing from both endpoints and the cause was never found, and a Dota2-Gameplay #33427 commenter reports `GetMatchDetails` as broken in general "since facets were added". Plan for absent matches and for HTTP 500s even on ticketed games, and keep OpenDota/GC as fallbacks [R]. None of this is documented by Valve.
 5. **Recommended result pipeline (most to least authoritative for speed):**
@@ -29,7 +28,7 @@
 
 ### 1.1 `CSODOTALobby` fields relevant to tracking
 
-From `dota_gcmessages_common_lobby.proto` (GD2). The same numbering was checked against SteamDatabase GameTracking-Dota2 master, where 132 (`requested_hero_teams`) is still the highest field number. [V]
+From `dota_gcmessages_common_lobby.proto` (pinned go-dota2). The same numbering was checked against SteamDatabase GameTracking-Dota2 master, where 132 (`requested_hero_teams`) is still the highest field number. [V]
 
 | Field | # | Type | Line | Use for tracking |
 |---|---|---|---|---|
@@ -58,7 +57,7 @@ From `dota_gcmessages_common_lobby.proto` (GD2). The same numbering was checked 
 
 `CSODOTALobbyMember` (lines 96–111): `id` (SteamID64), `hero_id`, `team` (`DOTA_GC_TEAM`), `slot`, `leaver_status` (`DOTALeaverStatus_t`), `leaver_actions`, `coach_team`. [V]
 
-> Indexing caveat [V/I]: `all_members` is a superset. The GC uses the index arrays to say who is currently present. A tracker that iterates `all_members` directly will count players who have left. The under-5k bot notes "authoritative lobby snapshots and current member indices".
+> Indexing caveat [V/I]: `all_members` is a superset. The GC uses the index arrays to say who is currently present. A tracker that iterates `all_members` directly will count players who have left.
 
 ### 1.2 `CSODOTALobby.State` enum (lines 214–222) [V]
 
@@ -97,7 +96,7 @@ Practice-lobby path [R]: `UI(0) -> SERVERASSIGN(6) -> SERVERSETUP(1) -> RUN(2) -
 | 68 | `NotScored_Canceled` | `not_scored: canceled` |
 | 69 | `NotScored_Suspicious` | `not_scored: suspicious` |
 
-Rule used by the production bot [R]: **2–13 means scored and over. 64–69 means a failed or not-scored launch.** A winner, once seen, is never replaced. An Unknown or NotScored value may be replaced by a later winner.
+Rule used by an existing league bot [R]: **2–13 means scored and over. 64–69 means a failed or not-scored launch.** A winner, once seen, is never replaced. An Unknown or NotScored value may be replaced by a later winner.
 
 ### 1.5 `DOTALeaverStatus_t` (`dota_shared_enums.proto:135-145`) [V]
 
@@ -170,12 +169,8 @@ Who receives it is not documented: probably the players, and maybe lobby members
 
 So if two goroutines call `RequestMatchDetails` on the same `*dota2.Dota2` at the same time, the first 7096 that arrives completes **both** calls with the same body. Mitigations:
 
-1. Serialize match-detail requests **per bot** (one in flight). The production bot does the same: "one request in flight (dropped after 30 seconds)". [R]
+1. Serialize match-detail requests **per bot** (one in flight). Existing bots do the same: one request in flight, dropped after 30 s. [R]
 2. Optionally call `MakeRequest` directly with a matcher such as `func(m proto.Message) bool { return m.(*protocol.CMsgGCMatchDetailsResponse).GetMatch().GetMatchId() == id }`. However, the GC "may answer without the match id" [R] on failure, and such a reply would then never match and the call would hang until the context timeout. Prefer (1) plus a context timeout.
-
-### 2.3 Current repo gap [V]
-
-`pkg/bot/manager.go:95` creates `dota2.New(...)` but never calls `SetPlaying(true)` or `SayHello()`. Without them the GC session never reaches `HAVE_SESSION` and no lobby SO events arrive. Lobby endpoints are still TODO (`pkg/api/server.go:193`, `:239`). Tracking depends on GC session handling, which another track covers.
 
 ---
 
@@ -211,24 +206,27 @@ sequenceDiagram
 - A headless bot cannot load into the game server, so it **must not sit on a team slot** (confirmed by go-dota2 #77 and paralin/Dota2 #26) [R].
 - **Which non-team position works is contested (UNCERTAIN; test both).**
   - Caster slot: this is the maintainer's recommendation: "Join the caster slot and then start. Then once game starts you can leave." (paralin, go-dota2 #77).
-  - Unassigned / player pool: in #77 the host's `JoinLobbyTeam(PLAYER_POOL)` was "silently ignored by GC for the lobby host", and the broadcast channel still counted as a member that must connect, so the launch hung. In paralin/Dota2 #26 (2017) one user saw lobbies fail back to the UI with the bot in the player pool or a spectator/broadcaster slot, while another got `match_outcome` with the bot in the pool. paralin suggested the restriction "maybe ... is only removed for ticketed games". The under-5k bot reports that the unassigned pool works for its **ticketed** league ("The bot is no player (it sits in the unassigned pool)").
+  - Unassigned / player pool: in #77 the host's `JoinLobbyTeam(PLAYER_POOL)` was "silently ignored by GC for the lobby host", and the broadcast channel still counted as a member that must connect, so the launch hung. In paralin/Dota2 #26 (2017) one user saw lobbies fail back to the UI with the bot in the player pool or a spectator/broadcaster slot, while another got `match_outcome` with the bot in the pool. paralin suggested the restriction "maybe ... is only removed for ticketed games". An open-source league bot reports that the unassigned pool works for its **ticketed** league (section 3.3).
   - What would resolve it: launch test lobbies, ticketed and unticketed, with the host in the caster slot and in the unassigned pool, and record whether each one reaches RUN.
-- Being a lobby member is **not** the same as being in the game. The paralin/Dota2 #26 thread (2017) inferred that a bot that did not connect to the server cannot see detailed stats for a private, unticketed lobby. That is a forum inference, not documentation [I]. The under-5k bot does **not** show that GC match details work for a ticketed host either: its recorded results come from OpenDota, and its GC match-details polling exists only as an untested live-test path (see 3.3) [I].
+- Being a lobby member is **not** the same as being in the game. The paralin/Dota2 #26 thread (2017) inferred that a bot that did not connect to the server cannot see detailed stats for a private, unticketed lobby. That is a forum inference, not documentation [I]. No field report shows GC match details working for a non-playing ticketed host either [I].
 
-### 3.3 Field reports from a production go-to-postgame bot (under-5k-league, Oct 2026) [R]
+### 3.3 Field reports from a league bot that stays to postgame (Oct 2026) [R]
 
-- "The Game Coordinator ignores a Leave (7040) while a game runs (lobby state RUN)". In every played game the bot was still in the lobby at the postgame.
-- `game_state` observation: "after `WAIT_FOR_PLAYERS_TO_LOAD` (1) the next lobby update is the postgame (every game from 2026-10-18 to 2026-10-30 logged 1 and then 6)". HERO_SELECTION and later states only appeared after the bot forced a GC session cycle (`gamesPlayed([])` then `gamesPlayed([570])`), which replays the full lobby in the welcome.
-- End-of-game detection: `state == POSTGAME`, **or** `state == RUN` with `match_outcome` in 2..13, **or** `game_state == POST_GAME` (which only triggers a leave and records nothing until an outcome is present).
-- "Early leave" (**design under live test, outcome unpublished**): `AbandonCurrentGame` (7035) then Leave, sent only at RUN with `match_id` known and `game_state` in {2,3,4,5,8}. The doc says the bot "has never tried `k_EMsgGCAbandonCurrentGame`" before this feature, that abandon-then-leave "has mixed reports" (node-dota2 #179), and that "The first real games of each kind are the live test". It records no result. A leave counts as confirmed by a Destroy, removal, CacheUnsubscribed, or a welcome without a lobby within 20 s. After a confirmed early leave, the bot polls `GCMatchDetailsRequest`: first after 8 min, then every 60 s, one request in flight with a 30 s timeout, giving up after 3 h. That schedule is reported accurately, but the doc only lists the *expected* log line (`match-details result=over outcome=<2 or 3>`), not an observed success.
-- Observed stuck case: the bot held a finished game for 90 min because the end update never arrived. Fix: a 3-hour backstop with one resync, plus a resync when a new Create gets BUSY while the old lobby still reads RUN.
-- Results: "The bot never invents a result from lobby state. OpenDota's copy of the ticketed game is the result." The lobby end only *triggers* closing the game. The recorded score comes from OpenDota by `match_id`, with sanity checks (start time after lobby formation, at least 2 linked players per team on opposite sides).
+An open-source league bot that hosts ticketed lobbies with one account and stays in the lobby until postgame reports ([field notes](https://github.com/timothyjjcrow/under-5k-league/blob/main/docs/DOTA-LOBBY-BOT.md)):
+
+- The GC ignores a Leave (7040) while the lobby is in `RUN`; the bot was still in the lobby at every postgame.
+- `game_state` in lobby updates went from `WAIT_FOR_PLAYERS_TO_LOAD` (1) straight to the postgame (6). Intermediate states appeared only after a forced GC session cycle (`SetPlaying(false)` then `(true)`, which replays the lobby in the welcome).
+- End-of-game detection: `state == POSTGAME`, **or** `state == RUN` with `match_outcome` in 2..13.
+- A finished game once stayed in `RUN` for 90 minutes because the end update never arrived. Fix: a 3-hour backstop with one resync, plus a resync when a new create finds the old lobby still in `RUN`.
+- The host sits in the unassigned pool and launches work for its ticketed league.
+- The recorded score comes from OpenDota by `match_id`, with sanity checks; the lobby end only triggers closing the game.
+- Early leave (`AbandonCurrentGame` 7035, then Leave) followed by GC match-details polling is designed but has no published result.
 
 ---
 
 ## 4. Recommended tracker state machine (service level)
 
-This maps onto the `LobbyState` values in `docs/plans/2026-01-22-status-system-design.md` (`creating -> waiting -> ready -> in_game -> finished`) and extends them with failure states.
+It refines a simple `creating -> waiting -> ready -> in_game -> finished` lifecycle with failure states.
 
 ```mermaid
 stateDiagram-v2
@@ -339,7 +337,7 @@ func (t *Tracker) watch(ctx context.Context, b *Bot, rec *LobbyRecord) {
 | # | Source | Latency | Needs | Gives | Works for unticketed? | Notes |
 |---|---|---|---|---|---|---|
 | 1 | Lobby SO `match_outcome` | seconds | host bot still in lobby | winner / not-scored, `match_duration` | yes [R] | best signal. Bot is blocked until postgame |
-| 2 | GC `RequestMatchDetails` (7095) | unknown. under-5k *expects* "a minute or so" after the end, not observed [I] | any GC session. Possibly participation for private matches | full `CMsgDOTAMatch` incl. `match_outcome`, players, `replay_salt`, `cluster` | **uncertain** [I]. Reported refused when the bot wasn't in the game (paralin/Dota2 #26) | serialize per bot. Avoid hammering (node-dota2 warns the GC stops replying when abused) |
+| 2 | GC `RequestMatchDetails` (7095) | unknown, not observed [I] | any GC session. Possibly participation for private matches | full `CMsgDOTAMatch` incl. `match_outcome`, players, `replay_salt`, `cluster` | **uncertain** [I]. Reported refused when the bot wasn't in the game (paralin/Dota2 #26) | serialize per bot. Avoid hammering (node-dota2 warns the GC stops replying when abused) |
 | 3 | GC `MatchSignedOut` push | at sign-out | being a recipient [I] | `match_id` only | ? | trigger only |
 | 4 | Steam Web API `IDOTA2Match_570/GetMatchDetails` | minutes | Web API key. **Ticketed** match | `radiant_win`, players, picks_bans, `leagueid`, `lobby_type` | **no** ("Practice matches are not available..." / HTTP 500 `{}`) | ticketed matches are usually present but not guaranteed (node-dota2 #442 had one missing). Endpoint reported flaky since facets were added (Dota2-Gameplay #33427 comment) [R] |
 | 5 | Steam Web API `GetMatchHistory?league_id=` | minutes | key. Ticketed | match list for discovery | no | `matches_requested` ≤ 100 |
@@ -392,7 +390,7 @@ no second source within N hours (unticketed) -> match.result_confirmed with conf
 
 ## 6. Timeouts and no-shows
 
-There are no Valve-documented timeouts for practice lobbies. The values below are **service policy**. Values marked [R] come from the production bot.
+There are no Valve-documented timeouts for practice lobbies. The values below are **service policy**. Values marked [R] come from an existing league bot (section 3.3).
 
 | Situation | Detection | Default | Action / event |
 |---|---|---|---|
@@ -417,7 +415,7 @@ In the in-game no-show case, the GC/server itself applies `DOTA_LEAVER_NEVER_CON
 - When it sees POSTGAME, the host bot should **Leave** (7040). If it is the leader and wants the lobby gone for everyone, it should call `DestroyLobby(ctx)` (8246, response `CMsgDOTADestroyLobbyResponse{SUCCESS|ERROR_UNKNOWN}`, `dota_gcmessages_client.proto:1900`) [V]. go-dota2's own `LeaveCreateLobby` shows the pattern: destroy if leader, call `AbandonLobby()` if state != UI, then `LeaveLobby()` (`client_lobby.go:44-56`) [V].
 - Confirm departure via SO Destroy/CacheUnsubscribed (section 2.1) before you mark the bot free.
 - Series: to continue a Bo3 in the same lobby, keep the lobby and update `radiant_series_wins`/`dire_series_wins` via `SetLobbyDetails` (`CMsgPracticeLobbySetDetails` fields 20–22, plus `previous_match_override` 38) [V fields, I behaviour]. Otherwise destroy and recreate with series fields set.
-- Bot availability: a bot is "busy" from Create until a confirmed departure. With multiple bots, the pool hands new lobbies to free bots, which is how Dota2SentinelBot handles concurrency (one lobby per account) [R].
+- Bot availability: a bot is "busy" from Create until a confirmed departure. With multiple bots, the pool hands new lobbies to free bots (one lobby per account).
 
 ---
 
@@ -467,7 +465,7 @@ In the in-game no-show case, the GC/server itself applies `DOTA_LEAVER_NEVER_CON
     "external_ref": "league42-week3-gameA",
     "bot": "bot_eu_1",
     "name": "League42 W3 A",
-    "league_id": 20004,
+    "league_id": 12345,
     "league_node_id": 0,
     "series": {"type": 1, "radiant_wins": 0, "dire_wins": 0},
     "gc_state": "POSTGAME",
@@ -537,7 +535,7 @@ lobby_events(lobby_id, seq, type, payload jsonb, created_at, PRIMARY KEY(lobby_i
 webhook_deliveries(delivery_id PK, event_id, url, attempts, next_attempt_at, status)
 ```
 
-Persisting `lobby_id -> match_id` and pending polls lets a restarted service resume GC detail polls and Web API confirmation. The production bot learned this the hard way (job state saved in `lobbies.json`) [R].
+Persisting `lobby_id -> match_id` and pending polls lets a restarted service resume GC detail polls and Web API confirmation. Existing league bots persist their job ledger for this reason [R].
 
 ---
 
@@ -545,7 +543,7 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 
 - One watcher goroutine per (bot, lobby). One serialized "GC request worker" per bot for `RequestMatchDetails` (section 2.2).
 - Web API and OpenDota pollers are global and rate limited (token bucket). Share them across bots.
-- With "stay to postgame", each bot is busy for the whole game. Concurrency equals the number of bot accounts. Early leave (Abandon + Leave) can free a bot sooner but has **mixed reports** (node-dota2 #179, as cited by under-5k). Also check the bot account for abandon or low-priority penalties after the first trials [R].
+- With "stay to postgame", each bot is busy for the whole game. Concurrency equals the number of bot accounts. Early leave (Abandon + Leave) can free a bot sooner but has **mixed reports** (node-dota2 #179). Also check the bot account for abandon or low-priority penalties after the first trials [R].
 
 ---
 
@@ -560,24 +558,22 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 - go-dota2 wrappers: `RequestMatchDetails`, `RequestMatchesMinimal`, `DestroyLobby`, `LeaveLobby`, `AbandonLobby`, `LaunchLobby`, `RequestLeagueAvailableLobbyNodes`, `RequestTopLeagueMatches`. Event `MatchSignedOut` is registered.
 - go-dota2 response correlation is by message type only. SO subscriber buffer is 10 and drops the oldest on overflow. `state.Lobby` is never set.
 - OpenDota: `/leagues/{id}/matches` excludes amateur leagues while `/matchIds` includes them. `/request` counts as 10 calls.
-- The repo never calls `SetPlaying`/`SayHello` (`manager.go:95`).
 
-### Reported by a production bot (credible, not official)
+### Reported by an open-source league bot (credible, not official; section 3.3)
 
 - The GC ignores Leave during RUN.
 - `game_state` in lobby updates jumps from 1 to 6 for a non-participating host bot.
 - The unassigned pool works for a non-playing host on a ticketed league.
-- The early-leave GC details polling schedule (8 min first, then every 60 s, one in flight, 30 s timeout, 3 h cap). This is the design. Its results are not reported.
 - Results recorded from OpenDota by `match_id` for ticketed games.
 - Web API (community reports, not Valve docs): unticketed practice matches are not returned by `GetMatchDetails`. Ticketed league matches usually are, with at least one unexplained exception (node-dota2 #442) and reported general flakiness (Dota2-Gameplay #33427).
 - The suggested timeouts (2 min create, 2 min launch settle, 10 min stall, 30 min idle, 20 s leave confirm, 3 h backstop).
 
 ### Uncertain / inferred
 
-- Whether `AbandonCurrentGame` + Leave frees the host during RUN. There are mixed third-party reports (node-dota2 #179), and the production bot's live test is unpublished.
-- Whether GC `RequestMatchDetails` returns the outcome to a non-playing host for **ticketed** lobbies, and how fast. under-5k expects "a minute or so" but reports no observed result.
+- Whether `AbandonCurrentGame` + Leave frees the host during RUN. There are mixed third-party reports (node-dota2 #179) and no published live result.
+- Whether GC `RequestMatchDetails` returns the outcome to a non-playing host for **ticketed** lobbies, and how fast.
 - Whether `RequestMatchDetails` works for **unticketed** private lobbies when the bot was only a lobby member (paralin/Dota2 #26 suggests no, 2017 forum inference).
-- Caster slot vs unassigned pool for the host at launch (go-dota2 #77 vs under-5k; see 3.2).
+- Caster slot vs unassigned pool for the host at launch (Q5; see 3.2).
 - Who receives `CMsgGCToClientMatchSignedOut` and `LobbyMVPAwarded`, and whether a non-playing host gets them.
 - The exact semantics of `CMsgGCMatchDetailsResponse.result` (probably EResult).
 - Whether `RequestMatchesMinimal` returns private or league lobby matches.
@@ -589,6 +585,8 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 ---
 
 ## 12. Open questions to test on a live bot
+
+These are Q5 and Q8 in the [index](README.md). The 2026-11-08 run ([09](09-live-probe.md)) created and destroyed league lobbies but launched none, so all are still open.
 
 1. With the bot in the unassigned pool of a **ticketed** lobby, do we see `match_outcome` on POSTGAME every time? How long after the in-game ancient falls?
 2. Does `MatchSignedOut` arrive at the host bot? If so, it is a cheap trigger for `RequestMatchDetails`.
@@ -602,7 +600,7 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 
 ## Sources
 
-**Local (go-dota2 @ v0.0.0-20250623204622-532cb1851217)**
+**go-dota2 module (`v0.0.0-20250623204622-532cb1851217`)**
 - `protocol/dota_gcmessages_common_lobby.proto:96-111, 208-328` (CSODOTALobbyMember, CSODOTALobby)
 - `protocol/dota_shared_enums.proto:33-48, 50-58, 135-145, 453-473` (DOTA_GameState, DOTA_GC_TEAM, DOTALeaverStatus_t, EMatchOutcome)
 - `protocol/dota_gcmessages_common.proto:917-1095, 1216-1259` (CMsgDOTAMatch, CMsgDOTAMatchMinimal)
@@ -612,7 +610,6 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 - `protocol/dota_gcmessages_msgid.proto:6-7, 15, 18-19, 54-55, 275-279, 375, 497`
 - `client_generated.go:14, 516, 2030, 2073, 3519, 3562-3578, 3585, 4330, 7683`
 - `client_request.go:17-105`, `socache/socache_container.go:57-160`, `socache/socache_sub.go:8-27`, `cso/cso_types.go`, `state/state.go:8-19`, `client_lobby.go:21-67`, `client.go:83-175`
-- Repo: `pkg/bot/manager.go:95-99`, `pkg/api/server.go:193, 239`, `docs/plans/2026-01-22-status-system-design.md`
 
 **Upstream / web**
 - SteamDatabase GameTracking-Dota2 lobby proto: https://raw.githubusercontent.com/SteamDatabase/GameTracking-Dota2/master/Protobufs/dota_gcmessages_common_lobby.proto
@@ -621,10 +618,7 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 - paralin/Dota2 #26, stats from practice lobby: https://github.com/paralin/Dota2/issues/26
 - paralin/go-dota2 #77, launch from caster slot then leave: https://github.com/paralin/go-dota2/issues/77
 - paralin/go-dota2 #72, GC lobby updates stopping after 60 min (ValvePython), go-dota2 keepalives OK: https://github.com/paralin/go-dota2/issues/72
-- under-5k-league lobby bot doc (production field notes, Oct–Nov 2026): https://github.com/timothyjjcrow/under-5k-league/blob/HEAD/docs/DOTA-LOBBY-BOT.md
-- under-5k-league PR #83 (postgame detection, resync, timeouts): https://github.com/timothyjjcrow/under-5k-league/pull/83
-- node-dota2 #179 (abandon then leave, mixed reports; cited by under-5k): https://github.com/Arcana/node-dota2/issues/179
-- Dota2SentinelBot (one lobby per account, results via match details): https://github.com/ErkoKnoll/Dota2SentinelBot
+- node-dota2 #179 (abandon then leave, mixed reports): https://github.com/Arcana/node-dota2/issues/179
 - FantasyLeague #224 (non-league lobby fallback: manual/replay import): https://github.com/ville-solja/FantasyLeague/issues/224
 - ValvePython dota2 lobby events: https://dota2.readthedocs.io/en/stable/dota2.features.lobby.html
 - Steam Web API method list (IDOTA2Match_570): https://steamapi.xpaw.me/IDOTA2Match_570
@@ -636,15 +630,3 @@ Persisting `lobby_id -> match_id` and pending polls lets a restarted service res
 - dotaconstants lobby_type: https://raw.githubusercontent.com/odota/dotaconstants/master/json/lobby_type.json
 - STRATZ API: https://stratz.com/api (GraphQL https://api.stratz.com/graphql)
 
----
-
-## Verification notes
-
-Corrections applied on 2026-11-06 after verifier review:
-
-- **Abandon + Leave** (TL;DR 2, 3.3, 11): moved out of "Reported by a production bot". under-5k says it "has never tried" 7035 before early leave and records no live-test result. The only evidence is mixed third-party reports (node-dota2 #179). It is now UNCERTAIN.
-- **GC match details for a ticketed host** (3.2, 5 table, 11): the claim that under-5k's polling "does return winners ~1 min after end" was refuted. The doc lists only expected log lines, "a minute or so" is the reason for a retry rather than a measured latency, and its results come from OpenDota. It is now [I], with an open question added (section 12, item 3).
-- **Web API and ticketed matches** (TL;DR 4, 5, 8.1, 11): downgraded from [V] to [R]. Unticketed lobbies are excluded (confirmed by community reports). Ticketed matches are usually present but not guaranteed (node-dota2 #442 match 3491092220 missing), and GetMatchDetails is reported flaky (Dota2-Gameplay #33427).
-- **Bot slot** (3.2, 11, 12): "not a team slot" is kept. Caster slot vs unassigned pool is marked contested (go-dota2 #77, paralin/Dota2 #26 vs under-5k), and the "no stats without connecting" claim is marked as a 2017 forum inference [I].
-- **OpenDota replay salt** (8.2): removed the non-existent `/replays?match_id=` path. The live OpenAPI spec (55 paths) has no replay path. Only `/matches/{match_id}` exposes `replay_salt`/`replay_url`/`cluster`.
-- **Line range**: `CSODOTALobby` is `dota_gcmessages_common_lobby.proto:208-328` (it closes at 328, not 333). Other field and wrapper line refs were re-checked by verifiers and are correct.
