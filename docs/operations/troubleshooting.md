@@ -225,10 +225,16 @@ side is reported to be needed for a launch.
   Dota client and never sent, so `/ready` does nothing.
 - Only members of the lobby are answered. A spectator watching through Dota TV is not a member.
 - `could not join the lobby chat; retrying` in the logs: the game coordinator refused the join
-  (the result, such as `USER_IN_TOO_MANY_CHANNELS`, is in the message). The bot tries again
-  every 30 s.
+  (the result, such as `USER_IN_TOO_MANY_CHANNELS`, is in `err`) or did not answer it within
+  5 s (`context deadline exceeded`). The bot tries again after 30 s, and waits twice as long
+  after each further failure, up to 5 min; `failures` counts them. It only joins while the
+  lobby is `waiting` or `ready`, so a lobby that reconnected in game stays out of the chat.
 - Each answer has a cooldown: `!help` once per player every 30 s, `!teams` every 10 s, a refused
-  command every 10 s. More than ten waiting messages drop the oldest.
+  command every 10 s, and `!ready`/`!unready` together every 3 s. More than ten waiting messages
+  drop the oldest.
+- `No launch attempts left` in the chat: `lobby.max_launch_attempts` launches were sent and
+  none reached a game. Chat cannot start the lobby any more, not even for admins; launch it
+  through the API with `{"force": true}`.
 - Limited accounts (no purchase on record) may not be able to chat; `limited` in `/v1/bots`
   shows it.
 - With `ready_check: true` and no working chat, players cannot type `!ready`, so a rostered

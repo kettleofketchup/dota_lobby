@@ -5,7 +5,11 @@
   are answered.
 - `!start` launches after `lobby.chat.start_countdown` (10 s). A player can start a `ready`
   lobby; an admin's start is a forced launch from `waiting` too. A player's start stops if the
-  lobby stops being ready.
+  lobby stops being ready. After `lobby.max_launch_attempts` no chat start launches; only an
+  API launch with `force` does.
+- The chat join runs alongside the lobby, never holding up API calls or the launch, gets at
+  most 5 s, and backs off from 30 s to 5 min after repeated failures. `!ready` and `!unready`
+  share a 3 s cooldown per player.
 - With `"ready_check": true`, a rostered lobby is only `ready` once every seated player typed
   `!ready`. Players lose the mark when they leave their side, shown in their `ready` field and
   in `lobby.player_ready` / `lobby.player_unready` events.

@@ -29,7 +29,9 @@ console command and never sends it to the chat.
 ## What the bot does in the chat
 
 - It joins once the lobby exists and says hello with a pointer to `!help`. After the bot loses
-  its game coordinator session it joins again on its own.
+  its game coordinator session it joins again on its own, as long as the lobby is still
+  `waiting` or `ready`. Joining never holds up the lobby: API calls, invites and the launch go
+  on while it runs. A join gets at most 5 s (or `gc.request_timeout`, if shorter).
 - It says when everyone is set (`Type !start to launch`, or the launch delay with
   `launch: auto`) and when a launch did not reach a game.
 - When it moves a rostered player who sat on the wrong side back to the pool, it tells them
@@ -54,13 +56,16 @@ the message, never by the name shown in the chat, which anyone can change.
 | `!start` | A rostered player while the lobby is `ready`; an admin while it is `waiting` or `ready` | Announces the start, waits `lobby.chat.start_countdown` (10 s), then launches |
 | `!cancel` | An admin, during the countdown | Stops the start |
 
-A start by an admin is a forced launch: it does not wait for the roster or the ready check and
-is allowed after `lobby.max_launch_attempts`. No start launches while the bot itself still sits
-on Radiant or Dire (see [Host seat](../api/index.md#host-seat)). A start by a player stops on
-its own if the lobby stops being ready before the countdown ends.
+A start by an admin is a forced launch: it does not wait for the roster or the ready check. No
+chat start, not even an admin's, launches once `lobby.max_launch_attempts` launches have been
+sent; only [`POST /v1/lobbies/{id}/launch`](../api/index.md#post-v1lobbiesidlaunch) with `{"force": true}` can try
+again. No start launches while the bot itself still sits on Radiant or Dire (see
+[Host seat](../api/index.md#host-seat)). A start by a player stops on its own if the lobby
+stops being ready before the countdown ends.
 
 To keep the chat readable, the bot answers `!help` once per player every 30 s, `!teams` every
-10 s, and a refused command once every 10 s.
+10 s, and a refused command once every 10 s. `!ready` and `!unready` share a 3 s cooldown: a
+player can change their mark once every 3 s, and commands inside that window get no answer.
 
 ## The ready check
 
