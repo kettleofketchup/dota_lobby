@@ -17,6 +17,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: "go.mod"
+          # Keep in step with mise.toml and the Dockerfile's builder stage.
+          go-version: "1.27.1"
       - name: Test
         run: go test -race -count=1 ./...
+      # A separate module: the root ./... does not include it.
+      - name: Test tools/probe
+        run: go -C tools/probe test -race -count=1 ./...

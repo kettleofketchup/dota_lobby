@@ -19,7 +19,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: "go.mod"
+          # Keep in step with mise.toml and the Dockerfile's builder stage.
+          go-version: "1.27.1"
 
       - name: Build Go binary
         run: make build
