@@ -250,8 +250,11 @@ func deriveLaunching(r *result, v *gc.LobbyView, in inputs) {
 	if v.State == gc.LobbyRun && l.Match.RunAt.IsZero() {
 		l.Match.RunAt = now
 	}
+	// A match_id left over from a failed launch is not this launch's.
+	fresh := v.MatchID != 0 && v.MatchID != l.Match.StaleMatchID
+	running := v.MatchID != 0 && (v.State == gc.LobbyRun || v.State == gc.LobbyPostGame)
 	switch {
-	case (serverState(v.State) || v.State == gc.LobbyPostGame) && v.MatchID != 0:
+	case (serverState(v.State) || v.State == gc.LobbyPostGame) && (fresh || running):
 		startMatch(r, v, now)
 		if v.State == gc.LobbyPostGame || (v.State == gc.LobbyRun && ScoredOutcome(v.Outcome)) {
 			endMatch(r, v, now)
@@ -259,10 +262,10 @@ func deriveLaunching(r *result, v *gc.LobbyView, in inputs) {
 	case (v.State == gc.LobbyServerAssign || v.State == gc.LobbyServerSetup) && now.Sub(l.Match.ServerAt) >= in.Cfg.ServerStallTimeout:
 		r.emit("lobby.launch_failed", map[string]any{"reason": "server_stall", "attempt": l.LaunchAttempts, "next_strategy": nil})
 		r.to(StateTimedOut, "server_stall", now)
-	case v.State == gc.LobbyUI && (!l.Match.ServerAt.IsZero() || v.MatchID != 0):
-		launchFailed(r, "load_failed", in)
+	case v.State == gc.LobbyUI && (!l.Match.ServerAt.IsZero() || fresh):
+		launchFailed(r, "load_failed", v, in)
 	case v.State == gc.LobbyUI && now.Sub(l.StateSince) >= in.Cfg.LaunchSettleTimeout:
-		launchFailed(r, "ignored", in)
+		launchFailed(r, "ignored", v, in)
 	}
 }
 
@@ -292,10 +295,12 @@ func deriveInGame(r *result, v *gc.LobbyView, in inputs) {
 		l.Match.RunAt = now
 	}
 	switch {
-	case v.State == gc.LobbyPostGame || (v.State == gc.LobbyRun && ScoredOutcome(v.Outcome)):
+	case v.State == gc.LobbyPostGame || ((v.State == gc.LobbyRun || v.State == gc.LobbyUI) && ScoredOutcome(v.Outcome)):
+		// A lobby may go back to UI without a POSTGAME the tracker saw: a
+		// scored outcome still ends the match.
 		endMatch(r, v, now)
 	case v.State == gc.LobbyUI:
-		launchFailed(r, "load_failed", in)
+		launchFailed(r, "load_failed", v, in)
 	case (v.State == gc.LobbyServerAssign || v.State == gc.LobbyServerSetup) && !l.Match.ServerAt.IsZero() &&
 		now.Sub(l.Match.ServerAt) >= in.Cfg.ServerStallTimeout:
 		r.to(StateTimedOut, "server_stall", now)
@@ -329,8 +334,9 @@ func endMatch(r *result, v *gc.LobbyView, now time.Time) {
 }
 
 // launchFailed returns the lobby to waiting after a launch that did not
-// take, and moves the host seat on to the next strategy.
-func launchFailed(r *result, reason string, in inputs) {
+// take, and moves the host seat on to the next strategy. The match_id the
+// lobby still shows is kept as stale for the next launch.
+func launchFailed(r *result, reason string, v *gc.LobbyView, in inputs) {
 	l := &r.Lobby
 	strategies := in.Cfg.HostSeatStrategy
 	next := l.HostSeat.Next
@@ -343,7 +349,11 @@ func launchFailed(r *result, reason string, in inputs) {
 		nextName = strategies[next]
 	}
 	r.emit("lobby.launch_failed", map[string]any{"reason": reason, "attempt": l.LaunchAttempts, "next_strategy": nextName})
-	l.Match = Match{}
+	stale := l.Match.StaleMatchID
+	if v.MatchID != 0 {
+		stale = v.MatchID
+	}
+	l.Match = Match{StaleMatchID: stale}
 	stateReason := reason
 	if !canAutoLaunch(*l, in.Cfg) {
 		stateReason = "launch_attempts_exhausted"

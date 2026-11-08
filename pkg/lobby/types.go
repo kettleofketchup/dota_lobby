@@ -298,6 +298,10 @@ type Match struct {
 	// HostSeatStrategy is the host seat strategy of the launch that
 	// started the match.
 	HostSeatStrategy string `json:"host_seat_strategy,omitempty"`
+	// StaleMatchID is the match_id the lobby still showed when a launch
+	// failed. Whether the GC clears it is not known, so a later launch does
+	// not take it for a new match.
+	StaleMatchID uint64 `json:"stale_match_id,omitempty"`
 }
 
 // DurationSeconds is the time from RUN to the outcome, as the lobby's state

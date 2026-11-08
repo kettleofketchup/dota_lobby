@@ -76,6 +76,7 @@ func TestDerive(t *testing.T) {
 	}
 	withServer := func(l Lobby, at time.Time) Lobby { l.Match.ServerAt = at; return l }
 	attempts := func(l Lobby, n int) Lobby { l.LaunchAttempts = n; return l }
+	stale := func(l Lobby, id uint64) Lobby { l.Match.StaleMatchID = id; return l }
 	auto := func(l Lobby) Lobby { l.Spec.Launch = LaunchAuto; return l }
 	ready := func(in *inputs) { in.BotReady = true }
 
@@ -117,6 +118,10 @@ func TestDerive(t *testing.T) {
 		{"launch ignored, attempts exhausted", attempts(rostered(StateLaunching, t0), 3), 2 * time.Minute, seatedView(gc.LobbyUI), ready, StateWaiting, "launch_attempts_exhausted", []string{"lobby.launch_failed"}, []string{}},
 		{"launch settling", rostered(StateLaunching, t0), time.Minute, seatedView(gc.LobbyUI), ready, StateLaunching, "", []string{}, []string{}},
 		{"run back to ui is a failed load", withServer(rostered(StateLaunching, t0), t0), time.Second, seatedView(gc.LobbyUI), ready, StateWaiting, "load_failed", []string{"lobby.launch_failed"}, []string{}},
+		{"a stale match id is not a failed load", stale(rostered(StateLaunching, t0), 9), time.Second, outcome(seatedView(gc.LobbyUI), 0, 9), ready, StateLaunching, "", []string{}, []string{}},
+		{"a stale match id still settles", stale(rostered(StateLaunching, t0), 9), 2 * time.Minute, outcome(seatedView(gc.LobbyUI), 0, 9), ready, StateWaiting, "ignored", []string{"lobby.launch_failed"}, []string{}},
+		{"a new match id in ui is a failed load", stale(rostered(StateLaunching, t0), 9), time.Second, outcome(seatedView(gc.LobbyUI), 0, 10), ready, StateWaiting, "load_failed", []string{"lobby.launch_failed"}, []string{}},
+		{"a stale match id waits in server assign", stale(rostered(StateLaunching, t0), 9), time.Second, outcome(seatedView(gc.LobbyServerAssign), 0, 9), ready, StateLaunching, "", []string{}, []string{}},
 		{"server stall", withServer(rostered(StateLaunching, t0), t0), 10 * time.Minute, seatedView(gc.LobbyServerSetup), ready, StateTimedOut, "server_stall", []string{"lobby.launch_failed"}, []string{}},
 		{"straight to postgame", rostered(StateLaunching, t0), time.Second, outcome(seatedView(gc.LobbyPostGame), 3, 9), ready, StatePostGame, "", []string{"match.started", "match.ended"}, []string{}},
 
@@ -125,6 +130,7 @@ func TestDerive(t *testing.T) {
 		{"run with an unscored outcome waits for postgame", rostered(StateInGame, t0), time.Hour, outcome(seatedView(gc.LobbyRun), 66, 9), ready, StateInGame, "", []string{}, []string{}},
 		{"postgame with an unscored outcome ends", rostered(StateInGame, t0), time.Hour, outcome(seatedView(gc.LobbyPostGame), 68, 9), ready, StatePostGame, "", []string{"match.ended"}, []string{}},
 		{"in game back to ui", rostered(StateInGame, t0), time.Minute, outcome(seatedView(gc.LobbyUI), 0, 9), ready, StateWaiting, "load_failed", []string{"lobby.launch_failed"}, []string{}},
+		{"in game back to ui with a scored outcome ends", rostered(StateInGame, t0), time.Hour, outcome(seatedView(gc.LobbyUI), 2, 9), ready, StatePostGame, "", []string{"match.ended"}, []string{}},
 		{"in game backstop", rostered(StateInGame, t0), 3 * time.Hour, outcome(seatedView(gc.LobbyRun), 0, 9), ready, StateTimedOut, "ingame_backstop", []string{}, []string{}},
 		{"in game stall", withServer(rostered(StateInGame, t0), t0), 10 * time.Minute, outcome(seatedView(gc.LobbyServerSetup), 0, 9), ready, StateTimedOut, "server_stall", []string{}, []string{}},
 		{"in game lobby gone", rostered(StateInGame, t0), time.Hour, nil, func(in *inputs) { in.BotReady, in.MissingFor = true, time.Minute }, StateFailed, "lost_in_game", []string{}, []string{}},
@@ -197,6 +203,25 @@ func TestDeriveLaunchFailedMovesHostSeat(t *testing.T) {
 	res = derive(res.Lobby, inputs{Now: t0.Add(7 * time.Minute), View: seatedView(gc.LobbyUI), Host: hostID, BotReady: true, Cfg: cfgPure})
 	if res.Lobby.HostSeat.Next != 1 {
 		t.Errorf("host seat moved past the last strategy: %+v", res.Lobby.HostSeat)
+	}
+}
+
+// A failed launch keeps the match_id the lobby still shows, and the next
+// launch does not count it as its own.
+func TestDeriveStaleMatchID(t *testing.T) {
+	l := rostered(StateInGame, t0)
+	l.Match.MatchID = 9
+	v := seatedView(gc.LobbyUI)
+	v.MatchID = 9
+	res := derive(l, inputs{Now: t0.Add(time.Minute), View: v, Host: hostID, BotReady: true, Cfg: cfgPure})
+	if res.Lobby.State != StateWaiting || res.Lobby.Match.StaleMatchID != 9 || res.Lobby.Match.MatchID != 0 {
+		t.Fatalf("after a failed load: %s, match %+v", res.Lobby.State, res.Lobby.Match)
+	}
+	next := res.Lobby
+	next.State, next.StateSince = StateLaunching, t0.Add(2*time.Minute)
+	res = derive(next, inputs{Now: t0.Add(2*time.Minute + time.Second), View: v, Host: hostID, BotReady: true, Cfg: cfgPure})
+	if res.Lobby.State != StateLaunching || len(res.Events) != 0 {
+		t.Errorf("relaunch with the stale id: %s %v", res.Lobby.State, types(res.Events))
 	}
 }
 
