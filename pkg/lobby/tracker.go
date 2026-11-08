@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
@@ -94,20 +95,41 @@ func (m *Manager) create(ctx context.Context, e *entry, h bot.Handle) {
 	details := l.Spec.details(m.opts.Lobby, 0)
 	cctx, cancel := context.WithTimeout(ctx, m.opts.GC.CreateTimeout)
 	defer cancel()
-	var view *gc.LobbyView
+	var (
+		view      *gc.LobbyView
+		sendMu    sync.Mutex
+		sent      bool // the worker started the create
+		abandoned bool // Do returned; the worker must not start it any more
+	)
 	err := h.Do(cctx, "create lobby", func(ctx context.Context, c gc.Client) error {
+		sendMu.Lock()
+		if abandoned {
+			sendMu.Unlock()
+			return context.Canceled
+		}
+		sent = true
+		sendMu.Unlock()
 		v, err := c.CreateLobby(ctx, details)
 		view = v
 		return err
 	})
+	sendMu.Lock()
+	abandoned = true
+	wasSent := sent
+	sendMu.Unlock()
 	if ctx.Err() != nil {
-		// Shutting down: leave the row in creating for re-adoption.
+		// Shutting down. A create that was sent is left in creating for
+		// re-adoption; one that never left the queue goes back to pending.
+		if !wasSent {
+			m.backToPending(e, "requeued", err)
+		}
 		return
 	}
 	host := h.Status().SteamID
 	if err != nil {
-		if errors.Is(err, gc.ErrNotReady) || errors.Is(err, bot.ErrStopped) {
-			m.backToPending(e, err)
+		if errors.Is(err, gc.ErrNotReady) || errors.Is(err, bot.ErrStopped) ||
+			(!wasSent && errors.Is(err, context.DeadlineExceeded)) {
+			m.backToPending(e, "bot_not_ready", err)
 			return
 		}
 		code := "gc_error"
@@ -120,7 +142,9 @@ func (m *Manager) create(ctx context.Context, e *entry, h bot.Handle) {
 		}
 		m.log.Warn("lobby create failed", "lobby", l.ID, "bot", l.Bot, "code", code, "err", err)
 		m.cleanupCreated(ctx, h, host, 0)
-		m.createFailed(e, code, err.Error())
+		if !m.createFailed(e, code, err.Error()) {
+			m.adoptLater(e)
+		}
 		return
 	}
 	if l.Spec.LeagueID != 0 && view.LeagueID != l.Spec.LeagueID {
@@ -128,7 +152,9 @@ func (m *Manager) create(ctx context.Context, e *entry, h bot.Handle) {
 			"; the bot does not administer league " + strconv.FormatUint(uint64(l.Spec.LeagueID), 10)
 		m.log.Warn("league rejected on read-back", "lobby", l.ID, "bot", l.Bot, "want", l.Spec.LeagueID, "got", view.LeagueID)
 		m.cleanupCreated(ctx, h, host, view.LobbyID)
-		m.createFailed(e, "league_rejected", msg)
+		if !m.createFailed(e, "league_rejected", msg) {
+			m.adoptLater(e)
+		}
 		return
 	}
 	merged := details
@@ -146,8 +172,18 @@ func (m *Manager) create(ctx context.Context, e *entry, h bot.Handle) {
 		}
 		return evs, nil
 	}); err != nil {
-		m.log.Error("could not record the created lobby", "lobby", l.ID, "err", err)
+		m.log.Error("could not record the created lobby; adopting it as after a restart", "lobby", l.ID, "err", err)
+		m.adoptLater(e)
 	}
+}
+
+// adoptLater hands a create whose result could not be stored to the
+// re-adoption path, which finds the lobby in the bot's cache (or not) and
+// stores the outcome, retrying on every step.
+func (m *Manager) adoptLater(e *entry) {
+	e.op.Lock()
+	defer e.op.Unlock()
+	e.readopt, e.readoptUntil = true, m.now().Add(m.opts.Lobby.ReadoptTimeout)
 }
 
 // cleanupCreated destroys what a failed create may have left behind.
@@ -167,7 +203,9 @@ func (m *Manager) cleanupCreated(ctx context.Context, h bot.Handle, host, lobbyI
 	}
 }
 
-func (m *Manager) createFailed(e *entry, code, msg string) {
+// createFailed ends a lobby whose create failed. It reports whether that
+// was stored.
+func (m *Manager) createFailed(e *entry, code, msg string) bool {
 	if _, err := m.commit(e, func(l *Lobby) ([]newEvent, error) {
 		evs := []newEvent{{Type: "lobby.create_failed", Data: map[string]any{"code": code, "message": msg}}}
 		if l.State == StateClosing {
@@ -179,29 +217,37 @@ func (m *Manager) createFailed(e *entry, code, msg string) {
 		return evs, nil
 	}); err != nil {
 		m.log.Error("could not fail lobby", "lobby", e.id, "err", err)
+		return false
 	}
+	return true
 }
 
-// backToPending returns the lease of a bot that could not take the create
-// (nothing was sent) and queues the lobby again.
-func (m *Manager) backToPending(e *entry, cause error) {
-	m.log.Info("bot not ready for the create; queueing the lobby again", "lobby", e.id, "err", cause)
+// backToPending returns the lease of a bot that never sent the create and
+// queues the lobby again. It holds op from the state change to the lease
+// swap: once the lobby is pending the scheduler may lease it a new bot, and
+// must not do so before this tracker's lease and cancel are taken out.
+func (m *Manager) backToPending(e *entry, reason string, cause error) {
+	m.log.Info("the create was not sent; queueing the lobby again", "lobby", e.id, "reason", reason, "err", cause)
+	e.op.Lock()
+	defer e.op.Unlock()
 	if _, err := m.commit(e, func(l *Lobby) ([]newEvent, error) {
 		if l.State == StateClosing {
 			l.State, l.StateReason = StateClosed, "api"
 		} else {
-			l.State, l.StateReason = StatePending, "bot_not_ready"
+			l.State, l.StateReason = StatePending, reason
 		}
 		l.StateSince, l.Bot, l.LeagueVerified = m.now(), "", nil
 		return nil, nil
 	}); err != nil {
 		m.log.Error("could not requeue lobby", "lobby", e.id, "err", err)
+		e.readopt, e.readoptUntil = true, m.now().Add(m.opts.Lobby.ReadoptTimeout)
 		return
 	}
 	e.mu.Lock()
 	lease := e.lease
 	e.lease = nil
 	cancel := e.cancel
+	e.cancel = nil
 	e.mu.Unlock()
 	if lease != nil {
 		m.opts.Pool.Release(lease)
@@ -622,15 +668,31 @@ func (m *Manager) readopt(ctx context.Context, e *entry, h bot.Handle, st bot.St
 		e.readopt = false
 		m.log.Info("lobby re-adopted", "lobby", l.ID, "state", l.State, "gc_lobby_id", l.GCLobbyID)
 		return true
-	case cur != nil && l.State == StateCreating && l.GCLobbyID == 0 && cur.LeaderID == st.SteamID && cur.GameName == l.Spec.Name:
-		// The create went through just before the restart.
+	case cur != nil && (l.State == StateCreating || l.State == StateClosing) && l.GCLobbyID == 0 &&
+		cur.LeaderID == st.SteamID && cur.GameName == l.Spec.Name:
+		// The create went through, but its result was not stored: a
+		// restart, or a failed write. A lobby closed meanwhile is adopted
+		// so that it is destroyed.
+		if l.Spec.LeagueID != 0 && cur.LeagueID != l.Spec.LeagueID {
+			m.log.Warn("league rejected on read-back of an interrupted create", "lobby", l.ID, "bot", l.Bot,
+				"want", l.Spec.LeagueID, "got", cur.LeagueID)
+			m.cleanupCreated(ctx, h, st.SteamID, cur.LobbyID)
+			msg := "the lobby came back with league " + strconv.FormatUint(uint64(cur.LeagueID), 10) +
+				"; the bot does not administer league " + strconv.FormatUint(uint64(l.Spec.LeagueID), 10)
+			if m.createFailed(e, "league_rejected", msg) {
+				e.readopt = false
+			}
+			return false
+		}
 		details := l.Spec.details(m.opts.Lobby, cur.LobbyID)
 		if details.TVDelaySeconds == 0 {
 			details.TVDelaySeconds = cur.TVDelaySeconds
 		}
 		if _, err := m.commit(e, func(c *Lobby) ([]newEvent, error) {
 			c.GCLobbyID, c.Details = cur.LobbyID, details
-			c.State, c.StateReason, c.StateSince = StateWaiting, "readopted", now
+			if c.State == StateCreating {
+				c.State, c.StateReason, c.StateSince = StateWaiting, "readopted", now
+			}
 			return []newEvent{{Type: "lobby.created", Data: map[string]any{
 				"gc_lobby_id": strconv.FormatUint(cur.LobbyID, 10), "league_verified": c.LeagueVerified,
 			}}}, nil
@@ -657,11 +719,13 @@ func (m *Manager) lost(e *entry, l Lobby) {
 		reason = "lost_in_game"
 	}
 	m.log.Warn("re-adopted lobby is gone", "lobby", l.ID, "state", l.State, "bot", l.Bot, "reason", reason)
-	e.readopt = false
 	if _, err := m.commit(e, func(c *Lobby) ([]newEvent, error) {
 		c.State, c.StateReason, c.StateSince = state, reason, m.now()
 		return nil, nil
 	}); err != nil {
+		// Still re-adopting: the next step tries again.
 		m.log.Error("could not end the lost lobby", "lobby", l.ID, "err", err)
+		return
 	}
+	e.readopt = false
 }

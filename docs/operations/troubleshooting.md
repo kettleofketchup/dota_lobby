@@ -225,8 +225,16 @@ lobby ends as `timed_out` (`pending_timeout`).
 ### A lobby failed after a restart
 
 On startup a lobby whose bot no longer hosts it fails: `lobby_lost` (not launched),
-`lost_in_game` (launched; `match.match_id` is kept) or `create_interrupted` (the create had not
-finished). The bot gets `lobby.readopt_timeout` (5 min) to be ready again before that happens.
+`lost_in_game` (launched; `match.match_id` is kept) or `create_interrupted` (the create had been
+sent but had not finished). The bot gets `lobby.readopt_timeout` (5 min) to be ready again
+before that happens. A create that was adopted but came back with another league fails as
+`league_rejected`, and its lobby is destroyed. A lobby whose create had not been sent yet at
+shutdown is back in `pending` (`requeued`) and gets a bot again.
+
+The same re-adoption runs when the database cannot store the result of a create (a busy or
+full disk: `could not record the created lobby` in the logs): the lobby moves on once a write
+works. A lobby whose bot is gone and whose failure cannot be written at startup stays as it is
+in the database (`could not fail lobby; leaving it for the next start`).
 
 ## Other symptoms
 

@@ -127,6 +127,10 @@ type harness struct {
 	rec     *recorder
 	logs    *syncBuffer
 	m       *Manager
+	// store and bots, when set, stand in for the database and the bot
+	// source at the next start.
+	store Store
+	bots2 bot.Source
 }
 
 // newHarness builds bots named bot1..botN, ready and holding league 17929,
@@ -172,8 +176,16 @@ func (h *harness) open() {
 
 func (h *harness) start() {
 	h.rec, h.logs = &recorder{}, &syncBuffer{}
+	var st Store = h.db.Lobbies()
+	if h.store != nil {
+		st = h.store
+	}
+	var src bot.Source = h.source
+	if h.bots2 != nil {
+		src = h.bots2
+	}
 	h.m = New(Options{
-		Store: h.db.Lobbies(), Pool: h.pool, Holders: h.holders, Bots: h.source,
+		Store: st, Pool: h.pool, Holders: h.holders, Bots: src,
 		Lobby: h.cfg, GC: config.GCConfig{RequestTimeout: time.Second, CreateTimeout: time.Second},
 		Retention: 24 * time.Hour, Hooks: h.rec, Tick: 10 * time.Millisecond, LostGrace: 100 * time.Millisecond,
 		Logger: slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -193,6 +205,52 @@ func (h *harness) restart() {
 	}
 	h.pool = pool.New(h.source, h.holders, pool.Options{})
 	h.start()
+}
+
+// flakyStore fails the transitions fail picks, as a busy or full
+// database would.
+type flakyStore struct {
+	Store
+	mu   sync.Mutex
+	fail func(row store.LobbyRow) bool
+}
+
+func (f *flakyStore) setFail(fn func(row store.LobbyRow) bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = fn
+}
+
+func (f *flakyStore) Transition(ctx context.Context, expected int64, row store.LobbyRow, players []store.PlayerRow, events []store.EventRow) error {
+	f.mu.Lock()
+	fail := f.fail != nil && f.fail(row)
+	f.mu.Unlock()
+	if fail {
+		return errors.New("database is locked")
+	}
+	return f.Store.Transition(ctx, expected, row, players, events)
+}
+
+// heldBot is a bot whose worker queue never gets to the create: Do waits
+// for its ctx without running it.
+type heldBot struct{ *bottest.Bot }
+
+func (b heldBot) Do(ctx context.Context, op string, fn func(ctx context.Context, c gc.Client) error) error {
+	if op == "create lobby" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.Bot.Do(ctx, op, fn)
+}
+
+type heldSource struct{ *bottest.Source }
+
+func (s heldSource) Bot(name string) (bot.Handle, bool) {
+	b, ok := s.Source.Bot(name)
+	if !ok {
+		return nil, false
+	}
+	return heldBot{b.(*bottest.Bot)}, true
 }
 
 // react plays the GC: the host seat ops move the host, kicks move or drop
@@ -411,6 +469,88 @@ func TestBotNotReadyRequeues(t *testing.T) {
 	l := h.create(spec("game-1"))
 	h.waitFor(l.ID, "a retried create", func(Lobby) bool { return b.fc.CallCount("CreateLobby") >= 2 })
 	h.waitState(l.ID, StateWaiting)
+}
+
+// The create's lease and tracker are handed back whole, so the retry on
+// another bot leaves exactly one lease.
+func TestBotNotReadyRequeuesOneLease(t *testing.T) {
+	h := newHarness(t, 2, nil)
+	h.bot("bot1").fc.FailNext("CreateLobby", gc.ErrNotReady)
+	l := h.create(spec("game-1"))
+	l = h.waitState(l.ID, StateWaiting)
+	time.Sleep(50 * time.Millisecond)
+	if leases := h.pool.Leases(); len(leases) != 1 || leases[l.Bot] != l.ID {
+		t.Errorf("leases %v for a lobby on %s", leases, l.Bot)
+	}
+}
+
+// A create whose result could not be stored is adopted from the bot's
+// cache, as after a restart.
+func TestCreateNotStoredIsAdopted(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	fs := &flakyStore{Store: h.db.Lobbies()}
+	h.store = fs
+	h.restart()
+	failed := false
+	fs.setFail(func(row store.LobbyRow) bool {
+		if row.StateReason == "created" && !failed {
+			failed = true
+			return true
+		}
+		return false
+	})
+	l := h.create(spec("game-1"))
+	l = h.waitState(l.ID, StateWaiting)
+	b := h.bot("bot1")
+	if l.GCLobbyID == 0 || l.StateReason != "readopted" || b.fc.CallCount("CreateLobby") != 1 {
+		t.Errorf("adopted %d (%s), creates %d", l.GCLobbyID, l.StateReason, b.fc.CallCount("CreateLobby"))
+	}
+}
+
+// A shutdown while the create still waits in the bot's queue puts the
+// lobby back in the queue rather than failing it at the next start.
+func TestDrainBeforeTheCreateIsSent(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	h.bots2 = heldSource{h.source}
+	h.restart()
+	l := h.create(spec("game-1"))
+	h.waitState(l.ID, StateCreating)
+	h.bots2 = nil
+	h.restart()
+	l = h.waitState(l.ID, StateWaiting)
+	if n := h.bot("bot1").fc.CallCount("CreateLobby"); n != 1 {
+		t.Errorf("creates %d", n)
+	}
+	evs, err := h.db.Lobbies().Events(context.Background(), l.ID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requeued := false
+	for _, ev := range evs {
+		requeued = requeued || strings.Contains(string(ev.Data), `"requeued"`)
+	}
+	if !requeued {
+		t.Error("no requeue recorded")
+	}
+}
+
+// At start, a lobby whose bot is gone and whose failure cannot be stored
+// is left to the next start instead of sitting active with no tracker.
+func TestStartDropsALobbyItCannotFail(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	l, _ := h.toWaiting(spec("game-1"))
+	if err := h.m.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.pool = pool.New(bottest.NewSource(), h.holders, pool.Options{})
+	h.store = &flakyStore{Store: h.db.Lobbies(), fail: func(store.LobbyRow) bool { return true }}
+	h.start()
+	if _, ok := h.m.entry(l.ID); ok {
+		t.Error("the lobby is still active")
+	}
+	if got, err := h.m.Get(context.Background(), l.ID); err != nil || got.State != StateWaiting {
+		t.Errorf("stored lobby %s, %v", got.State, err)
+	}
 }
 
 func TestHostSeatFallsThrough(t *testing.T) {
@@ -888,6 +1028,20 @@ func TestReadoption(t *testing.T) {
 		l = h.waitState(l.ID, StateWaiting)
 		if l.GCLobbyID != 555 || l.StateReason != "readopted" {
 			t.Errorf("adopted %d (%s)", l.GCLobbyID, l.StateReason)
+		}
+	})
+	t.Run("interrupted create with another league is rejected", func(t *testing.T) {
+		h := newHarness(t, 1, nil)
+		b := h.bot("bot1")
+		b.fc.BlockUntilDone("CreateLobby", true)
+		l := h.create(spec("game-1"))
+		h.waitCalls(b, "CreateLobby", 1)
+		h.restart()
+		b.fc.SetLobby(&gc.LobbyView{LobbyID: 555, LeaderID: b.host, State: gc.LobbyUI, GameName: l.Spec.Name, LeagueID: 0,
+			Members: []gc.Member{{SteamID: b.host, Team: gc.TeamRadiant, TeamKnown: true}}})
+		l = h.waitState(l.ID, StateFailed)
+		if l.StateReason != "league_rejected" || b.fc.CallCount("Destroy") != 1 {
+			t.Errorf("reason %q, destroys %d", l.StateReason, b.fc.CallCount("Destroy"))
 		}
 	})
 	t.Run("interrupted create without a lobby", func(t *testing.T) {

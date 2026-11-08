@@ -213,7 +213,12 @@ func (m *Manager) Start(ctx context.Context) error {
 				l.State, l.StateReason, l.StateSince = StateFailed, "bot_lost", m.now()
 				return nil, nil
 			}); err != nil {
-				m.log.Error("could not fail lobby", "lobby", l.ID, "err", err)
+				// Nothing could act on the lobby without its bot: leave it
+				// to the next start.
+				m.log.Error("could not fail lobby; leaving it for the next start", "lobby", l.ID, "err", err)
+				m.mu.Lock()
+				delete(m.active, l.ID)
+				m.mu.Unlock()
 			}
 			continue
 		}
