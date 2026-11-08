@@ -36,10 +36,13 @@ const (
 
 // Status is a point-in-time view of one bot, safe to hand to the API.
 type Status struct {
-	Name           string    `json:"name"`
-	Username       string    `json:"username"`
-	State          State     `json:"state"`
-	Ready          bool      `json:"ready"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	State    State  `json:"state"`
+	Ready    bool   `json:"ready"`
+	// ReadySince is when the bot last entered gc_ready; zero while it is
+	// not ready. A new value means a new GC session.
+	ReadySince     time.Time `json:"ready_since,omitzero"`
 	Reason         string    `json:"reason,omitempty"`
 	LastResult     string    `json:"last_eresult,omitempty"`
 	LastError      string    `json:"last_error,omitempty"`
@@ -203,6 +206,11 @@ func (s *Supervisor) Name() string { return s.bot.Name }
 
 // Worker returns the bot's serialized GC request queue.
 func (s *Supervisor) Worker() *Worker { return s.worker }
+
+// Do runs fn on the bot's worker; see Worker.Do.
+func (s *Supervisor) Do(ctx context.Context, op string, fn func(ctx context.Context, c gc.Client) error) error {
+	return s.worker.Do(ctx, op, fn)
+}
 
 // Status returns the current status.
 func (s *Supervisor) Status() Status {
@@ -469,7 +477,14 @@ func (s *Supervisor) publish() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := &s.status
-	st.State, st.Ready, st.Reason = sn.State, sn.Ready(), sn.Reason
+	ready := sn.Ready()
+	switch {
+	case ready && !st.Ready:
+		st.ReadySince = s.clock.Now()
+	case !ready:
+		st.ReadySince = time.Time{}
+	}
+	st.State, st.Ready, st.Reason = sn.State, ready, sn.Reason
 	st.LastResult = ""
 	if sn.LastResult != 0 {
 		st.LastResult = sn.LastResult.String()

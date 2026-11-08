@@ -158,6 +158,41 @@ func (m *Manager) Supervisor(name string) (*Supervisor, bool) {
 	return s, ok
 }
 
+// Handle is one bot as the league, pool and lobby layers use it.
+// *Supervisor implements it.
+type Handle interface {
+	Name() string
+	Status() Status
+	// Do runs fn on the bot's serialized GC worker; see Worker.Do.
+	Do(ctx context.Context, op string, fn func(ctx context.Context, c gc.Client) error) error
+}
+
+// Source lists the running bots. *Manager implements it.
+type Source interface {
+	// Names returns every enabled bot's name in config order.
+	Names() []string
+	// Bot looks a bot up by name, case-insensitively.
+	Bot(name string) (Handle, bool)
+}
+
+// Names returns every enabled bot's name in config order.
+func (m *Manager) Names() []string {
+	out := make([]string, len(m.sups))
+	for i, s := range m.sups {
+		out[i] = s.Name()
+	}
+	return out
+}
+
+// Bot returns the bot with the given name as a Handle.
+func (m *Manager) Bot(name string) (Handle, bool) {
+	s, ok := m.Supervisor(name)
+	if !ok {
+		return nil, false
+	}
+	return s, true
+}
+
 // ErrUnknownBot is returned for a bot name that is not configured.
 var ErrUnknownBot = errors.New("bot: unknown bot")
 
