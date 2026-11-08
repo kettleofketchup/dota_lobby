@@ -37,6 +37,12 @@ const MaxBodyBytes = 64 << 10
 // delivery that succeeded during shutdown is still recorded.
 const storeTimeout = 5 * time.Second
 
+// storeFailHold is how long a delivery whose queue update failed is left
+// alone. The row is still pending and due, so without the hold it would be
+// sent again at once, in a loop, for as long as the database refuses
+// writes.
+const storeFailHold = 30 * time.Second
+
 // backoff is the wait after the first, second, ... failed attempt; after
 // the last step every retry waits retryEvery. Each wait gets ±20 % jitter.
 var backoff = []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute, 10 * time.Minute, 30 * time.Minute}
@@ -65,8 +71,9 @@ type Options struct {
 	Wake <-chan lobby.Envelope
 	// Poll is how often the queue is checked; 0 means DefaultPoll.
 	Poll time.Duration
-	// Concurrency is how many deliveries may be in flight at once, each
-	// for a different (URL, lobby); 0 means DefaultConcurrency.
+	// Concurrency is how many deliveries may be in flight at once for
+	// each webhook URL, each for a different lobby, so a slow receiver
+	// does not hold up the others; 0 means DefaultConcurrency.
 	Concurrency int
 	// Version goes in the User-Agent.
 	Version string
@@ -87,6 +94,11 @@ type Deliverer struct {
 
 	mu       sync.Mutex
 	inflight map[flightKey]bool
+	// busy counts the deliveries in flight per lowercased URL.
+	busy map[string]int
+	// held maps a delivery whose queue update failed to the time it may
+	// be tried again.
+	held map[holdKey]time.Time
 }
 
 type hook struct {
@@ -98,6 +110,8 @@ type hook struct {
 }
 
 type flightKey struct{ url, lobby string }
+
+type holdKey struct{ url, event string }
 
 // New builds a deliverer; nothing is sent until Run.
 func New(opts Options) *Deliverer {
@@ -141,6 +155,7 @@ func New(opts Options) *Deliverer {
 	return &Deliverer{
 		opts: opts, log: opts.Logger, client: client, hooks: hooks,
 		wake: make(chan struct{}, 1), inflight: map[flightKey]bool{},
+		busy: map[string]int{}, held: map[holdKey]time.Time{},
 	}
 }
 
@@ -194,17 +209,22 @@ func (d *Deliverer) kick() {
 }
 
 // dispatch starts every due delivery whose (URL, lobby) is not already in
-// flight, up to Concurrency. mu is held across the query, so a delivery
-// that finishes meanwhile cannot be started a second time from a stale
-// read.
+// flight and that is not held, up to Concurrency per URL. mu is held
+// across the query, so a delivery that finishes meanwhile cannot be
+// started a second time from a stale read.
 func (d *Deliverer) dispatch(ctx context.Context, wg *sync.WaitGroup) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	free := d.opts.Concurrency - len(d.inflight)
-	if free <= 0 || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return
 	}
-	due, err := d.opts.Queue.Due(ctx, d.opts.Now(), d.opts.Concurrency*4)
+	now := d.opts.Now()
+	for k, until := range d.held {
+		if !now.Before(until) {
+			delete(d.held, k)
+		}
+	}
+	due, err := d.opts.Queue.Due(ctx, now, d.opts.Concurrency*4)
 	if err != nil {
 		if ctx.Err() == nil {
 			d.log.Error("cannot read the webhook queue", "err", err)
@@ -212,25 +232,37 @@ func (d *Deliverer) dispatch(ctx context.Context, wg *sync.WaitGroup) {
 		return
 	}
 	for _, dl := range due {
-		k := flightKey{strings.ToLower(dl.URL), dl.Event.LobbyID}
-		if d.inflight[k] {
+		u := strings.ToLower(dl.URL)
+		k := flightKey{u, dl.Event.LobbyID}
+		if d.inflight[k] || d.busy[u] >= d.opts.Concurrency {
 			continue
 		}
-		if free == 0 {
-			break
+		if _, held := d.held[holdKey{u, dl.Event.ID}]; held {
+			continue
 		}
-		free--
 		d.inflight[k] = true
+		d.busy[u]++
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			d.attempt(ctx, dl)
 			d.mu.Lock()
 			delete(d.inflight, k)
+			if d.busy[u]--; d.busy[u] <= 0 {
+				delete(d.busy, u)
+			}
 			d.mu.Unlock()
 			d.kick() // the lobby's next event may be due now
 		}()
 	}
+}
+
+// hold keeps dispatch from starting dl again for storeFailHold, after its
+// queue update failed and left the row due.
+func (d *Deliverer) hold(dl store.Delivery) {
+	d.mu.Lock()
+	d.held[holdKey{strings.ToLower(dl.URL), dl.Event.ID}] = d.opts.Now().Add(storeFailHold)
+	d.mu.Unlock()
 }
 
 // result is what one attempt came to.
@@ -276,7 +308,8 @@ func (d *Deliverer) attempt(ctx context.Context, dl store.Delivery) {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
 		defer cancel()
 		if err := d.opts.Queue.MarkDelivered(sctx, ev.ID, dl.URL, attempts, res.status, d.opts.Now()); err != nil {
-			log.Error("webhook delivered but not recorded; it will be sent again", "err", err)
+			log.Error("webhook delivered but not recorded; it will be sent again", "err", err, "retry_in", storeFailHold)
+			d.hold(dl)
 			return
 		}
 		log.Debug("webhook delivered", "status", res.status)
@@ -340,7 +373,8 @@ func (d *Deliverer) retry(log *slog.Logger, dl store.Delivery, attempts int, res
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
 	if err := d.opts.Queue.MarkRetry(ctx, dl.Event.ID, dl.URL, attempts, res.status, res.err, next); err != nil {
-		log.Error("cannot reschedule a webhook delivery", "err", err)
+		log.Error("cannot reschedule a webhook delivery", "err", err, "retry_in", storeFailHold)
+		d.hold(dl)
 		return
 	}
 	log.Warn("webhook delivery failed; will retry", "status", res.status, "err", res.err, "retry_in", wait.Round(time.Second))
@@ -350,7 +384,8 @@ func (d *Deliverer) dead(log *slog.Logger, dl store.Delivery, attempts int, res 
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
 	if err := d.opts.Queue.MarkDead(ctx, dl.Event.ID, dl.URL, attempts, res.status, res.err); err != nil {
-		log.Error("cannot give up a webhook delivery", "err", err)
+		log.Error("cannot give up a webhook delivery", "err", err, "retry_in", storeFailHold)
+		d.hold(dl)
 		return
 	}
 	log.Error("webhook delivery given up; the lobby's next event goes next", "status", res.status, "err", res.err)

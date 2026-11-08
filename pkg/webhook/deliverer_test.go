@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +43,7 @@ func (c *clock) advance(d time.Duration) {
 
 // received is one request the test receiver saw.
 type received struct {
+	path   string
 	header http.Header
 	body   []byte
 	env    lobby.Envelope
@@ -56,6 +58,8 @@ type rig struct {
 	srv     *httptest.Server
 	hooks   []config.WebhookConfig
 	secrets config.Secrets
+	// queue, when set, wraps the database queue the deliverer uses.
+	queue func(Queue) Queue
 
 	mu       sync.Mutex
 	reply    func(n int, r received) (status int, hdr map[string]string)
@@ -92,7 +96,7 @@ func (r *rig) open() {
 
 func (r *rig) serve(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
-	rec := received{header: req.Header.Clone(), body: body}
+	rec := received{path: req.URL.Path, header: req.Header.Clone(), body: body}
 	_ = json.Unmarshal(body, &rec.env)
 	r.mu.Lock()
 	r.got = append(r.got, rec)
@@ -139,8 +143,12 @@ func (r *rig) addEvents(lobbyID string, n int, age time.Duration) {
 
 func (r *rig) start() {
 	r.t.Helper()
+	var q Queue = r.db.Deliveries()
+	if r.queue != nil {
+		q = r.queue(q)
+	}
 	d := New(Options{
-		Queue: r.db.Deliveries(), Webhooks: r.hooks, Secrets: r.secrets,
+		Queue: q, Webhooks: r.hooks, Secrets: r.secrets,
 		Delivery: config.WebhookDeliveryConfig{Timeout: r.timeout, MaxAge: 24 * time.Hour},
 		Poll:     5 * time.Millisecond, Version: "test", Now: r.clock.now, Jitter: func() float64 { return 0.5 },
 	})
@@ -495,5 +503,133 @@ func TestParseRetryAfter(t *testing.T) {
 func TestLogNameDropsCredentials(t *testing.T) {
 	if got := logName("https://user:pw@hooks.example/dota?token=s3cret#x"); got != "https://hooks.example/dota" {
 		t.Errorf("logName = %s", got)
+	}
+}
+
+// flakyQueue fails every queue update while fail is set, as a full or
+// read-only database does; reads keep working.
+type flakyQueue struct {
+	Queue
+	mu   sync.Mutex
+	fail bool
+}
+
+func (q *flakyQueue) setFail(v bool) {
+	q.mu.Lock()
+	q.fail = v
+	q.mu.Unlock()
+}
+
+func (q *flakyQueue) err() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.fail {
+		return errors.New("database or disk is full")
+	}
+	return nil
+}
+
+func (q *flakyQueue) MarkDelivered(ctx context.Context, eventID, url string, attempts, status int, at time.Time) error {
+	if err := q.err(); err != nil {
+		return err
+	}
+	return q.Queue.MarkDelivered(ctx, eventID, url, attempts, status, at)
+}
+
+func (q *flakyQueue) MarkRetry(ctx context.Context, eventID, url string, attempts, status int, errMsg string, next time.Time) error {
+	if err := q.err(); err != nil {
+		return err
+	}
+	return q.Queue.MarkRetry(ctx, eventID, url, attempts, status, errMsg, next)
+}
+
+func (q *flakyQueue) MarkDead(ctx context.Context, eventID, url string, attempts, status int, errMsg string) error {
+	if err := q.err(); err != nil {
+		return err
+	}
+	return q.Queue.MarkDead(ctx, eventID, url, attempts, status, errMsg)
+}
+
+// A delivery whose queue update fails stays pending and due; it is not
+// sent again until storeFailHold has passed, whatever the receiver said.
+func TestQueueUpdateFailureHoldsDelivery(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   string
+	}{
+		{"delivered", 200, store.DeliveryDelivered},
+		{"retry", 503, store.DeliveryPending},
+		{"dead", 410, store.DeliveryDead},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, always(tc.status, nil))
+			fq := &flakyQueue{fail: true}
+			r.queue = func(q Queue) Queue { fq.Queue = q; return fq }
+			r.addEvents("lob_1", 1, 0)
+			r.start()
+			r.waitFor("the first attempt", func() bool { return len(r.received()) == 1 })
+			// Dozens of polls run meanwhile; none may resend.
+			time.Sleep(150 * time.Millisecond)
+			if n := len(r.received()); n != 1 {
+				t.Fatalf("sent %d times while the queue could not be updated, want 1", n)
+			}
+			if got := r.row("evt_lob_1_1"); got.status != store.DeliveryPending || got.attempts != 0 {
+				t.Fatalf("row = %+v", got)
+			}
+			fq.setFail(false)
+			r.clock.advance(storeFailHold - time.Second)
+			time.Sleep(50 * time.Millisecond)
+			if n := len(r.received()); n != 1 {
+				t.Fatalf("sent %d times before the hold ended, want 1", n)
+			}
+			r.clock.advance(time.Second)
+			r.waitStatus("evt_lob_1_1", tc.want, 1)
+			if n := len(r.received()); n != 2 {
+				t.Errorf("sent %d times, want 2", n)
+			}
+		})
+	}
+}
+
+// Every webhook has its own Concurrency slots: a receiver that hangs on
+// many lobbies' deliveries does not hold up another receiver.
+func TestSlowWebhookDoesNotHoldOthers(t *testing.T) {
+	r := newRig(t, func(_ int, rec received) (int, map[string]string) {
+		if rec.path == "/slow" {
+			return 0, nil // hang until the attempt is cut off
+		}
+		return 200, nil
+	})
+	r.timeout = time.Minute
+	slow := config.WebhookConfig{URL: r.srv.URL + "/slow", Events: []string{"*"}}
+	fast := config.WebhookConfig{URL: r.srv.URL + "/fast", Events: []string{"*"}}
+	r.secrets.WebhookSecrets[strings.ToLower(slow.URL)] = testSecret
+	r.secrets.WebhookSecrets[strings.ToLower(fast.URL)] = testSecret
+	// The slow receiver's deliveries are older, so they come first.
+	r.hooks = []config.WebhookConfig{slow}
+	for i := 1; i <= 2*DefaultConcurrency; i++ {
+		r.addEvents(fmt.Sprintf("lob_s%d", i), 1, -time.Minute)
+	}
+	r.hooks = []config.WebhookConfig{slow, fast}
+	r.addEvents("lob_f", 1, 0)
+	r.start()
+	r.waitFor("the fast delivery", func() bool {
+		for _, rec := range r.received() {
+			if rec.path == "/fast" {
+				return true
+			}
+		}
+		return false
+	})
+	var hung int
+	for _, rec := range r.received() {
+		if rec.path == "/slow" {
+			hung++
+		}
+	}
+	if hung > DefaultConcurrency {
+		t.Errorf("%d attempts in flight to one webhook, want at most %d", hung, DefaultConcurrency)
 	}
 }

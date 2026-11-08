@@ -11,3 +11,6 @@
   catching up on anything a receiver missed.
 - New keys: `webhooks[].token_header`, `webhook_delivery.timeout`, `webhook_delivery.max_age`
   and `secrets.webhook_tokens`. `webhooks` and `secrets.webhook_secrets` are now used.
+- Each webhook has its own 4 delivery slots, so a receiver that hangs until
+  `webhook_delivery.timeout` does not delay the others. A delivery whose queue update fails
+  (a full or read-only database) is tried again 30 s later instead of being resent at once.

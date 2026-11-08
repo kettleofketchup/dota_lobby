@@ -286,6 +286,10 @@ status or error.
   `webhook_delivery.max_age`. The receiver should answer quickly and do slow work afterwards.
 - The receiver rejects the signature: it must sign the raw body, before parsing it, with the
   same secret, and both clocks must be within 5 minutes of each other.
+- `webhook delivered but not recorded`, `cannot reschedule a webhook delivery` or `cannot
+  give up a webhook delivery`: the database refused the write (a full disk or a read-only
+  volume). The delivery stays queued and is tried again every 30 s until the write works, so
+  a receiver may see an event twice. Free the disk.
 - Nothing logged: the event type does not match the webhook's `events`, or the event happened
   before the webhook was configured. Events are queued when they are stored.
 - Events of one lobby arrive in `seq` order, so one failing event holds the lobby's later ones

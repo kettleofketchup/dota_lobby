@@ -141,9 +141,13 @@ given up.
 
 - **In order per lobby.** For each webhook and lobby only the lowest undelivered `seq` is in
   flight; the next event waits until it is delivered or given up. Different lobbies do not
-  wait for each other, and neither do different webhooks.
+  wait for each other, and neither do different webhooks: each webhook has up to 4
+  deliveries in flight, so a receiver that hangs until `webhook_delivery.timeout` slows only
+  its own deliveries.
 - **At least once.** A delivery can arrive twice, for example when the service stops after the
-  receiver answered but before the answer was stored. De-duplicate on `id`.
+  receiver answered but before the answer was stored, or when the database refuses the write
+  (a full disk, for example; the service logs `webhook delivered but not recorded` and tries
+  again 30 s later). De-duplicate on `id`.
 - **Restarts.** At shutdown, attempts in flight are cancelled and stay queued without counting
   as a try; the next start sends them. Queued deliveries are deleted with their lobby by the
   `store.retention` sweep.
