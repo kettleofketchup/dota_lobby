@@ -20,12 +20,17 @@ type fakeLeagues struct {
 	nodes    []gc.LeagueNode
 	nodesErr error
 	asked    []uint32
+	deadline time.Duration // time left on the ctx Nodes got; -1 without one
 }
 
 func (f *fakeLeagues) All() []league.League            { return f.all }
 func (f *fakeLeagues) BotLeagues(name string) []uint32 { return f.perBot[name] }
-func (f *fakeLeagues) Nodes(_ context.Context, id uint32) (string, []gc.LeagueNode, error) {
+func (f *fakeLeagues) Nodes(ctx context.Context, id uint32) (string, []gc.LeagueNode, error) {
 	f.asked = append(f.asked, id)
+	f.deadline = -1
+	if d, ok := ctx.Deadline(); ok {
+		f.deadline = time.Until(d)
+	}
 	return f.nodesBot, f.nodes, f.nodesErr
 }
 
@@ -123,6 +128,30 @@ func TestLeagueNodes(t *testing.T) {
 				if n[k] != v {
 					t.Errorf("node %s = %#v, want %#v", k, n[k], v)
 				}
+			}
+		})
+	}
+}
+
+func TestLeagueNodesDeadline(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{"default", 0, bot.DefaultRequestTimeout},
+		{"configured", 3 * time.Second, 3 * time.Second},
+		{"capped below the write timeout", time.Minute, MaxSyncGCWait},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lg := &fakeLeagues{nodesBot: "bot1"}
+			s := New(Options{Leagues: lg, GCRequestTimeout: tt.timeout})
+			if r := do(t, s, http.MethodGet, "/v1/leagues/1/nodes", nil); r.code != 200 {
+				t.Fatalf("code = %d", r.code)
+			}
+			if lg.deadline <= 0 || lg.deadline > tt.want || lg.deadline < tt.want-time.Second {
+				t.Errorf("Nodes ctx had %v left, want about %v", lg.deadline, tt.want)
 			}
 		})
 	}

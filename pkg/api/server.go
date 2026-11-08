@@ -71,6 +71,10 @@ type Options struct {
 	Leagues Leagues
 	// Leases is the bot pool; nil reports no lobbies.
 	Leases Leases
+	// GCRequestTimeout bounds a synchronous GC call made for a request,
+	// queue wait included (gc.request_timeout). 0 means
+	// bot.DefaultRequestTimeout; it is capped at MaxSyncGCWait.
+	GCRequestTimeout time.Duration
 	// MinReadyBots is how many bots must be gc_ready for /readyz.
 	MinReadyBots int
 	// MaxBodyBytes caps request bodies; 0 means DefaultMaxBodyBytes.
@@ -84,6 +88,10 @@ type Options struct {
 	// Now defaults to time.Now.
 	Now func() time.Time
 }
+
+// MaxSyncGCWait caps GCRequestTimeout so a synchronous GC call answers
+// 504 before the server's 15 s write timeout drops the connection.
+const MaxSyncGCWait = 12 * time.Second
 
 // Server serves the API. Create it with New.
 type Server struct {
@@ -109,6 +117,10 @@ func New(opts Options) *Server {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.GCRequestTimeout <= 0 {
+		opts.GCRequestTimeout = bot.DefaultRequestTimeout
+	}
+	opts.GCRequestTimeout = min(opts.GCRequestTimeout, MaxSyncGCWait)
 	if opts.Bots == nil {
 		opts.Bots = noBots{}
 	}

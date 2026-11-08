@@ -63,7 +63,8 @@ func (s *Server) handleLeagues(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleLeagueNodes asks a ready bot that holds the league for its lobby
-// nodes. The GC call is bounded by gc.request_timeout.
+// nodes. The whole call, time queued behind the bot's other GC work
+// included, is bounded by GCRequestTimeout.
 func (s *Server) handleLeagueNodes(w http.ResponseWriter, r *http.Request) {
 	raw := r.PathValue("id")
 	id, err := strconv.ParseUint(raw, 10, 32)
@@ -71,7 +72,9 @@ func (s *Server) handleLeagueNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "league id must be a positive 32-bit integer, got "+strconv.Quote(raw))
 		return
 	}
-	name, nodes, err := s.opts.Leagues.Nodes(r.Context(), uint32(id))
+	ctx, cancel := context.WithTimeout(r.Context(), s.opts.GCRequestTimeout)
+	defer cancel()
+	name, nodes, err := s.opts.Leagues.Nodes(ctx, uint32(id))
 	switch {
 	case errors.Is(err, league.ErrUnknownLeague):
 		writeError(w, http.StatusNotFound, "not_found", "no configured bot holds league "+raw)

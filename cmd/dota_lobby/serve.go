@@ -71,15 +71,16 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	bots := pool.New(mgr, reg, pool.Options{})
 
 	srv := api.New(api.Options{
-		Addr:         addr,
-		APIKey:       cfg.Secrets.APIKey,
-		Bots:         mgr,
-		Leagues:      reg,
-		Leases:       bots,
-		MinReadyBots: cfg.Readiness.MinReadyBots,
-		MaxBodyBytes: cfg.Server.MaxBodyBytes,
-		Logger:       log,
-		Version:      version,
+		Addr:             addr,
+		APIKey:           cfg.Secrets.APIKey,
+		Bots:             mgr,
+		Leagues:          reg,
+		Leases:           bots,
+		MinReadyBots:     cfg.Readiness.MinReadyBots,
+		GCRequestTimeout: cfg.GC.RequestTimeout,
+		MaxBodyBytes:     cfg.Server.MaxBodyBytes,
+		Logger:           log,
+		Version:          version,
 	})
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()

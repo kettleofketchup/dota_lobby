@@ -257,15 +257,16 @@ Lists are kept in the database, so they are available right after a restart, mar
 ```
 
 The league's lobby nodes (the bracket positions a league lobby can be attached to), asked from
-the game coordinator through a ready bot that holds the league, verified holders first. `bot`
-is the bot that answered. Empty fields are `null`.
+the game coordinator through a ready bot that holds the league, verified holders first. If a
+holder drops out of `gc_ready` or its request fails, the next ready holder is asked; a timeout
+is not retried on another bot. `bot` is the bot that answered. Empty fields are `null`.
 
 | Status | When |
 |---|---|
 | `400 invalid_request` | `id` is not a positive 32-bit number |
 | `404 not_found` | No enabled bot holds the league |
 | `503 unavailable` | Bots hold the league, but none is `gc_ready`, or the request failed. Retry later |
-| `504 gc_timeout` | The game coordinator did not answer within `gc.request_timeout` (10 s) |
+| `504 gc_timeout` | No answer within `gc.request_timeout` (10 s, capped at 12 s), time spent queued behind the bot's other GC requests included |
 
 ```bash
 curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/leagues/17929/nodes
