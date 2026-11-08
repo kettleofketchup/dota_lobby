@@ -48,8 +48,10 @@ Authorization: Bearer <your api_key>
 - The key is compared in constant time.
 
 A missing or wrong key gets `401` with a `WWW-Authenticate: Bearer realm="dota_lobby"` header
-and the error body below. The method is checked first: a wrong method on `/v1/bots` gets `405`
-with or without a key.
+and the error body below. The key is checked before the method: a wrong method on a
+protected path such as `/v1/bots` gets `401` without a valid key, so the `Allow` list is not
+revealed, and `405` with one. The open probe paths (`/livez`, `/readyz`, `/health`) answer `405`
+to a wrong method without a key.
 
 ## Errors
 

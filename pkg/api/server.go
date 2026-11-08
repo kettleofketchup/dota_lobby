@@ -137,15 +137,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) routes() http.Handler {
-	r := &router{mux: http.NewServeMux()}
+	r := &router{mux: http.NewServeMux(), auth: s.authed}
 
 	r.handle("GET /livez", http.HandlerFunc(s.handleLivez))
 	r.handle("GET /readyz", http.HandlerFunc(s.handleReadyz))
 	r.handle("GET /health", http.HandlerFunc(s.handleHealth))
 
-	r.handle("GET /v1/bots", s.authed(s.handleBots))
-	r.handle("GET /v1/bots/{name}", s.authed(s.handleBot))
-	r.handle("POST /v1/bots/{name}/retry", s.authed(s.handleBotRetry))
+	r.handleAuthed("GET /v1/bots", s.handleBots)
+	r.handleAuthed("GET /v1/bots/{name}", s.handleBot)
+	r.handleAuthed("POST /v1/bots/{name}/retry", s.handleBotRetry)
 
 	// Lobby endpoints are not implemented yet.
 	r.handle("/v1/lobbies", s.authed(notImplemented))
@@ -166,9 +166,24 @@ func (s *Server) routes() http.Handler {
 // router registers method patterns and remembers their paths, so a wrong
 // method gets a JSON 405 instead of falling through to the 404 catch-all.
 type router struct {
-	mux     *http.ServeMux
-	allowed map[string][]string // path -> methods
-	order   []string
+	mux       *http.ServeMux
+	auth      func(http.HandlerFunc) http.Handler
+	allowed   map[string][]string // path -> methods
+	protected map[string]bool     // paths whose 405 needs the API key too
+	order     []string
+}
+
+// handleAuthed registers an API-key protected handler. The path's 405
+// fallback is protected as well, so an unauthenticated caller cannot learn
+// which methods a protected path takes.
+func (r *router) handleAuthed(pattern string, h http.HandlerFunc) {
+	r.handle(pattern, r.auth(h))
+	if _, path, ok := strings.Cut(pattern, " "); ok {
+		if r.protected == nil {
+			r.protected = map[string]bool{}
+		}
+		r.protected[path] = true
+	}
 }
 
 func (r *router) handle(pattern string, h http.Handler) {
@@ -193,10 +208,15 @@ func (r *router) addMethodFallbacks() {
 			methods = append(methods, http.MethodHead)
 		}
 		allow := strings.Join(methods, ", ")
-		r.mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		var h http.HandlerFunc = func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Allow", allow)
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "allowed: "+allow)
-		})
+		}
+		if r.protected[path] {
+			r.mux.Handle(path, r.auth(h))
+			continue
+		}
+		r.mux.Handle(path, h)
 	}
 }
 

@@ -351,6 +351,32 @@ func TestRouting(t *testing.T) {
 	}
 }
 
+// A wrong method on a protected path must not reveal the Allow list to a
+// caller without the key; the open probe paths still do.
+func TestMethodFallbackNeedsKey(t *testing.T) {
+	s := newTestServer(t, testKey, 0, &fakeBots{})
+	tests := []struct {
+		name, method, path string
+		hdr                map[string]string
+		code               int
+		allow              string
+	}{
+		{"protected without key", "DELETE", "/v1/bots", nil, 401, ""},
+		{"protected retry without key", "GET", "/v1/bots/a/retry", nil, 401, ""},
+		{"protected with wrong key", "DELETE", "/v1/bots", map[string]string{"X-API-Key": "nope"}, 401, ""},
+		{"protected with key", "DELETE", "/v1/bots", map[string]string{"X-API-Key": testKey}, 405, "GET, HEAD"},
+		{"open probe without key", "POST", "/livez", nil, 405, "GET, HEAD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := do(t, s, tt.method, tt.path, tt.hdr)
+			if r.code != tt.code || r.hdr.Get("Allow") != tt.allow {
+				t.Errorf("%s %s = %d Allow=%q, want %d Allow=%q", tt.method, tt.path, r.code, r.hdr.Get("Allow"), tt.code, tt.allow)
+			}
+		})
+	}
+}
+
 func TestServeAndShutdown(t *testing.T) {
 	s := newTestServer(t, "", 0, &fakeBots{})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
