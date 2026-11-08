@@ -9,8 +9,8 @@ the API.
 
 !!! warning "Lobbies are not available yet"
 
-    Everything under `/v1/lobbies` answers `501 not_implemented`. This version runs the bots and
-    reports their state; lobby hosting comes later. See [Known limitations](../known-limitations.md).
+    Everything under `/v1/lobbies` answers `501 not_implemented`. This version runs the bots,
+    reports their state and finds the leagues each bot may host; lobby hosting comes later. See [Known limitations](../known-limitations.md).
 
 ## Overview
 
@@ -22,6 +22,8 @@ the API.
 | `GET` | `/v1/bots` | When an API key is set | Every bot and its state |
 | `GET` | `/v1/bots/{name}` | When an API key is set | One bot |
 | `POST` | `/v1/bots/{name}/retry` | When an API key is set | Make a waiting bot try again now |
+| `GET` | `/v1/leagues` | When an API key is set | Every league a bot may host, and which bots hold it |
+| `GET` | `/v1/leagues/{id}/nodes` | When an API key is set | A league's lobby nodes, asked from the game coordinator |
 | any | `/v1/lobbies`, `/v1/lobbies/...` | When an API key is set | `501`, not implemented yet |
 | any | `/bots`, `/lobby/create`, `/lobby/info` | When an API key is set | `410`, the old endpoints are gone |
 
@@ -63,12 +65,14 @@ Every error is JSON with the same envelope:
 
 | Status | `code` | When |
 |---|---|---|
+| `400` | `invalid_request` | A malformed path parameter, such as a league ID that is not a positive number |
 | `401` | `unauthorized` | Missing or wrong API key |
-| `404` | `not_found` | Unknown path, or no bot with that name |
+| `404` | `not_found` | Unknown path, no bot with that name, or no configured bot holds that league |
 | `405` | `method_not_allowed` | Wrong method on a known path |
 | `410` | `gone` | One of the removed pre-v1 endpoints |
 | `501` | `not_implemented` | The lobby endpoints |
-| `503` | `unavailable` | A bot did not take a `retry` within 5 s because its run loop is backed up |
+| `503` | `unavailable` | A bot did not take a `retry` within 5 s because its run loop is backed up, or no ready bot can answer a game coordinator request |
+| `504` | `gc_timeout` | The game coordinator did not answer within `gc.request_timeout` |
 
 `retryable` is `true` only for `503` and `504`.
 
@@ -141,7 +145,10 @@ Always `200`, for dashboards and old monitors:
       "token_expires_at": "2027-05-27T11:47:52Z",
       "renew_blocked": null,
       "attempt": 0,
-      "gc_queue_position": null
+      "gc_queue_position": null,
+      "ready_since": "2026-11-08T11:48:03Z",
+      "leagues": [17929],
+      "lobby": null
     }
   ]
 }
@@ -164,6 +171,9 @@ Always `200`, for dashboards and old monitors:
 | `renew_blocked` | Why background token renewal stopped (`bad_credentials`, `guard_required`, `totp_mismatch`, ...), or `null`. The bot stays connected; see [token renewal](../operations/troubleshooting.md#token-renewal-stopped) |
 | `attempt` | Retry counter for the current failure |
 | `gc_queue_position` | Position in the game coordinator logon queue, only in `gc_queued` |
+| `ready_since` | When the bot last reached `gc_ready`, or `null` while it is not ready |
+| `leagues` | League IDs this bot may host lobbies for, sorted; `[]` when none. See [`GET /v1/leagues`](#get-v1leagues) for where each comes from |
+| `lobby` | ID of the lobby this bot hosts, or `null`. Always `null` in this version, which creates no lobbies |
 
 Unknown values are `null`, not zero. Passwords, secrets and tokens never appear.
 
@@ -192,6 +202,74 @@ curl -fsS -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/league_bot_
 ```
 
 Retrying a cooldown early is allowed but rarely wise: Steam set it for a reason.
+
+## `GET /v1/leagues`
+
+```json
+{
+  "leagues": [
+    {
+      "league_id": 17929,
+      "name": "Spring Cup",
+      "bots": [
+        {"name": "league_bot_1", "source": "gc", "verified": true,
+         "refreshed_at": "2026-11-08T11:48:04Z", "stale": false},
+        {"name": "league_bot_2", "source": "config", "verified": false,
+         "refreshed_at": null, "stale": false}
+      ]
+    }
+  ]
+}
+```
+
+Every league at least one enabled bot may host lobbies for, by `league_id`, with those bots in
+config order. A bot gets its leagues from two sources:
+
+| `source` | Where the list comes from | `verified` |
+|---|---|---|
+| `gc` | The game coordinator's list of leagues the bot's Steam account administers, fetched when the bot reaches `gc_ready` and every `league.refresh_interval` (30 min) after | `true` |
+| `config` | The bot's `leagues` in `config.yaml` | `false` |
+
+The game coordinator list wins. A bot's configured leagues count only until its list has been
+fetched once, or always when `league.allow_unverified` is `true`. A league the game coordinator
+does not list for a bot is not shown for that bot, even if it is configured; see
+[A bot does not list my league](../operations/troubleshooting.md#a-bot-does-not-list-my-league).
+
+| Field | Meaning |
+|---|---|
+| `name` | The league's name from the game coordinator, or `null` until a bot has fetched it in this run |
+| `refreshed_at` | When the game coordinator list was fetched; `null` for `config` |
+| `stale` | The list was saved by an earlier run and has not been fetched again since the service started (the bot is not ready yet) |
+
+Lists are kept in the database, so they are available right after a restart, marked `stale`.
+`leagues` is `[]` when no bot holds any league.
+
+## `GET /v1/leagues/{id}/nodes`
+
+```json
+{
+  "league_id": 17929,
+  "bot": "league_bot_1",
+  "nodes": [
+    {"node_id": 3, "name": "Grand final", "group_name": "Playoffs", "team_id_1": 8255888, "team_id_2": null}
+  ]
+}
+```
+
+The league's lobby nodes (the bracket positions a league lobby can be attached to), asked from
+the game coordinator through a ready bot that holds the league, verified holders first. `bot`
+is the bot that answered. Empty fields are `null`.
+
+| Status | When |
+|---|---|
+| `400 invalid_request` | `id` is not a positive 32-bit number |
+| `404 not_found` | No enabled bot holds the league |
+| `503 unavailable` | Bots hold the league, but none is `gc_ready`, or the request failed. Retry later |
+| `504 gc_timeout` | The game coordinator did not answer within `gc.request_timeout` (10 s) |
+
+```bash
+curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/leagues/17929/nodes
+```
 
 ## Bot states
 

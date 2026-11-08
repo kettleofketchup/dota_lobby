@@ -223,6 +223,35 @@ func TestServeZeroBotsStartsAndStops(t *testing.T) {
 		t.Fatalf("lock not released: %v", err)
 	}
 	_ = lock.Release()
+	// The database was created owner-only in the state dir.
+	fi, err := os.Stat(filepath.Join(stateDir, "dota_lobby.db"))
+	if err != nil {
+		t.Fatalf("database not created: %v", err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o600 {
+		t.Errorf("database mode %o, want 600", mode)
+	}
+}
+
+// A database the service cannot open stops startup, and the bots that
+// already started are stopped again, releasing the lock.
+func TestServeFailsOnBadStore(t *testing.T) {
+	_, port, _ := net.SplitHostPort(freeAddr(t))
+	// A directory where the database file should be cannot be opened.
+	badPath := t.TempDir()
+	flags, stateDir := writeConfig(t, port, "bots: []\nstore: { path: "+badPath+" }\n", "{}\n")
+	c, _, stderr := newCLI()
+	if got := c.run(context.Background(), append([]string{"serve"}, flags...)); got != exitError {
+		t.Fatalf("exit %d, want %d\n%s", got, exitError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "open store") {
+		t.Errorf("stderr does not mention the store: %s", stderr.String())
+	}
+	lock, err := auth.AcquireLock(stateDir)
+	if err != nil {
+		t.Fatalf("lock not released after a store failure: %v", err)
+	}
+	_ = lock.Release()
 }
 
 func TestServeFailsWhenStateDirLocked(t *testing.T) {

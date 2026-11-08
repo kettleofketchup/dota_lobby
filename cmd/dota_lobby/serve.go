@@ -12,6 +12,9 @@ import (
 
 	"github.com/kettleofketchup/dota_lobby/pkg/api"
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
+	"github.com/kettleofketchup/dota_lobby/pkg/league"
+	"github.com/kettleofketchup/dota_lobby/pkg/pool"
+	"github.com/kettleofketchup/dota_lobby/pkg/store"
 )
 
 // httpShutdownTimeout bounds in-flight requests at shutdown; the
@@ -19,8 +22,9 @@ import (
 const httpShutdownTimeout = 5 * time.Second
 
 // serve runs the service until ctx ends (SIGINT/SIGTERM) or the listener
-// fails, then shuts down in this order: fail /readyz, stop HTTP, stop
-// the bots, release the state-dir lock.
+// fails, then shuts down in this order: fail /readyz, stop HTTP, stop the
+// league registry, stop the bots (releasing the state-dir lock), close the
+// database.
 func (c cli) serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cf configFlags
@@ -49,10 +53,29 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		_ = ln.Close()
 		return err
 	}
+	// The database opens under the state-dir lock that Start took, so only
+	// one process ever migrates or writes it.
+	db, err := store.Open(ctx, cfg.Store.Path)
+	if err != nil {
+		_ = ln.Close()
+		return errors.Join(err, stopBots(mgr, log))
+	}
+	defer closeStore(db, log)
+	reg := league.New(db.Leagues(), mgr, cfg.League, cfg.Bots, league.Options{Logger: log})
+	if err := reg.Load(ctx); err != nil {
+		log.Warn("could not load stored league lists; starting empty", "err", err)
+	}
+	regCtx, stopReg := context.WithCancel(context.WithoutCancel(ctx))
+	regDone := make(chan struct{})
+	go func() { defer close(regDone); reg.Run(regCtx) }()
+	bots := pool.New(mgr, reg, pool.Options{})
+
 	srv := api.New(api.Options{
 		Addr:         addr,
 		APIKey:       cfg.Secrets.APIKey,
 		Bots:         mgr,
+		Leagues:      reg,
+		Leases:       bots,
 		MinReadyBots: cfg.Readiness.MinReadyBots,
 		MaxBodyBytes: cfg.Server.MaxBodyBytes,
 		Logger:       log,
@@ -79,6 +102,8 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	if err := srv.Shutdown(hctx); err != nil {
 		log.Warn("http shutdown incomplete", "err", err)
 	}
+	stopReg()
+	<-regDone
 	if err := stopBots(mgr, log); err != nil {
 		return errors.Join(runErr, err)
 	}
@@ -86,6 +111,14 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		log.Info("stopped cleanly")
 	}
 	return runErr
+}
+
+// closeStore closes the database last, after everything that writes to it
+// has stopped.
+func closeStore(db *store.Store, log *slog.Logger) {
+	if err := db.Close(); err != nil {
+		log.Error("database did not close cleanly", "err", err)
+	}
 }
 
 // stopBots stops every bot within the manager's own budget; the signal ctx
