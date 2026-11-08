@@ -24,6 +24,8 @@ type Config struct {
 	Match     MatchConfig     `mapstructure:"match"`
 	Store     StoreConfig     `mapstructure:"store"`
 	Webhooks  []WebhookConfig `mapstructure:"webhooks"`
+	// WebhookDelivery applies to every webhook.
+	WebhookDelivery WebhookDeliveryConfig `mapstructure:"webhook_delivery"`
 
 	// CredentialsDir holds one decrypted credentials file per bot, named
 	// <bot>.yaml (or .yml, .json, .env), typically a tmpfs filled from the
@@ -178,10 +180,24 @@ type StoreConfig struct {
 }
 
 // WebhookConfig is one event receiver. Its signing secret is looked up with
-// Secrets.WebhookSecret(URL).
+// Secrets.WebhookSecret(URL), its optional token with Secrets.WebhookToken.
 type WebhookConfig struct {
-	URL    string   `mapstructure:"url"`
+	URL string `mapstructure:"url"`
+	// Events are path.Match globs on the event type, such as "lobby.*".
 	Events []string `mapstructure:"events"`
+	// TokenHeader names a request header that carries
+	// secrets.webhook_tokens[url], for receivers that already check a
+	// static token. Empty sends none.
+	TokenHeader string `mapstructure:"token_header"`
+}
+
+// WebhookDeliveryConfig bounds webhook delivery attempts.
+type WebhookDeliveryConfig struct {
+	// Timeout bounds one attempt, response included.
+	Timeout time.Duration `mapstructure:"timeout"`
+	// MaxAge is how long after the event a failing delivery is retried
+	// before it is given up.
+	MaxAge time.Duration `mapstructure:"max_age"`
 }
 
 // Secrets are the service-wide secrets from the secrets file and env.
@@ -191,12 +207,20 @@ type Secrets struct {
 	OpenDotaKey Secret `mapstructure:"opendota_key"`
 	// WebhookSecrets is keyed by lowercased webhook URL.
 	WebhookSecrets map[string]Secret `mapstructure:"webhook_secrets"`
+	// WebhookTokens is keyed by lowercased webhook URL.
+	WebhookTokens map[string]Secret `mapstructure:"webhook_tokens"`
 }
 
 // WebhookSecret returns the signing secret for a webhook URL. Keys are
 // matched case-insensitively because the loader lowercases map keys.
 func (s Secrets) WebhookSecret(url string) Secret {
 	return s.WebhookSecrets[strings.ToLower(url)]
+}
+
+// WebhookToken returns the static token for a webhook URL, matched like
+// WebhookSecret.
+func (s Secrets) WebhookToken(url string) Secret {
+	return s.WebhookTokens[strings.ToLower(url)]
 }
 
 // BotConfig is one Steam account the service runs.
@@ -317,6 +341,9 @@ func defaults() map[string]any {
 
 		"store::path":      "",
 		"store::retention": "720h",
+
+		"webhook_delivery::timeout": "10s",
+		"webhook_delivery::max_age": "24h",
 	}
 }
 

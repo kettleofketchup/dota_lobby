@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -144,12 +145,39 @@ func (c *Config) Validate() error {
 	if c.Match.WebAPI.Enabled && c.Match.WebAPI.RPS <= 0 {
 		add("match.webapi.rps must be positive")
 	}
+	positive("webhook_delivery.timeout", c.WebhookDelivery.Timeout)
+	positive("webhook_delivery.max_age", c.WebhookDelivery.MaxAge)
+	hookURLs := map[string]int{}
 	for i, w := range c.Webhooks {
 		if err := checkHTTPURL(w.URL); err != nil {
 			add("webhooks[%d].url: %w", i, err)
 		}
+		if prev, dup := hookURLs[strings.ToLower(w.URL)]; dup {
+			add("webhooks[%d].url is the same as webhooks[%d].url (URLs are compared case-insensitively)", i, prev)
+		}
+		hookURLs[strings.ToLower(w.URL)] = i
 		if len(w.Events) == 0 {
-			add("webhooks[%d].events must not be empty", i)
+			add("webhooks[%d].events must not be empty (use [\"*\"] for every event)", i)
+		}
+		for _, p := range w.Events {
+			if _, err := path.Match(p, ""); err != nil {
+				add("webhooks[%d].events: %q is not a valid pattern", i, p)
+			}
+		}
+		if !c.Secrets.WebhookSecret(w.URL).IsSet() {
+			add("webhooks[%d]: secrets.webhook_secrets has no signing secret for %q", i, w.URL)
+		}
+		switch h := w.TokenHeader; {
+		case h == "":
+			if c.Secrets.WebhookToken(w.URL).IsSet() {
+				add("webhooks[%d]: secrets.webhook_tokens has a token but webhooks[%d].token_header is empty", i, i)
+			}
+		case !headerToken.MatchString(h):
+			add("webhooks[%d].token_header %q is not a valid header name", i, h)
+		case reservedHeader(h):
+			add("webhooks[%d].token_header %q is set by the service itself", i, h)
+		case !c.Secrets.WebhookToken(w.URL).IsSet():
+			add("webhooks[%d].token_header is set but secrets.webhook_tokens has no token for %q", i, w.URL)
 		}
 	}
 
@@ -183,6 +211,18 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// headerToken is an HTTP header name (RFC 9110 token).
+var headerToken = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+// reservedHeader reports whether the webhook sender sets header h itself.
+func reservedHeader(h string) bool {
+	switch strings.ToLower(h) {
+	case "content-type", "content-length", "host", "user-agent", "transfer-encoding", "connection":
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(h), "x-dota-lobby-")
 }
 
 func checkHTTPURL(raw string) error {
