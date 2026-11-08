@@ -453,8 +453,8 @@ func parseGameMode(v string) (uint32, error) {
 }
 
 // joinLobbyChat joins the lobby's chat channel. The "Lobby_<id>" name with
-// the Lobby channel type comes from other libraries and is unverified (D10);
-// without the type the GC would make a new custom channel of that name.
+// the Lobby channel type comes from other libraries and was confirmed live
+// (D10); without the type the GC would make a new custom channel of that name.
 func (s *session) joinLobbyChat(ctx context.Context, lobbyID uint64) error {
 	name := fmt.Sprintf("Lobby_%d", lobbyID)
 	// The GC does not echo the job ID on 7010 (seen live 2026-11-08), so
