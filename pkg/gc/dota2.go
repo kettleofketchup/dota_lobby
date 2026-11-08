@@ -64,8 +64,8 @@ type Adapter struct {
 	// flags holds EAccountFlags in the low 32 bits and a "known" bit above.
 	flags atomic.Uint64
 
-	subMu sync.Mutex
-	subs  map[chan LobbyEvent]struct{}
+	lobbies *fanout[LobbyEvent]
+	invites *fanout[InvitationCreated]
 }
 
 var _ Client = (*Adapter)(nil)
@@ -93,7 +93,8 @@ func New(opts Options) *Adapter {
 			// Authenticate only talks to the Web API; a throwaway client is fine.
 			return steam.NewClient().Auth.Authenticate(ctx, d)
 		},
-		subs: map[chan LobbyEvent]struct{}{},
+		lobbies: newFanout[LobbyEvent](16),
+		invites: newFanout[InvitationCreated](16),
 	}
 }
 
@@ -435,7 +436,9 @@ func (a *Adapter) translate(c *conn, raw any) (Event, bool) {
 	case *devents.Popup:
 		return popupEvent(&e.CMsgDOTAPopup), true
 	case *devents.InvitationCreated:
-		return InvitationCreated{SteamID: e.GetSteamId(), Offline: e.GetUserOffline()}, true
+		ev := InvitationCreated{SteamID: e.GetSteamId(), Offline: e.GetUserOffline()}
+		a.invites.publish(ev)
+		return ev, true
 	case *devents.MatchSignedOut:
 		return MatchSignedOut{MatchID: e.GetMatchId()}, true
 	}
@@ -621,16 +624,11 @@ func (a *Adapter) CurrentLobby() (*LobbyView, bool) {
 }
 
 // SubscribeLobby implements Client.
-func (a *Adapter) SubscribeLobby() (<-chan LobbyEvent, func()) {
-	ch := make(chan LobbyEvent, 16)
-	a.subMu.Lock()
-	a.subs[ch] = struct{}{}
-	a.subMu.Unlock()
-	return ch, func() {
-		a.subMu.Lock()
-		delete(a.subs, ch)
-		a.subMu.Unlock()
-	}
+func (a *Adapter) SubscribeLobby() (<-chan LobbyEvent, func()) { return a.lobbies.subscribe() }
+
+// SubscribeInvites implements Client.
+func (a *Adapter) SubscribeInvites() (<-chan InvitationCreated, func()) {
+	return a.invites.subscribe()
 }
 
 // forwardLobbies relays one connection's lobby SO events to the adapter's
@@ -653,28 +651,9 @@ func (a *Adapter) forwardLobbies(c *conn, events <-chan *socache.CacheEvent, uns
 			case socache.EventTypeDestroy:
 				kind = LobbyDestroyed
 			}
-			a.publishLobby(LobbyEvent{Kind: kind, Lobby: lobbyView(l)})
-		}
-	}
-}
-
-// publishLobby never blocks: a full subscriber loses its oldest event, the
-// same policy as go-dota2's SO cache. Trackers work from snapshots anyway.
-func (a *Adapter) publishLobby(ev LobbyEvent) {
-	a.subMu.Lock()
-	defer a.subMu.Unlock()
-	for ch := range a.subs {
-		for range 2 {
-			select {
-			case ch <- ev:
-			default:
-				select {
-				case <-ch:
-				default:
-				}
-				continue
-			}
-			break
+			// Never blocks; trackers work from snapshots, so a lost event
+			// is harmless.
+			a.lobbies.publish(LobbyEvent{Kind: kind, Lobby: lobbyView(l)})
 		}
 	}
 }
@@ -800,76 +779,120 @@ func (a *Adapter) leaveStale(ctx context.Context, c *conn) error {
 	return nil
 }
 
-// SetLobbyDetails implements Client. Validate TVDelaySeconds with
-// TVDelayToWire first: an unsupported value is logged and nothing is sent.
-func (a *Adapter) SetLobbyDetails(d LobbyDetails) {
+// session returns the current connection if it has a GC session.
+func (a *Adapter) session(op string) (*conn, error) {
 	c := a.current()
 	if c == nil {
-		return
+		return nil, fmt.Errorf("%s: %w", op, ErrNotConnected)
+	}
+	if !c.gcReady() {
+		return nil, fmt.Errorf("%s: %w", op, ErrNotReady)
+	}
+	return c, nil
+}
+
+// SetLobbyDetails implements Client.
+func (a *Adapter) SetLobbyDetails(d LobbyDetails) error {
+	c, err := a.session("set lobby details")
+	if err != nil {
+		return err
 	}
 	if d.LobbyID == 0 {
 		l := c.lobbyProto()
 		if l == nil {
-			a.log.Warn("set lobby details: not in a lobby")
-			return
+			return errors.New("set lobby details: not in a lobby")
 		}
 		d.LobbyID = l.GetLobbyId()
 	}
 	p, err := detailsProto(d)
 	if err != nil {
-		a.log.Warn("set lobby details", "err", err)
-		return
+		return fmt.Errorf("set lobby details: %w", err)
 	}
 	c.d.SetLobbyDetails(p)
+	return nil
 }
 
 // Invite implements Client.
-func (a *Adapter) Invite(steamID64 uint64) {
-	if c := a.current(); c != nil {
-		c.d.InviteLobbyMember(steamid.SteamId(steamID64))
+func (a *Adapter) Invite(steamID64 uint64) error {
+	c, err := a.session("invite")
+	if err != nil {
+		return err
 	}
+	c.d.InviteLobbyMember(steamid.SteamId(steamID64))
+	return nil
 }
 
 // KickFromTeam implements Client.
-func (a *Adapter) KickFromTeam(accountID uint32) {
-	if c := a.current(); c != nil {
-		c.d.KickLobbyMemberFromTeam(accountID)
+func (a *Adapter) KickFromTeam(accountID uint32) error {
+	c, err := a.session("kick from team")
+	if err != nil {
+		return err
 	}
+	c.d.KickLobbyMemberFromTeam(accountID)
+	return nil
 }
 
 // Kick implements Client.
-func (a *Adapter) Kick(accountID uint32) {
-	if c := a.current(); c != nil {
-		c.d.KickLobbyMember(accountID)
+func (a *Adapter) Kick(accountID uint32) error {
+	c, err := a.session("kick")
+	if err != nil {
+		return err
 	}
+	c.d.KickLobbyMember(accountID)
+	return nil
 }
 
 // JoinTeam implements Client.
-func (a *Adapter) JoinTeam(team Team, slot uint32) {
-	if c := a.current(); c != nil {
-		c.d.JoinLobbyTeam(protocol.DOTA_GC_TEAM(team), slot)
+func (a *Adapter) JoinTeam(team Team, slot uint32) error {
+	c, err := a.session("join team")
+	if err != nil {
+		return err
 	}
+	c.d.JoinLobbyTeam(protocol.DOTA_GC_TEAM(team), slot)
+	return nil
+}
+
+// JoinBroadcastChannel implements Client. It sends only the channel:
+// go-dota2's wrapper also sets the preferred description, country and
+// language, as empty strings.
+func (a *Adapter) JoinBroadcastChannel(channel uint32) error {
+	c, err := a.session("join broadcast channel")
+	if err != nil {
+		return err
+	}
+	c.t.Write(gamecoordinator.NewGCMsgProtobuf(dota2.AppID, msgJoinBroadcastChannel,
+		&protocol.CMsgPracticeLobbyJoinBroadcastChannel{Channel: &channel}))
+	return nil
 }
 
 // FlipTeams implements Client.
-func (a *Adapter) FlipTeams() {
-	if c := a.current(); c != nil {
-		c.d.FlipLobbyTeams()
+func (a *Adapter) FlipTeams() error {
+	c, err := a.session("flip teams")
+	if err != nil {
+		return err
 	}
+	c.d.FlipLobbyTeams()
+	return nil
 }
 
 // BalancedShuffle implements Client.
-func (a *Adapter) BalancedShuffle() {
-	if c := a.current(); c != nil {
-		c.d.SendBalancedShuffleLobby()
+func (a *Adapter) BalancedShuffle() error {
+	c, err := a.session("balanced shuffle")
+	if err != nil {
+		return err
 	}
+	c.d.SendBalancedShuffleLobby()
+	return nil
 }
 
 // Launch implements Client.
-func (a *Adapter) Launch() {
-	if c := a.current(); c != nil {
-		c.d.LaunchLobby()
+func (a *Adapter) Launch() error {
+	c, err := a.session("launch lobby")
+	if err != nil {
+		return err
 	}
+	c.d.LaunchLobby()
+	return nil
 }
 
 // Leave implements Client.

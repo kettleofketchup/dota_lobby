@@ -42,6 +42,8 @@ type Client struct {
 	leagueNodes  map[uint32][]gc.LeagueNode
 	matches      map[uint64]*gc.MatchResult
 	lobbySubs    map[chan gc.LobbyEvent]struct{}
+	inviteSubs   map[chan gc.InvitationCreated]struct{}
+	reactions    map[string]func(args []any)
 	blockOnCtx   map[string]bool
 	stickyErrors map[string]error
 }
@@ -59,6 +61,8 @@ func New() *Client {
 		leagueNodes:  map[uint32][]gc.LeagueNode{},
 		matches:      map[uint64]*gc.MatchResult{},
 		lobbySubs:    map[chan gc.LobbyEvent]struct{}{},
+		inviteSubs:   map[chan gc.InvitationCreated]struct{}{},
+		reactions:    map[string]func(args []any){},
 		blockOnCtx:   map[string]bool{},
 		stickyErrors: map[string]error{},
 	}
@@ -200,6 +204,49 @@ func (f *Client) SetLobby(v *gc.LobbyView) {
 	}
 }
 
+// UpdateLobby applies fn to a copy of the current lobby (Members cloned)
+// and makes the copy current, as a GC SO update would. It does nothing
+// without a lobby.
+func (f *Client) UpdateLobby(fn func(v *gc.LobbyView)) {
+	f.mu.Lock()
+	cur := f.lobby
+	f.mu.Unlock()
+	if cur == nil {
+		return
+	}
+	v := *cur
+	v.Members = slices.Clone(cur.Members)
+	v.Pending = slices.Clone(cur.Pending)
+	fn(&v)
+	f.SetLobby(&v)
+}
+
+// OnCall runs fn after every successful call to method, with the call's
+// arguments, outside the fake's lock: fn may call SetLobby or
+// UpdateLobby to play the GC's answer. nil removes it.
+func (f *Client) OnCall(method string, fn func(args []any)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if fn == nil {
+		delete(f.reactions, method)
+		return
+	}
+	f.reactions[method] = fn
+}
+
+// EmitInvite delivers an InvitationCreated to SubscribeInvites
+// subscribers. Unlike the adapter it does not also put it on Events().
+func (f *Client) EmitInvite(ev gc.InvitationCreated) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for ch := range f.inviteSubs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
 // --- inspection ---
 
 // Calls returns every recorded call, optionally only those to the given
@@ -276,6 +323,21 @@ func (f *Client) record(method string, args ...any) error {
 
 	f.Emit(batch...)
 	return err
+}
+
+// op records a fire-and-forget lobby operation and, if it succeeds, runs
+// its OnCall reaction.
+func (f *Client) op(method string, args ...any) error {
+	if err := f.record(method, args...); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	react := f.reactions[method]
+	f.mu.Unlock()
+	if react != nil {
+		react(args)
+	}
+	return nil
 }
 
 // wait applies BlockUntilDone for ctx-taking methods.
@@ -405,6 +467,19 @@ func (f *Client) SubscribeLobby() (<-chan gc.LobbyEvent, func()) {
 	}
 }
 
+// SubscribeInvites implements gc.Client.
+func (f *Client) SubscribeInvites() (<-chan gc.InvitationCreated, func()) {
+	ch := make(chan gc.InvitationCreated, 16)
+	f.mu.Lock()
+	f.inviteSubs[ch] = struct{}{}
+	f.mu.Unlock()
+	return ch, func() {
+		f.mu.Lock()
+		delete(f.inviteSubs, ch)
+		f.mu.Unlock()
+	}
+}
+
 // CreateLobby makes the created lobby current and returns it.
 func (f *Client) CreateLobby(ctx context.Context, d gc.LobbyDetails) (*gc.LobbyView, error) {
 	if err := f.record("CreateLobby", d); err != nil {
@@ -441,29 +516,43 @@ func (f *Client) CreateLobby(ctx context.Context, d gc.LobbyDetails) (*gc.LobbyV
 	return v, nil
 }
 
-// SetLobbyDetails implements gc.Client.
-func (f *Client) SetLobbyDetails(d gc.LobbyDetails) { _ = f.record("SetLobbyDetails", d) }
+// SetLobbyDetails implements gc.Client. Like the adapter it rejects an
+// unsupported TV delay.
+func (f *Client) SetLobbyDetails(d gc.LobbyDetails) error {
+	if d.TVDelaySeconds != 0 {
+		if _, ok := gc.TVDelayToWire(d.TVDelaySeconds); !ok {
+			_ = f.record("SetLobbyDetails", d)
+			return fmt.Errorf("set lobby details: unsupported dota_tv_delay %ds", d.TVDelaySeconds)
+		}
+	}
+	return f.op("SetLobbyDetails", d)
+}
 
 // Invite implements gc.Client.
-func (f *Client) Invite(steamID64 uint64) { _ = f.record("Invite", steamID64) }
+func (f *Client) Invite(steamID64 uint64) error { return f.op("Invite", steamID64) }
 
 // KickFromTeam implements gc.Client.
-func (f *Client) KickFromTeam(accountID uint32) { _ = f.record("KickFromTeam", accountID) }
+func (f *Client) KickFromTeam(accountID uint32) error { return f.op("KickFromTeam", accountID) }
 
 // Kick implements gc.Client.
-func (f *Client) Kick(accountID uint32) { _ = f.record("Kick", accountID) }
+func (f *Client) Kick(accountID uint32) error { return f.op("Kick", accountID) }
 
 // JoinTeam implements gc.Client.
-func (f *Client) JoinTeam(team gc.Team, slot uint32) { _ = f.record("JoinTeam", team, slot) }
+func (f *Client) JoinTeam(team gc.Team, slot uint32) error { return f.op("JoinTeam", team, slot) }
+
+// JoinBroadcastChannel implements gc.Client.
+func (f *Client) JoinBroadcastChannel(channel uint32) error {
+	return f.op("JoinBroadcastChannel", channel)
+}
 
 // FlipTeams implements gc.Client.
-func (f *Client) FlipTeams() { _ = f.record("FlipTeams") }
+func (f *Client) FlipTeams() error { return f.op("FlipTeams") }
 
 // BalancedShuffle implements gc.Client.
-func (f *Client) BalancedShuffle() { _ = f.record("BalancedShuffle") }
+func (f *Client) BalancedShuffle() error { return f.op("BalancedShuffle") }
 
 // Launch implements gc.Client.
-func (f *Client) Launch() { _ = f.record("Launch") }
+func (f *Client) Launch() error { return f.op("Launch") }
 
 // Leave clears the current lobby.
 func (f *Client) Leave() {

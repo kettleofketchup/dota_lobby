@@ -103,11 +103,12 @@ func (s GCConnStatus) String() string {
 
 // Wire message IDs used outside go-dota2's own wrappers.
 const (
-	msgPracticeLobbyCreate   = uint32(protocol.EDOTAGCMsg_k_EMsgGCPracticeLobbyCreate)           // 7038
-	msgPracticeLobbyResponse = uint32(protocol.EDOTAGCMsg_k_EMsgGCPracticeLobbyResponse)         // 7055
-	msgPopup                 = uint32(protocol.EDOTAGCMsg_k_EMsgGCPopup)                         // 7102
-	msgLeagueAdminsRequest   = uint32(protocol.EDOTAGCMsg_k_EMsgDOTALeagueInfoListAdminsRequest) // 7633
-	msgLeagueAdminsResponse  = uint32(protocol.EDOTAGCMsg_k_EMsgDOTALeagueInfoListAdminsReponse) // 7634
+	msgPracticeLobbyCreate   = uint32(protocol.EDOTAGCMsg_k_EMsgGCPracticeLobbyCreate)               // 7038
+	msgJoinBroadcastChannel  = uint32(protocol.EDOTAGCMsg_k_EMsgGCPracticeLobbyJoinBroadcastChannel) // 7149
+	msgPracticeLobbyResponse = uint32(protocol.EDOTAGCMsg_k_EMsgGCPracticeLobbyResponse)             // 7055
+	msgPopup                 = uint32(protocol.EDOTAGCMsg_k_EMsgGCPopup)                             // 7102
+	msgLeagueAdminsRequest   = uint32(protocol.EDOTAGCMsg_k_EMsgDOTALeagueInfoListAdminsRequest)     // 7633
+	msgLeagueAdminsResponse  = uint32(protocol.EDOTAGCMsg_k_EMsgDOTALeagueInfoListAdminsReponse)     // 7634
 )
 
 // decodeGenericResult decodes a 7055 body. It is CMsgGenericResult, not
@@ -219,7 +220,7 @@ func lobbyView(l *protocol.CSODOTALobby) *LobbyView {
 }
 
 func member(m *protocol.CSODOTALobbyMember) Member {
-	return Member{
+	out := Member{
 		SteamID:   m.GetId(),
 		Team:      Team(m.GetTeam()),
 		TeamKnown: m.Team != nil,
@@ -227,6 +228,11 @@ func member(m *protocol.CSODOTALobbyMember) Member {
 		Leaver:    int32(m.GetLeaverStatus()),
 		HeroID:    m.GetHeroId(),
 	}
+	if m.CoachTeam != nil {
+		ct := Team(m.GetCoachTeam())
+		out.CoachTeam = &ct
+	}
+	return out
 }
 
 // detailsProto builds CMsgPracticeLobbySetDetails. TV delay goes through the
