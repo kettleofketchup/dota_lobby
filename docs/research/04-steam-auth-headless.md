@@ -3,10 +3,13 @@
 > Research track: running several headless Steam bot accounts with `paralin/go-steam` + `paralin/go-dota2`,
 > logging in reliably, persisting credentials across Docker restarts, and keeping within Steam's limits.
 >
-> Date of research: 2026-11-06. Local module versions examined:
+> Date of research: 2026-11-06. Module versions examined (the pre-PR `go.mod` pin); paths written
+> `go-steam@f167ff28a93a/...` or `go-dota2@532cb1851217/...` are relative to these module roots:
 >
-> - `github.com/paralin/go-steam v0.0.0-20250502043548-f167ff28a93a` (pinned in `go.mod:7`)
-> - `github.com/paralin/go-dota2 v0.0.0-20250623204622-532cb1851217` (pinned in `go.mod:6`)
+> - `github.com/paralin/go-steam v0.0.0-20250502043548-f167ff28a93a`
+> - `github.com/paralin/go-dota2 v0.0.0-20250623204622-532cb1851217`
+>
+> The recommended token flow was run live on go-steam master on 2026-11-08 ([09 - Live probe](09-live-probe.md) §2).
 >
 > Upstream `master` of both repositories was also checked through the GitHub API (go-steam `336e824f8540`,
 > 2026-09-22; go-dota2 `6d32dc38d075`, 2026-09-22).
@@ -18,7 +21,7 @@ reasonable conclusion I have not tested. **[UNCERTAIN]** means the sources confl
 
 ## TL;DR
 
-1. **The go-steam version pinned in this repo can no longer log in.** It sends only the legacy
+1. **The pre-PR pinned go-steam can no longer log in.** It sends only the legacy
    `CMsgClientLogon{account_name, password, auth_code, two_factor_code, sha_sentryfile, login_key}`
    message (`auth.go:52-82`). It has no `access_token` (field 108) in its generated `CMsgClientLogon`, and no
    `IAuthenticationService` client. The upstream PR that fixed this says: *"Steam has deprecated the legacy
@@ -40,6 +43,9 @@ reasonable conclusion I have not tested. **[UNCERTAIN]** means the sources confl
    from that bot's `shared_secret`, or an email code. Then **persist the returned refresh token (a JWT) to a Docker
    volume**, and on every later start or reconnect log in with `LogOnDetails{Username, AccessToken: token}`. The
    password is only needed again when the token expires (Valve's tokens last about 200 days) or is revoked.
+   **[VERIFIED live 2026-11-08]:** `Authenticate` with password + TOTP returned a refresh token in 0.7 s with
+   no prompt (JWT `aud` `client, web, renew, derive`, lifetime about 210 days), and token-only `LogOn` reached
+   the GC welcome on every one of seven fresh-process runs ([09](09-live-probe.md) §2).
 4. **Use a mobile authenticator (TOTP) on every bot account.** With TOTP the service can log in again with no
    human involved. Email-code Steam Guard needs a person each time a new token is needed, and upstream go-steam does
    **not** persist `new_guard_data`, so email codes will be requested again.
@@ -55,7 +61,7 @@ reasonable conclusion I have not tested. **[UNCERTAIN]** means the sources confl
 
 ### 1.1 `LogOnDetails` (pinned version)
 
-`/home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/auth.go:22-39`
+`go-steam@f167ff28a93a/auth.go:22-39`
 
 | Field | Type | Maps to `CMsgClientLogon` field | Status in 2026 |
 |---|---|---|---|
@@ -166,7 +172,8 @@ Since 2023, the Steam client and every maintained library authenticate in two ph
 | The **refresh token** goes in `CMsgClientLogon.access_token` (field 108). SteamKit's sample sets `AccessToken = pollResponse.RefreshToken`. | SteamKit `Samples/000_Authentication/Program.cs` lines 83-89; [node-steam-user guide](https://github.com/DoctorMcKay/node-steam-user/wiki/v4-%E2%86%92-v5-migration-guide) | VERIFIED |
 | `IsPersistentSession=true` also needs `ShouldRememberPassword=true` on `LogOn` *"for it to work correctly"*. | SteamKit sample line 89 comment; [steam-vent PR #2](https://github.com/deadlock-api/steam-vent/pull/2) | VERIFIED |
 | Only **SteamClient** platform tokens can log in to a CM. A WebBrowser token gives *"This refreshToken is not valid for logging in to the Steam client"*. | [node-steam-session README](https://github.com/DoctorMcKay/node-steam-session) | VERIFIED (node) |
-| Tokens are JWTs, and you can base64-decode the payload to read `exp`. Persistent sessions last about 200 days ("207 days" on the web, "~200 day lifetime" in the gg-cr fork). | [SteamKit #1125](https://github.com/SteamRE/SteamKit/issues/1125); [gg-cr/go-steam](https://pkg.go.dev/github.com/gg-cr/go-steam) | LIKELY (the exact lifetime is Valve's choice) |
+| Tokens are JWTs, and you can base64-decode the payload to read `exp`. Persistent sessions last about 200 days ("207 days" on the web, "~200 day lifetime" in the gg-cr fork). | [SteamKit #1125](https://github.com/SteamRE/SteamKit/issues/1125); [gg-cr/go-steam](https://pkg.go.dev/github.com/gg-cr/go-steam); live token: 210 days ([09](09-live-probe.md) §2) | VERIFIED live for one token (the exact lifetime is Valve's choice) |
+| A SteamClient refresh token copied to another host logs in with no new sign-in. | REPORTED by an open-source league bot ([field notes](https://github.com/timothyjjcrow/under-5k-league/blob/main/docs/DOTA-LOBBY-BOT.md)); not tested by us | REPORTED |
 | Calling LogOff **can** invalidate the refresh token (not necessarily always). A plain Disconnect keeps it. | [DepotDownloader PR #5](https://github.com/Reino-Doce/DepotDownloader/pull/5) (*"Steam can invalidate refresh tokens when an application logs off. The next ... run then failed with `AccessDenied`"*; fixes its issue #4) | LIKELY (one project's report, manually validated; not tested here) |
 | A failed **token** logon with `InvalidPassword` means the token is expired or revoked, not that the password is wrong. A dead token can also come back as `AccessDenied`, `Expired`, `Revoked` or `InvalidSignature`. | [wabbajack PR #3005](https://github.com/wabbajack-tools/wabbajack/pull/3005) (classes all five as dead credentials); DepotDownloader PR #5 (`AccessDenied` after LogOff) | LIKELY |
 | `new_guard_data` (a JWT with its own expiry) replaces the sentry file. Passing it as `guard_data` in a later `BeginAuthSessionViaCredentials` skips the email code. | SteamKit sample lines 75-80 | VERIFIED (SteamKit) |
@@ -245,8 +252,8 @@ Other upstream changes that matter to us:
 | go.mod | `go 1.26.0`. The local toolchain is 1.27.1, which is fine. |
 
 go-dota2 `master` (`6d32dc38d075`) depends on go-steam `336e824f8540` and also moved to lite messages, with
-`fix(gc): correlate requests and cancel ended sessions`. **We must bump both modules together**, and the
-`pkg/bot/manager.go` call sites will need changes (`LogOn` now takes a ctx and returns an error).
+`fix(gc): correlate requests and cancel ended sessions`. **We must bump both modules together**, and every
+`LogOn` call site changes (`LogOn` now takes a ctx and returns an error).
 
 ### 3.2 Alternatives if upstream is not adopted
 
@@ -347,9 +354,6 @@ secrets:
       # no shared_secret -> email Guard; service exposes POST /bots/{name}/guard-code
 ```
 
-The existing `BotConfig.SentryHash` (`pkg/config/config.go:52`) is obsolete. It is also never passed to `LogOn`
-(`pkg/bot/manager.go:81-84`).
-
 ---
 
 ## 5. Error handling and retry policy
@@ -377,17 +381,6 @@ Upstream `LogOnFailedEvent` also carries `Err` and `AuthSessionState`. Branch on
 that happen before the CM logon.
 
 ### 5.2 Reconnect and backoff strategy
-
-Problems in the current `pkg/bot/manager.go` **[VERIFIED by reading `manager.go:68-148`]**:
-
-1. On `LogOnFailedEvent` it schedules `Connect()` after 30s. Because `handleLogOnResponse` also calls
-   `Disconnect()`, a `DisconnectedEvent` follows and schedules **another** `Connect()` after 5s. That makes two
-   competing reconnects per failure, and a hard failure such as a bad password retries every 5 to 30 seconds,
-   which is exactly what gets an IP throttled.
-2. The delays are fixed with no jitter, so N bots reconnect in lockstep after a Steam outage.
-3. It never calls `steam.InitializeSteamDirectory()` (upstream now does this automatically).
-4. It never calls `dota.SetPlaying(true)` / `SayHello()` after logon (go-dota2 `client_session.go:14-38`), so no
-   GC session is ever started. That is out of scope for this track, but worth noting.
 
 Recommended state machine for each bot:
 
@@ -503,11 +496,10 @@ accounts.]**
 
 Dota 2 is free-to-play. A fresh account normally gets the free license the first time Dota 2 is "installed" or
 "played" from a client. go-steam has `EMsg_ClientRequestFreeLicense` (5572) and `CMsgClientRequestFreeLicense{appids}`
-but no helper, and `ClientLicenseList` (780) can confirm ownership. **[VERIFIED that the protos exist.
-UNCERTAIN whether the Dota GC refuses `ClientHello` from an account without the 570 license.]** The safe
-procedure: log in to each new bot account once in a real Steam client, add Dota 2 to the library, and launch it once
-(this also accepts the EULA and creates the Dota profile). Optionally implement a one-off
-`RequestFreeLicense(570)` helper.
+but no helper, and `ClientLicenseList` (780) can confirm ownership. **[VERIFIED that the protos exist.]** **[VERIFIED live (Q21)]:** an account that had never launched Dota 2 and
+has no client install got `PlayingSessionStateEvent` for app 570, a GC welcome and league lobbies
+([09](09-live-probe.md) §3), so a manual first launch is not required. Still untested: an account whose licence
+list lacks the free 570 entry. A one-off `RequestFreeLicense(570)` helper remains an option for that case.
 
 ### 7.3 One game session per account
 
@@ -523,8 +515,7 @@ procedure: log in to each new bot account once in a real Steam client, add Dota 
 
 ### 7.4 Several accounts in one process
 
-- Each bot needs its own `steam.Client` (its own TCP connection, event channel, heartbeat and GC session). The
-  existing manager already does this (`manager.go:55-63`). **[VERIFIED]**
+- Each bot needs its own `steam.Client` (its own TCP connection, event channel, heartbeat and GC session).
 - The **event channel must be drained continuously**. The pinned `Emit` blocks on a 30-buffer channel
   (`client.go:89-91`). Upstream `LogOn` performs HTTPS calls synchronously, so run it in its own goroutine (with a
   ctx and timeout) and not inside the event switch, or the reader can stall. **[INFERRED from the code]**
@@ -581,8 +572,8 @@ user API key, as covered in the other research tracks.
   credentials, deviceauth, gamenotifications, offline, parental, partnerapps, player and publishedfile).
 - Pinned go-steam CM transport is TCP-only, with static CM list `servers.go:13-34` and optional directory
   `steam_directory.go:17-58`.
-- Pinned logon failure emits `LogOnFailedEvent` **and** `Disconnect()` (`auth.go:131-137`), which causes the
-  double reconnect in `manager.go:101-143`.
+- Pinned logon failure emits `LogOnFailedEvent` **and** `Disconnect()` (`auth.go:131-137`), so a naive handler
+  schedules two reconnects per failure.
 - Upstream go-steam (2026-06-27 and later) implements HTTPS IAuthenticationService login with Steam Guard code
   submission, `AccessToken` logon, `Authenticate()` returning the token, and `PlayingSessionStateEvent`. It does
   not implement guard-data persistence or token renewal.
@@ -592,6 +583,12 @@ user API key, as covered in the other research tracks.
   `AccessToken = RefreshToken`.
 - Steam TOTP algorithm (HMAC-SHA1, 30s, 5 chars from a 26-char alphabet).
 - Official Valve Limited User Account rules on the $5 threshold and friend invites.
+
+### Verified live (2026-11-08, [09](09-live-probe.md))
+
+- Password + TOTP `Authenticate` on go-steam master returns a SteamClient refresh token (about 210-day lifetime)
+  with no prompt; token-only `LogOn` reaches the GC welcome in 1.7-7.4 s, across restarts.
+- An account that never launched Dota 2 gets a GC session.
 
 ### Likely
 
@@ -609,7 +606,7 @@ user API key, as covered in the other research tracks.
 
 - The exact date and Valve announcement for the final legacy-logon shutdown. A web search found none.
 - Whether limited accounts can send **GC lobby invites** or be added to leagues.
-- Whether the Dota GC requires an explicit app-570 free license before `ClientHello`.
+- Whether the Dota GC requires the app-570 free licence entry before `ClientHello` (a never-launched account worked).
 - Numeric per-IP or per-account login rate limits. Valve does not publish them.
 - How to renew SteamClient refresh tokens from Go (`GenerateAccessTokenForApp` with `renewal_type=Allow` over
   WebAPI versus CM). node-steam-session says WebAPI renewal only works for MobileApp tokens as of 2025-04.
@@ -619,17 +616,16 @@ user API key, as covered in the other research tracks.
 
 ## Sources
 
-### Local code
+### Module source
 
-- `/home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-steam@v0.0.0-20250502043548-f167ff28a93a/auth.go:22-39,52-82,103-140,142-195`
-- `.../go-steam@.../auth_events.go:9-47`
-- `.../go-steam@.../client.go:63-83,89-91,137-169,257-270`
-- `.../go-steam@.../servers.go:13-45`, `steam_directory.go:17-76`, `connection.go:16-40`, `web.go:52-116`, `gamecoordinator.go:68-80`
-- `.../go-steam@.../protocol/protobuf/client_server_login.pb.go:30-79,422-444`
-- `.../go-steam@.../protocol/protobuf/client_server_2.pb.go:4524,7042,7067`
-- `.../go-steam@.../protocol/steamlang/enums.go:3473-3572 (EResult), 3930-3958 (EAccountFlags), 727 (messages.go: MsgClientLogon_CurrentProtocol)`
-- `/home/kettle/.local/share/go/pkg/mod/github.com/paralin/go-dota2@v0.0.0-20250623204622-532cb1851217/client_session.go:14-38`
-- `/home/kettle/git_repos/dota_lobby/pkg/bot/manager.go:68-148`, `pkg/config/config.go:44-53`, `go.mod:6-7`
+- `go-steam@f167ff28a93a/auth.go:22-39,52-82,103-140,142-195`
+- `go-steam@f167ff28a93a/auth_events.go:9-47`
+- `go-steam@f167ff28a93a/client.go:63-83,89-91,137-169,257-270`
+- `go-steam@f167ff28a93a/servers.go:13-45`, `steam_directory.go:17-76`, `connection.go:16-40`, `web.go:52-116`, `gamecoordinator.go:68-80`
+- `go-steam@f167ff28a93a/protocol/protobuf/client_server_login.pb.go:30-79,422-444`
+- `go-steam@f167ff28a93a/protocol/protobuf/client_server_2.pb.go:4524,7042,7067`
+- `go-steam@f167ff28a93a/protocol/steamlang/enums.go:3473-3572 (EResult), 3930-3958 (EAccountFlags), 727 (messages.go: MsgClientLogon_CurrentProtocol)`
+- `go-dota2@532cb1851217/client_session.go:14-38`
 
 ### Upstream repositories (read via GitHub API)
 
@@ -662,24 +658,3 @@ user API key, as covered in the other research tracks.
 - Steam TOTP implementations: https://github.com/doctype/steam/blob/master/totp.go, https://github.com/DoctorMcKay/php-steam-totp/blob/master/src/SteamTotp.php, https://pkg.go.dev/github.com/creachadair/otp, https://github.com/juthrbog/lazybw/issues/115, https://github.com/geekdada/steam-otp/blob/master/otp/utils.go
 - Valve: Limited User Accounts: https://support.steampowered.com/kb/3330-IAGK-7663/limited-user-accounts
 
----
-
-## Verification notes
-
-Changes after verifier review (re-checked against `gh api` on 2026-11-06 and the pinned module source):
-
-- **TL;DR 1 / section 1.2 / section 10:** the statement that master was broken came from the PR author and
-  contributor markus-wa (2026-06-26T17:39Z), not the maintainer. paralin only asked, then wrote commit
-  `6b06e91640b1` on 2026-06-27. Also noted that `InvalidPassword` was already reported when the PR was opened on 2026-06-10.
-- **TL;DR 5:** only the friend-invite restriction for limited accounts is verified. The lobby-invite restriction is now marked UNCERTAIN.
-- **Section 2.2 and Sources:** removed SteamKit discussion #1258 as a source for "LogOff invalidates tokens". Its
-  only content is the sentry/UpdateMachineAuth deprecation. The LogOff claim now rests on DepotDownloader PR #5
-  alone and is softened to "can invalidate". In that report the failure was `AccessDenied`, not `InvalidPassword`.
-- **Sections 2.2, 5.1, 5.2 state machine:** a dead token is now any of `InvalidPassword`, `AccessDenied` (15),
-  `Revoked` (26), `Expired` (27) or `InvalidSignature`. The verifier gave `InvalidSignature` as 40; that is wrong. 40 is
-  `Blocked` in the pinned `enums.go:3508`, and SteamKit `eresult.steamd` has `InvalidSignature = 121`, which is
-  missing from the pinned go-steam enum.
-- **Section 3.1 commit table / section 10:** commit `e882f1724962` is titled "reconnect after unanswered heartbeats",
-  but upstream `client.go` only sets a 3x heartbeat read deadline and, on expiry, emits `FatalErrorEvent` and
-  disconnects (`failSession`). A grep for "reconnect" in upstream `client.go` finds nothing. go-steam does not
-  reconnect by itself.
