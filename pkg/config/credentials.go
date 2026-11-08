@@ -62,10 +62,24 @@ func readCredentialFile(path string) (credentialFile, error) {
 		return credentialFile{}, fmt.Errorf("parse credentials file %s: %w", path, err)
 	}
 	fields := map[string]string{}
-	for k, v := range raw {
-		if field, ok := credentialFileKeys[k]; ok && v != "" {
-			fields[field] = v
+	from := map[string]string{} // field -> the key that set it
+	keys := make([]string, 0, len(raw))
+	for k := range raw {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys) // a stable error, whichever key is seen first
+	for _, k := range keys {
+		field, ok := credentialFileKeys[k]
+		if !ok || raw[k] == "" {
+			continue
 		}
+		if prev, dup := fields[field]; dup && prev != raw[k] {
+			// Two aliases of one field that disagree: picking either is a
+			// coin flip. Only the key names are reported, never the values.
+			return credentialFile{}, fmt.Errorf("credentials file %s: keys %s and %s both set %s with different values",
+				path, from[field], k, field)
+		}
+		fields[field], from[field] = raw[k], k
 	}
 	return credentialFile{path: path, fields: fields}, nil
 }
