@@ -228,6 +228,12 @@ func (s *Supervisor) SubscribeInvites() (<-chan gc.InvitationCreated, func()) {
 	return s.client.SubscribeInvites()
 }
 
+// SubscribeChat streams the messages of the bot's chat channels; see
+// gc.Client.SubscribeChat.
+func (s *Supervisor) SubscribeChat() (<-chan gc.ChatMessage, func()) {
+	return s.client.SubscribeChat()
+}
+
 // Status returns the current status.
 func (s *Supervisor) Status() Status {
 	s.mu.Lock()

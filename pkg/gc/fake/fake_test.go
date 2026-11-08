@@ -275,3 +275,42 @@ func TestLobbyOps(t *testing.T) {
 		t.Fatal("no invite event")
 	}
 }
+
+func TestChat(t *testing.T) {
+	f := New()
+	id, err := f.JoinLobbyChat(t.Context(), 77)
+	if err != nil || id != 77+1<<32 {
+		t.Fatalf("JoinLobbyChat = %d, %v", id, err)
+	}
+	f.SetChatChannel(555)
+	if id, _ := f.JoinLobbyChat(t.Context(), 77); id != 555 {
+		t.Errorf("injected channel = %d", id)
+	}
+	refused := &gc.ChatJoinError{Channel: "Lobby_77", Result: "CHANNEL_FULL"}
+	f.FailNext("JoinLobbyChat", refused)
+	if _, err := f.JoinLobbyChat(t.Context(), 77); !errors.Is(err, refused) {
+		t.Errorf("JoinLobbyChat = %v, want the injected error", err)
+	}
+
+	msgs, stop := f.SubscribeChat()
+	defer stop()
+	f.EmitChat(gc.ChatMessage{ChannelID: 555, AccountID: 11, Text: "!help"})
+	select {
+	case m := <-msgs:
+		if m.AccountID != 11 || m.Text != "!help" {
+			t.Errorf("chat %+v", m)
+		}
+	default:
+		t.Fatal("no chat message")
+	}
+	if err := f.SendChat(555, "one"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.SendChat(555, "two")
+	if got := f.ChatSent(); len(got) != 2 || got[0] != "one" || got[1] != "two" {
+		t.Errorf("ChatSent = %v", got)
+	}
+	if err := f.LeaveChat(555); err != nil || f.CallCount("LeaveChat") != 1 {
+		t.Errorf("LeaveChat = %v", err)
+	}
+}

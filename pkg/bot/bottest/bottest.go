@@ -95,6 +95,9 @@ func (b *Bot) SubscribeInvites() (<-chan gc.InvitationCreated, func()) {
 	return b.client.SubscribeInvites()
 }
 
+// SubscribeChat implements bot.Handle.
+func (b *Bot) SubscribeChat() (<-chan gc.ChatMessage, func()) { return b.client.SubscribeChat() }
+
 // SetState sets the bot's state without touching Ready, e.g. to
 // needs_attention after SetReady(time.Time{}).
 func (b *Bot) SetState(st bot.State) {

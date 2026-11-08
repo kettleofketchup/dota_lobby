@@ -109,7 +109,40 @@ const (
 	msgPopup                 = uint32(protocol.EDOTAGCMsg_k_EMsgGCPopup)                             // 7102
 	msgLeagueAdminsRequest   = uint32(protocol.EDOTAGCMsg_k_EMsgDOTALeagueInfoListAdminsRequest)     // 7633
 	msgLeagueAdminsResponse  = uint32(protocol.EDOTAGCMsg_k_EMsgDOTALeagueInfoListAdminsReponse)     // 7634
+	msgJoinChatChannel       = uint32(protocol.EDOTAGCMsg_k_EMsgGCJoinChatChannel)                   // 7009
+	msgJoinChatResponse      = uint32(protocol.EDOTAGCMsg_k_EMsgGCJoinChatChannelResponse)           // 7010
 )
+
+// joinChatReply is the part of a 7010 the join needs.
+type joinChatReply struct {
+	ChannelName string
+	ChannelID   uint64
+	OK          bool
+	Result      string
+}
+
+// decodeJoinChat decodes a 7010 body.
+func decodeJoinChat(body []byte) (joinChatReply, error) {
+	var r protocol.CMsgDOTAJoinChatChannelResponse
+	if err := r.UnmarshalVT(body); err != nil {
+		return joinChatReply{}, fmt.Errorf("decode 7010 CMsgDOTAJoinChatChannelResponse: %w", err)
+	}
+	return joinChatReply{
+		ChannelName: r.GetChannelName(),
+		ChannelID:   r.GetChannelId(),
+		OK:          r.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS,
+		Result:      r.GetResult().String(),
+	}, nil
+}
+
+func chatMessage(m *protocol.CMsgDOTAChatMessage) ChatMessage {
+	return ChatMessage{
+		ChannelID:   m.GetChannelId(),
+		AccountID:   m.GetAccountId(),
+		PersonaName: m.GetPersonaName(),
+		Text:        m.GetText(),
+	}
+}
 
 // decodeGenericResult decodes a 7055 body. It is CMsgGenericResult, not
 // CMsgPracticeLobbyJoinResponse, which drops debug_message (gap-05 §5).

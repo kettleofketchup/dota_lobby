@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 )
@@ -93,6 +94,20 @@ type Client interface {
 	// Abandon is only for the experimental in-game delete path (Q14).
 	Abandon()
 	Destroy(ctx context.Context) error
+
+	// JoinLobbyChat joins the chat channel of a lobby, "Lobby_<id>" with
+	// the lobby channel type, and returns the channel ID. The GC does not
+	// echo the job ID on the reply (research 09 §9), so the reply is
+	// matched by channel name. A refused join is *ChatJoinError.
+	JoinLobbyChat(ctx context.Context, gcLobbyID uint64) (channelID uint64, err error)
+	// SendChat posts a message to a joined channel. Nothing confirms it.
+	SendChat(channelID uint64, text string) error
+	// LeaveChat leaves a joined channel.
+	LeaveChat(channelID uint64) error
+	// SubscribeChat streams the messages of every joined channel across
+	// reconnects, with the same drop-oldest policy as SubscribeLobby. They
+	// do not go to Events().
+	SubscribeChat() (<-chan ChatMessage, func())
 
 	// ListAdminLeagues asks the GC which leagues this account administers
 	// (7633 -> 7634). If the reply does not echo our job ID, a 7634 seen on
@@ -230,6 +245,36 @@ func (e *CreateError) Error() string {
 	default:
 		return "create lobby: " + string(e.Reason)
 	}
+}
+
+// LobbyChannelName is the chat channel name of a lobby.
+func LobbyChannelName(gcLobbyID uint64) string {
+	return "Lobby_" + strconv.FormatUint(gcLobbyID, 10)
+}
+
+// ChatJoinError is a chat join the GC refused.
+type ChatJoinError struct {
+	Channel string
+	// Result is the CMsgDOTAJoinChatChannelResponse result name, e.g.
+	// "USER_IN_TOO_MANY_CHANNELS".
+	Result string
+}
+
+func (e *ChatJoinError) Error() string { return "join chat " + e.Channel + ": " + e.Result }
+
+// ChatMessage is one message in a joined chat channel. AccountID is set by
+// the GC and identifies the sender; PersonaName is free text the sender
+// chose and must never be used to tell who sent a message.
+type ChatMessage struct {
+	ChannelID   uint64
+	AccountID   uint32
+	PersonaName string
+	Text        string
+}
+
+// LogValue leaves the persona name and text out of logs.
+func (m ChatMessage) LogValue() slog.Value {
+	return slog.GroupValue(slog.Uint64("channel_id", m.ChannelID), slog.Any("account_id", m.AccountID))
 }
 
 // Event is one normalized Steam or GC event. The concrete types below are
