@@ -30,8 +30,8 @@ func (SystemClock) Now() time.Time { return time.Now() }
 func (SystemClock) AfterFunc(d time.Duration, f func()) Timer { return time.AfterFunc(d, f) }
 
 // Gate spaces logons across every bot of a process: each Reserve gets a slot
-// at least stagger after the previous one (plan §4.1 staggered start), and
-// Pause holds all slots after a rate limit (plan §9). It is safe for
+// at least stagger after the previous one, and
+// Pause holds all slots after a rate limit. It is safe for
 // concurrent use.
 type Gate struct {
 	stagger time.Duration

@@ -25,7 +25,7 @@ const DefaultRequestTimeout = 10 * time.Second
 const workerQueue = 64
 
 // Worker runs GC requests for one bot on a single goroutine, in FIFO order,
-// so two requests of the same type never overlap (plan §6). The event pump
+// so two requests of the same type never overlap. The event pump
 // and supervisor never block on it.
 type Worker struct {
 	client  gc.Client

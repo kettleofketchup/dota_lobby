@@ -98,7 +98,7 @@ func (s *Store) Delete() error {
 // STEAM_REFRESH_TOKEN from the bot's credentials) when the seed is the
 // better token: nothing usable is stored (missing, unreadable or expired),
 // or the seed is a different token that expires later, which means an
-// operator minted a new one and shipped it through sops (plan §4.8). A seed
+// operator minted a new one and shipped it through sops. A seed
 // that is older than the stored token, the usual case once the service has
 // renewed, is ignored; renewals are never written back to sops. seeded
 // reports that the seed was saved. Without a seed or token it returns

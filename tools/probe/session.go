@@ -53,8 +53,8 @@ type packetWaiter struct {
 	ch      chan *gamecoordinator.GCPacket
 }
 
-// newSession builds a fresh steam+dota2 pair; the plan's D11 says never to
-// reuse them across connections.
+// newSession builds a fresh steam+dota2 pair; they are never reused across
+// connections.
 func newSession(cfg *config, rep *reporter) *session {
 	le := logrus.New()
 	if cfg.verbose {

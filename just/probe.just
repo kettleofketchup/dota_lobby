@@ -1,5 +1,5 @@
 # Phase 0 live probe (tools/probe), run with a bot's sops-decrypted credentials.
-# See docs/plans/2026-11-06-phase0-live-probe.md.
+# See tools/probe/README.md.
 
 set quiet
 set working-directory := ".."

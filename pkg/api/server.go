@@ -1,4 +1,4 @@
-// Package api is the service's HTTP API (plan §7). Health endpoints are
+// Package api is the service's HTTP API. Health endpoints are
 // open; everything else needs the API key when one is configured.
 package api
 
@@ -126,7 +126,7 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 // SetDraining makes /readyz fail so load balancers stop sending work, the
-// first step of shutdown (plan §6).
+// first step of shutdown.
 func (s *Server) SetDraining() { s.draining.Store(true) }
 
 // Shutdown drains, then stops the listener and waits for in-flight
@@ -147,11 +147,11 @@ func (s *Server) routes() http.Handler {
 	r.handle("GET /v1/bots/{name}", s.authed(s.handleBot))
 	r.handle("POST /v1/bots/{name}/retry", s.authed(s.handleBotRetry))
 
-	// Lobbies arrive in Phase 3.
+	// Lobby endpoints are not implemented yet.
 	r.handle("/v1/lobbies", s.authed(notImplemented))
 	r.handle("/v1/lobbies/", s.authed(notImplemented))
 
-	// The pre-v1 placeholders; nothing depends on them (plan §7).
+	// The pre-v1 placeholders; nothing depends on them.
 	r.handle("/bots", s.authed(gone("/v1/bots")))
 	r.handle("/lobby/create", s.authed(gone("/v1/lobbies")))
 	r.handle("/lobby/info", s.authed(gone("/v1/lobbies")))
@@ -242,7 +242,7 @@ func (s *Server) validKey(got string) bool {
 	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
-// errorBody is the error envelope shared by every endpoint (plan §7).
+// errorBody is the error envelope shared by every endpoint.
 type errorBody struct {
 	Error apiError `json:"error"`
 }

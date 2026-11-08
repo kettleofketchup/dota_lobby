@@ -1,7 +1,7 @@
 # probe
 
-Phase 0 live experiments against Steam and the Dota 2 GC. The plan, the accounts it needs and the run order are in
-[docs/plans/2026-11-06-phase0-live-probe.md](../../docs/plans/2026-11-06-phase0-live-probe.md).
+Live experiments against Steam and the Dota 2 GC. Each report line is tagged with the research question it answers
+(Q1, Q2, ...); the questions are listed in [docs/research/README.md](../../docs/research/README.md).
 
 This is its own Go module on the upstream go-steam/go-dota2 masters (`go 1.26.0`), separate from the service.
 

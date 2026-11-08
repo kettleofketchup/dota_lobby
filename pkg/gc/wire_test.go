@@ -74,7 +74,7 @@ func TestTVDelayRejectsUnknown(t *testing.T) {
 func TestVendoredTVEnumIsStale(t *testing.T) {
 	w120, _ := TVDelayToWire(120)
 	if int32(protocol.LobbyDotaTVDelay_LobbyDotaTV_120) == w120 {
-		t.Fatal("vendored LobbyDotaTV_120 now matches the current numbering; re-check plan D6")
+		t.Fatal("vendored LobbyDotaTV_120 now matches the current numbering; re-check the TV-delay table in wire.go")
 	}
 }
 

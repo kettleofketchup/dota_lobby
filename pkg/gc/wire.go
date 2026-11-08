@@ -11,7 +11,7 @@ import (
 // tvDelayWire is the current Valve numbering of LobbyDotaTVDelay
 // (GameTracking-Dota2 c592bf50, 2026-08-12). The vendored protocol constants
 // are the old numbering (their _120 is 1, which now means 60 s), so they must
-// never be used to build or read field 24/53 (plan D6, gap-04). The golden
+// never be used to build or read field 24/53 (gap-04). The golden
 // file testdata/lobby_tv_delay.golden pins this table.
 var tvDelayWire = []struct {
 	seconds uint32

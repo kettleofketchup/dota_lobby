@@ -52,6 +52,5 @@ Planned work, in order. No dates are promised.
 - Prometheus metrics.
 - Move the docs site from Material for MkDocs to Zensical before 2027-05.
 
-The design and the research behind it are in the repository under
-[`docs/plans/`](https://github.com/kettleofketchup/dota_lobby/tree/main/docs/plans) and
+The research behind the design is in the repository under
 [`docs/research/`](https://github.com/kettleofketchup/dota_lobby/tree/main/docs/research).

@@ -15,7 +15,7 @@ import (
 )
 
 // DefaultShutdownBudget is the per-process time Stop gives the bots to
-// disconnect (plan §6).
+// disconnect.
 const DefaultShutdownBudget = 15 * time.Second
 
 // ManagerOptions configures a Manager.

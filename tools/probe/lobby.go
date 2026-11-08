@@ -17,7 +17,7 @@ import (
 
 // tvDelaySeconds is the current Valve numbering of LobbyDotaTVDelay
 // (GameTracking c592bf50, 2026-08-12). The vendored enum constants are stale,
-// so the probe sends and reads raw wire values (plan D6).
+// so the probe sends and reads raw wire values.
 var tvDelaySeconds = map[int32]int{0: 10, 1: 60, 2: 120, 3: 300, 4: 900}
 
 // cmdCreate creates one lobby and records every signal the GC gives back:
@@ -408,7 +408,7 @@ func (s *session) watchLobby(ctx context.Context, events <-chan *socache.CacheEv
 
 // setDetails changes the details the lobby was created with and sends the
 // whole set. The GC treats SetLobbyDetails as a full replacement, so sending
-// only the changed field could reset the rest (plan §5.1).
+// only the changed field could reset the rest.
 func (s *session) setDetails(lobbyID uint64, change func(*protocol.CMsgPracticeLobbySetDetails)) {
 	if s.details == nil {
 		s.details = &protocol.CMsgPracticeLobbySetDetails{}

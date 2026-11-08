@@ -1,5 +1,5 @@
 // Package bot keeps each Steam bot logged on with a live Dota 2 GC session.
-// A Supervisor per bot owns the reconnect policy (plan §4.1): it executes
+// A Supervisor per bot owns the reconnect policy: it executes
 // what the pure next() decides, against a gc.Client, and never blocks on a
 // GC request. A Worker per bot serializes GC requests, and the Manager
 // builds both from config and owns the state-dir lock.
@@ -26,7 +26,7 @@ const (
 	// DefaultAuthTimeout bounds one Authenticate, Steam Guard included.
 	DefaultAuthTimeout = 2 * time.Minute
 	// DefaultRenewBefore re-authenticates when the refresh token expires
-	// within this window, which is also the alert threshold (plan §4.8).
+	// within this window.
 	DefaultRenewBefore = 14 * 24 * time.Hour
 	// DefaultRenewCheck is how often the token's expiry is looked at.
 	DefaultRenewCheck = 6 * time.Hour
@@ -201,8 +201,8 @@ func (s *Supervisor) Ready() bool { return s.Status().Ready }
 
 // Stalled reports whether the run loop is running but has not finished an
 // input for longer than maxAge. An idle loop wakes every DefaultHeartbeat,
-// so a stall means it is stuck, and with it the event pump that feeds it
-// (plan §6). A supervisor that is not running is never stalled.
+// so a stall means it is stuck, and with it the event pump that feeds it.
+// A supervisor that is not running is never stalled.
 func (s *Supervisor) Stalled(maxAge time.Duration) bool {
 	last := s.lastBeat.Load()
 	if last == 0 {
@@ -228,7 +228,7 @@ func (s *Supervisor) Start(ctx context.Context) {
 	})
 }
 
-// Stop shuts the bot down (plan §6): SetPlaying(false), Disconnect, then
+// Stop shuts the bot down: SetPlaying(false), Disconnect, then
 // waits for Disconnected. If ctx ends first the connection is cut hard and
 // ctx's error returned. Stop never logs off.
 func (s *Supervisor) Stop(ctx context.Context) error {

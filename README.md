@@ -7,8 +7,8 @@ league lobbies.
 **Status: Phase 1.** Bots log on headless (refresh token, with password +
 TOTP re-authentication), reach a GC session, reconnect with backoff, and
 report their true state. Lobby endpoints arrive in Phase 3 and answer
-`501 Not Implemented` until then. The design is in
-[docs/plans/2026-11-06-lobby-service-architecture.md](docs/plans/2026-11-06-lobby-service-architecture.md).
+`501 Not Implemented` until then. The research behind the design is in
+[docs/research/](docs/research/README.md).
 Read [Known limitations](https://kettleofketchup.github.io/dota_lobby/known-limitations/)
 before you use real accounts.
 

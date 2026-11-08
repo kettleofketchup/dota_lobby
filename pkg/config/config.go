@@ -1,7 +1,7 @@
 // Package config loads the service configuration: config.yaml for settings,
 // a secrets file for credentials, per-bot credential files in the sops format,
 // then DOTA_LOBBY_* environment overrides and DOTA_LOBBY_*_FILE indirection.
-// See plan §8 and research 07 §3.
+// See research 07 §3.
 package config
 
 import (
@@ -63,7 +63,7 @@ type ReadinessConfig struct {
 	MinReadyBots int `mapstructure:"min_ready_bots"`
 }
 
-// SteamConfig paces logons and reconnects (plan §4.1).
+// SteamConfig paces logons and reconnects.
 type SteamConfig struct {
 	LoginStagger        time.Duration `mapstructure:"login_stagger"`
 	ReconnectBackoffMin time.Duration `mapstructure:"reconnect_backoff_min"`
@@ -72,7 +72,7 @@ type SteamConfig struct {
 	CooldownElsewhere   time.Duration `mapstructure:"cooldown_elsewhere"`
 	// TOTPSkew is Steam's clock minus this host's, added before computing
 	// Steam Guard codes. Keep the host on NTP; this is for a host that
-	// cannot be (plan §4.8: code at now+skew).
+	// cannot be (code at now+skew).
 	TOTPSkew time.Duration `mapstructure:"totp_skew"`
 }
 

@@ -14,12 +14,12 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 )
 
-// httpShutdownTimeout bounds in-flight requests at shutdown (plan §6); the
+// httpShutdownTimeout bounds in-flight requests at shutdown; the
 // bots then get their own budget (bot.DefaultShutdownBudget).
 const httpShutdownTimeout = 5 * time.Second
 
 // serve runs the service until ctx ends (SIGINT/SIGTERM) or the listener
-// fails, then shuts down in plan §6 order: fail /readyz, stop HTTP, stop
+// fails, then shuts down in this order: fail /readyz, stop HTTP, stop
 // the bots, release the state-dir lock.
 func (c cli) serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)

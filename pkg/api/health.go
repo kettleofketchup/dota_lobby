@@ -75,7 +75,7 @@ type healthBody struct {
 }
 
 // /health is kept for old monitors: always 200, with the detail in the
-// body (plan §7.1).
+// body.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	now := s.opts.Now()
 	r := s.readiness()

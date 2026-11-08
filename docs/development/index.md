@@ -18,15 +18,13 @@ This page is for people changing the code or the docs. To run the service, start
 | `changelog.d/` | Changelog fragments, added by each pull request; see [Changelog](changelog.md) |
 | `CHANGELOG.md` | Release notes, assembled from `changelog.d/` at release time; never edited in a pull request |
 | `scripts/` | CI helper scripts (`ci-merge-base.sh`) |
-| `docs/` | This site (MkDocs Material). `docs/plans/` and `docs/research/` are not published |
+| `docs/` | This site (MkDocs Material). `docs/research/` is not published |
 | `Dockerfile`, `compose.yaml` | Image and single-machine deployment, see [Docker Compose](../deployment/docker-compose.md) |
 | `Dockerfile.docs`, `mkdocs.yml`, `pyproject.toml`, `uv.lock` | The docs toolchain |
 | `mise.toml` | Pinned Go and golangci-lint versions |
 
-The design is in
-[`docs/plans/2026-11-06-lobby-service-architecture.md`](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/plans/2026-11-06-lobby-service-architecture.md),
-and what Phase 1 delivered, with the open live-Steam questions, in
-[`docs/plans/2026-11-07-phase1-progress.md`](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/plans/2026-11-07-phase1-progress.md).
+The research behind the design, with the open live-Steam questions, is in
+[`docs/research/`](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/README.md).
 
 ## Toolchain
 
@@ -95,8 +93,8 @@ welcome, league listing). Its recipes take a bot's sops file and never print sec
 | `just probe run <bot> <cmd> ...` | Any probe command, for example `login` or `leagues` |
 | `just probe report <bot> <Q>` | Report lines for one question from `probe-state/<bot>/report.jsonl` |
 
-See `tools/probe/README.md` and
-[the Phase 0 plan](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/plans/2026-11-06-phase0-live-probe.md).
+See `tools/probe/README.md`; the questions it answers (Q1, Q2, ...) are listed in
+[`docs/research/README.md`](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/README.md).
 Never run the probe for a bot that a running service is using.
 
 ## Secrets recipes
@@ -148,9 +146,9 @@ anchors warnings, so a bad link fails the build. `just docs build` (Docker) and
 New pages must be added to `nav:` in `mkdocs.yml`.
 
 !!! note "Internal notes"
-    `docs/plans/`, `docs/research/` and `docs/superpowers/` hold design notes, research and
-    plans. They stay in the repository but are excluded from the published site
-    (`exclude_docs` in `mkdocs.yml`). Link to them with a full GitHub URL, never a relative
+    `docs/research/` holds research notes. It stays in the repository but is excluded from the
+    published site (`exclude_docs` in `mkdocs.yml`). Design plans (`docs/plans/`,
+    `docs/superpowers/`) are local working notes and are git-ignored. Link to them with a full GitHub URL, never a relative
     link: a relative link to an excluded page fails the strict build.
 
 ## Writing docs

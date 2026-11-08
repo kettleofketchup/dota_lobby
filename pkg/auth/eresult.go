@@ -57,7 +57,7 @@ func (e EResult) String() string {
 // Action is what the supervisor should do after a failed logon.
 type Action int
 
-// Actions, one per row of the plan §4.1 table.
+// Actions, one per row of the EResult policy table.
 const (
 	// ActionNone means the logon succeeded.
 	ActionNone Action = iota
@@ -138,7 +138,7 @@ func Classify(eresult int32, wasTokenLogon bool) Policy {
 	return Classifier{}.Classify(eresult, wasTokenLogon)
 }
 
-// Classify implements the plan §4.1 table. wasTokenLogon separates a dead
+// Classify implements the EResult policy table. wasTokenLogon separates a dead
 // token (re-auth once) from a bad password (stop and ask a human): Steam
 // reports both as InvalidPassword.
 func (c Classifier) Classify(eresult int32, wasTokenLogon bool) Policy {

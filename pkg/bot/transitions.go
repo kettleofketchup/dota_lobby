@@ -9,7 +9,7 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
 )
 
-// State is a bot's availability state (plan §4.1, §5.2). Only StateGCReady
+// State is a bot's availability state. Only StateGCReady
 // means the bot can take GC work.
 type State string
 
@@ -93,13 +93,13 @@ type Params struct {
 	DisconnectTimeout       time.Duration
 	// SettleDelay is the pause after logon before SetPlaying, which gives a
 	// PlayingSession{Blocked} the chance to arrive first, and again between
-	// SetPlaying and the first hello (plan §4.1: 500 ms).
+	// SetPlaying and the first hello (500 ms).
 	SettleDelay time.Duration
 	// StableAfter is how long gc_ready must last before the backoff resets.
 	StableAfter time.Duration
 	// TOTPRetryDelay waits out the current TOTP window after an 88.
 	TOTPRetryDelay time.Duration
-	// RateLimitPause holds every bot's logons after an 84/87 (plan §9).
+	// RateLimitPause holds every bot's logons after an 84/87.
 	RateLimitPause time.Duration
 	Classifier     auth.Classifier
 }
@@ -182,8 +182,7 @@ type Snapshot struct {
 	// another session may hold, and replace the disconnect timer.
 	Draining bool
 	// Pending is what the Disconnected that ends this connection will do.
-	// LogOnFailed, LoggedOff and PlayingBlocked only set it (plan §4.1:
-	// a single reconnect owner).
+	// LogOnFailed, LoggedOff and PlayingBlocked only set it, so a single reconnect owner decides.
 	Pending    auth.Policy
 	HasPending bool
 
@@ -192,7 +191,7 @@ type Snapshot struct {
 	Hellos   int
 
 	// LobbyStale is set when the GC session was lost: cached lobby objects
-	// are unknown until the next welcome (plan §4.1).
+	// are unknown until the next welcome.
 	LobbyStale    bool
 	SteamID       uint64
 	Limited       bool
@@ -296,7 +295,7 @@ func (StopTimer) isAction()    {}
 func (PauseLogons) isAction()  {}
 
 // next is the supervisor policy. It is pure: the same snapshot and input
-// always give the same result, so the whole of plan §4.1 is table-testable.
+// always give the same result, so the whole policy is table-testable.
 func next(s Snapshot, in Input) (Snapshot, []Action) {
 	st := &step{s: s}
 	switch in := in.(type) {
@@ -360,7 +359,7 @@ func (st *step) awaitSlot() {
 }
 
 // begin starts an attempt: a token logon if there is a token, otherwise a
-// credential Authenticate first (plan §4.8 login order).
+// credential Authenticate first.
 func (st *step) begin() {
 	st.disarm()
 	st.s.Pending, st.s.HasPending = auth.Policy{}, false
@@ -653,7 +652,7 @@ func (st *step) event(ev gc.Event) {
 		st.enter(StateSteamOnline, "")
 		st.arm(TimerSettle, s.Params.SettleDelay)
 	case gc.LogOnFailed:
-		// Record only: the Disconnected that follows decides (plan §4.1).
+		// Record only: the Disconnected that follows decides.
 		if ev.Result != 0 {
 			s.LastResult = auth.EResult(ev.Result)
 		}
@@ -707,7 +706,7 @@ func (st *step) event(ev gc.Event) {
 		s.Limited = ev.Limited()
 	case gc.PlayingSession:
 		// Another session holds the playing slot. Never kick it: stop
-		// playing, drop off and cool down (plan §4.1).
+		// playing, drop off and cool down.
 		if ev.Blocked && s.State.online() {
 			st.dropConn(auth.Policy{
 				Action:   auth.ActionCoolDown,

@@ -56,5 +56,6 @@ probe-state/
 .sops.yaml
 secrets/
 
-# Local planning notes (design specs and implementation plans)
+# Local planning notes (design specs and implementation plans); never committed
 docs/superpowers/
+docs/plans/

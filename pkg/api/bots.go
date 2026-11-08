@@ -9,7 +9,7 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 )
 
-// botView is one bot in /v1/bots (plan §7.2). 64-bit IDs are strings, and
+// botView is one bot in /v1/bots. 64-bit IDs are strings, and
 // unknown values are null rather than zero. Credentials never appear.
 type botView struct {
 	Name     string    `json:"name"`
@@ -86,7 +86,7 @@ func (s *Server) handleBot(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "no bot named "+strconv.Quote(name))
 }
 
-// handleBotRetry is the operator's way out of needs_attention (plan §4.1),
+// handleBotRetry is the operator's way out of needs_attention,
 // e.g. after `dota_lobby auth --bot <name> --force` stored a new token or a
 // password was fixed. It is a no-op for a bot that is not waiting.
 func (s *Server) handleBotRetry(w http.ResponseWriter, r *http.Request) {

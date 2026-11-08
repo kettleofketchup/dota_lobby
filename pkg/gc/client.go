@@ -1,5 +1,5 @@
 // Package gc is the seam between the service and Steam/Dota 2. It is the only
-// package allowed to import go-steam and go-dota2 (plan §3): everything else
+// package allowed to import go-steam and go-dota2: everything else
 // works with the domain types defined here, so an upstream API break stays
 // inside this package.
 package gc
@@ -14,7 +14,7 @@ import (
 // Client is one Steam account with its Dota 2 GC session. It is safe for one
 // event consumer plus one worker goroutine. Blocking methods take a ctx and
 // must never be called from the goroutine that drains Events(), because the
-// GC reader blocks until its events are consumed (plan §4.1, gap-01 §3).
+// GC reader blocks until its events are consumed (gap-01 §3).
 type Client interface {
 	// Connect dials Steam and logs on with creds once the CM handshake is
 	// done. It returns at once; the outcome arrives on Events(). ctx bounds
@@ -28,7 +28,7 @@ type Client interface {
 	// while disconnected. Failures from the auth session are *AuthError.
 	Authenticate(ctx context.Context, creds Credentials) (string, error)
 	// Disconnect ends the current connection. It does not block; a
-	// Disconnected event follows. It never logs off (plan §4.1).
+	// Disconnected event follows. It never logs off.
 	Disconnect()
 	// Events is the normalized event stream. It is shared by every
 	// connection this client makes and is never closed.
@@ -52,7 +52,7 @@ type Client interface {
 	// the returned func to stop.
 	SubscribeLobby() (<-chan LobbyEvent, func())
 	// CreateLobby leaves any stale lobby, sends a job-addressed create and
-	// waits for the lobby to appear in the SO cache (plan D5). A failed 7055
+	// waits for the lobby to appear in the SO cache. A failed 7055
 	// or a NOT_LEAGUE_ADMIN popup returns *CreateError. A lobby may still
 	// exist after an error, so callers check CurrentLobby before reuse.
 	CreateLobby(ctx context.Context, d LobbyDetails) (*LobbyView, error)
@@ -164,7 +164,7 @@ func (e *AuthError) NeedsGuard() bool {
 	return errors.Is(e.Err, ErrSteamGuardRequired)
 }
 
-// CreateFailure classifies a CreateLobby error (plan D3).
+// CreateFailure classifies a CreateLobby error.
 type CreateFailure string
 
 const (
@@ -228,7 +228,7 @@ type LogOnFailed struct {
 type LoggedOff struct{ Result EResult }
 
 // Disconnected is the last event of every connection, including a failed
-// dial. It is the one event that decides reconnects (plan §4.1). Conn is
+// dial. It is the one event that decides reconnects. Conn is
 // the number of the connection it ends (the nth successful Connect), so a
 // late Disconnected from an abandoned connection can be told from the
 // current one's; 0 means unknown.
@@ -265,7 +265,7 @@ type GCWelcomed struct{}
 
 // PlayingSession says whether another session holds the account's playing
 // slot. While Blocked, do not SetPlaying(true) or SayHello: it would kick
-// the other session (plan §4.1).
+// the other session.
 type PlayingSession struct {
 	Blocked bool
 	AppID   uint32
@@ -393,7 +393,7 @@ const (
 
 // LobbyDetails is what the service sets on a lobby. Zero values are sent as
 // zero, except where noted, because SetLobbyDetails is always sent with the
-// full merged set (plan §4.4).
+// full merged set.
 type LobbyDetails struct {
 	// LobbyID is required by the GC for SetLobbyDetails; 0 means the
 	// current lobby. Ignored by CreateLobby.

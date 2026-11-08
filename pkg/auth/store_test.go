@@ -318,7 +318,7 @@ func TestStoreLoadOrSeed(t *testing.T) {
 		{name: "stored token without seed", existing: &stored, wantID: 5},
 		{name: "nothing at all", wantErr: ErrNoToken},
 		{name: "seed is not a JWT", seed: "plain-old-string", anyErr: true},
-		// An operator shipped a fresh token through sops (plan §4.8).
+		// An operator shipped a fresh token through sops.
 		{name: "seed replaces an expired token", existing: &expired, seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
 		{name: "seed replaces an unreadable file", raw: "{not json", seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},
 		{name: "newer seed replaces a valid token", existing: &older, seed: config.Secret(seed), wantSeeded: true, wantID: 76561198000000009},

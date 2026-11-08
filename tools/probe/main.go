@@ -1,5 +1,5 @@
-// Command probe runs the Phase 0 live experiments against Steam and the
-// Dota 2 GC with a real bot account. See docs/plans/2026-11-06-phase0-live-probe.md.
+// Command probe runs live experiments against Steam and the
+// Dota 2 GC with a real bot account. See tools/probe/README.md.
 package main
 
 import (

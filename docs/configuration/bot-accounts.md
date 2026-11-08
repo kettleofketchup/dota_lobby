@@ -244,8 +244,8 @@ Still start with one bot, and add the next one once the first is `gc_ready`.
 ## What is still unverified
 
 Everything above is built and tested against fakes. These depend on a live account and are
-open until the Phase 0 probe has been run
-([progress report](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/plans/2026-11-07-phase1-progress.md#5-unverified-until-a-live-bot-account-exists)):
+open until the live probe has been run
+([open questions](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/README.md)):
 
 | Question | What is assumed | If it is wrong |
 |---|---|---|

@@ -335,7 +335,7 @@ func TestDisconnectTimeoutStillCoversDraining(t *testing.T) {
 }
 
 // TestPauseHoldsReservedSlots: a rate limit after a bot booked its slot
-// still holds that bot (plan §9: pause the other bots' logons).
+// still holds that bot (pause the other bots' logons).
 func TestPauseHoldsReservedSlots(t *testing.T) {
 	b := headlessBot()
 	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))

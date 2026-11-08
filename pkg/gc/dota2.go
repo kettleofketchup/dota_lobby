@@ -23,7 +23,7 @@ import (
 	"github.com/paralin/go-steam/steamid"
 )
 
-// EventBuffer is the size of the channel returned by Events (plan §6).
+// EventBuffer is the size of the channel returned by Events.
 const EventBuffer = 256
 
 // Options configures an Adapter.
@@ -42,7 +42,7 @@ type Options struct {
 // Adapter is the Client backed by go-steam and go-dota2. Create one per bot
 // and keep it across reconnects; each Connect builds a fresh steam.Client
 // and dota2.Dota2 pair with every handler registered before dialing, and the
-// pair is closed and dropped on disconnect (plan D11).
+// pair is closed and dropped on disconnect.
 type Adapter struct {
 	opts   Options
 	log    *slog.Logger
@@ -263,7 +263,7 @@ func (a *Adapter) current() *conn {
 }
 
 // pump is the one goroutine per connection that drains go-steam's events.
-// It only translates and forwards; it never makes a GC request (plan §6).
+// It only translates and forwards; it never makes a GC request.
 func (a *Adapter) pump(c *conn) {
 	for {
 		select {
