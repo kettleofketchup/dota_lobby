@@ -39,6 +39,7 @@ type config struct {
 	lobbyPass string
 	region    uint
 	gameMode  string
+	chat      bool
 }
 
 const usage = `usage: probe <command> [flags]
@@ -102,6 +103,7 @@ func main() {
 		fs.StringVar(&c.lobbyName, "name", "dota_lobby probe", "lobby name")
 		fs.StringVar(&c.lobbyPass, "pass", "probe", "lobby pass key (use a throwaway; it is captured)")
 		fs.UintVar(&c.region, "region", 0, "server region (0 = auto)")
+		fs.BoolVar(&c.chat, "chat", false, "with -hold, join the lobby chat and answer !commands")
 		fs.StringVar(&c.gameMode, "mode", "", "game mode: ap cm rd sd ar cd ad 1v1 turbo, or a DOTA_GameMode number (empty = GC default)")
 		fs.DurationVar(&c.createWindow, "window", 30*time.Second, "how long to wait for the create outcome")
 	}

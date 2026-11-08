@@ -141,6 +141,11 @@ func cmdCreate(ctx context.Context, c *config, rep *reporter) error {
 	})
 
 	if c.hold {
+		if c.chat {
+			if err := s.joinLobbyChat(ctx, lobby.GetLobbyId()); err != nil {
+				rep.emit("chat", "chat_join_failed", map[string]any{"error": err.Error()})
+			}
+		}
 		return s.console(ctx, lobbyEvents)
 	}
 	return s.leaveCurrentLobby(ctx)
@@ -227,6 +232,8 @@ const consoleHelp = `commands:
   seat <strategy>           self_kick | player_pool | spectator | caster | unassigned (Q5)
   tv <wire>                 set dota_tv_delay raw wire value (Q6)
   mode <name|id>            set the game mode: ap cm rd sd ar cd ad 1v1 turbo, or a number
+  chat                      join the lobby chat channel and answer !commands
+  say <text>                post a message in the lobby chat
   launch                    launch with an empty body (nonce check)
   leave | destroy           leave the lobby / destroy and leave
   quit                      leave and exit`
@@ -355,6 +362,17 @@ func (s *session) consoleCmd(ctx context.Context, f []string) error {
 		if l := s.currentLobby(); l != nil {
 			s.reportLobby("", "mode_result", l)
 		}
+	case "chat":
+		if lobby == nil {
+			return fmt.Errorf("not in a lobby")
+		}
+		return s.joinLobbyChat(ctx, lobby.GetLobbyId())
+	case "say":
+		ch := s.chatChannel.Load()
+		if ch == 0 || len(f) < 2 {
+			return fmt.Errorf("usage: say <text> (after chat)")
+		}
+		s.d.SendChannelMessage(ch, strings.Join(f[1:], " "))
 	case "launch":
 		s.d.LaunchLobby()
 		s.rep.emit("Q5", "launch_sent", map[string]any{"empty_body": true})
@@ -432,4 +450,84 @@ func parseGameMode(v string) (uint32, error) {
 		return 0, fmt.Errorf("unknown game mode %q", v)
 	}
 	return uint32(n), nil
+}
+
+// joinLobbyChat joins the lobby's chat channel. The "Lobby_<id>" name with
+// the Lobby channel type comes from other libraries and was confirmed live;
+// without the type the GC would make a new custom channel of that name.
+func (s *session) joinLobbyChat(ctx context.Context, lobbyID uint64) error {
+	name := fmt.Sprintf("Lobby_%d", lobbyID)
+	// The GC does not echo the job ID on 7010 (seen live 2026-11-08), so
+	// go-dota2's JoinChatChannel never completes. Send the join ourselves
+	// and match the reply by channel name instead.
+	replies, stop := s.watch(protocol.EDOTAGCMsg_k_EMsgGCJoinChatChannelResponse)
+	defer stop()
+	s.send(protocol.EDOTAGCMsg_k_EMsgGCJoinChatChannel, &protocol.CMsgDOTAJoinChatChannel{
+		ChannelName: new(name),
+		ChannelType: protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby.Enum(),
+	}, true)
+
+	timer := time.NewTimer(s.cfg.replyTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case p := <-replies:
+			resp := &protocol.CMsgDOTAJoinChatChannelResponse{}
+			if err := resp.UnmarshalVT(p.Body); err != nil || resp.GetChannelName() != name {
+				continue
+			}
+			fields := chatJoinFields(resp)
+			fields["requested_name"] = name
+			fields["target_job"] = uint64(p.TargetJobId)
+			s.rep.emit("chat", "chat_join", fields)
+			if resp.GetResult() != protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
+				return fmt.Errorf("join %s: %s", name, resp.GetResult())
+			}
+			s.chatChannel.Store(resp.GetChannelId())
+			return nil
+		case <-timer.C:
+			return fmt.Errorf("join %s: no reply within %s", name, s.cfg.replyTimeout)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func chatJoinFields(r *protocol.CMsgDOTAJoinChatChannelResponse) map[string]any {
+	return map[string]any{
+		"result":       r.GetResult().String(),
+		"channel_name": r.GetChannelName(),
+		"channel_id":   r.GetChannelId(),
+		"channel_type": r.GetChannelType().String(),
+		"members":      len(r.GetMembers()),
+		"gc_initiated": r.GetGcInitiatedJoin(),
+	}
+}
+
+// onChat logs every chat message and answers !commands in the joined lobby
+// channel. This only exercises the transport; the real command set belongs
+// to the service.
+func (s *session) onChat(m *protocol.CMsgDOTAChatMessage) {
+	text := strings.TrimSpace(m.GetText())
+	ch := s.chatChannel.Load()
+	s.rep.emit("chat", "chat_message", map[string]any{
+		"channel_id": m.GetChannelId(), "lobby_channel": ch != 0 && m.GetChannelId() == ch,
+		"account_id": m.GetAccountId(), "persona_name": m.GetPersonaName(), "text": text,
+	})
+	if ch == 0 || m.GetChannelId() != ch || m.GetAccountId() == s.sc.SteamId().GetAccountId() {
+		return
+	}
+	if !strings.HasPrefix(text, "!") {
+		return
+	}
+	cmd := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(text, "!")))
+	if f := strings.Fields(cmd); len(f) > 0 {
+		cmd = f[0]
+	}
+	reply := fmt.Sprintf("probe: got !%s from %s", cmd, m.GetPersonaName())
+	if cmd == "help" {
+		reply = "probe commands: !help, !ready, !start, !teams (test only, nothing happens yet)"
+	}
+	s.d.SendChannelMessage(ch, reply)
+	s.rep.emit("chat", "chat_reply", map[string]any{"command": cmd, "reply": reply})
 }
