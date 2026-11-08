@@ -487,9 +487,8 @@ type enforceState struct {
 // rostered players on the other side and strangers on a side are kicked to
 // the pool. With kick_strangers, strangers on a side or in the pool are
 // kicked out of the lobby; the caster and spectator slots are left alone.
-// The host,
-// members without a known team and coaches are never touched, and each
-// member gets at most one action per lobby.enforce_cooldown and
+// The host, members without a known team and coaches are never touched, and
+// each member gets at most one action per lobby.enforce_cooldown and
 // maxEnforcements in all.
 func planEnforcement(l Lobby, v *gc.LobbyView, host uint64, now time.Time, history map[uint32]enforceState, cfg config.LobbyConfig) []action {
 	roster := l.Spec.Teams

@@ -95,8 +95,8 @@ const (
 	TriggerAuto = "auto"
 )
 
-// Host seat strategies, in the order the research ranks them least to
-// most reported; the configured list decides the order actually tried.
+// Host seat strategies. docs/research/11-draftforge-integration.md §5.1
+// gives the evidence for each; the configured list decides the order tried.
 const (
 	SeatCaster     = "caster"
 	SeatSelfKick   = "self_kick"
