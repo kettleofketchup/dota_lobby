@@ -24,6 +24,25 @@ before you use real accounts.
 - [sops](https://github.com/getsops/sops) + age, if you keep bot
   credentials encrypted in the repo (`just secrets ...`).
 
+## Quick start (Docker Compose)
+
+Set up each bot account and its sops credentials file first, as described in
+[Bot accounts](https://kettleofketchup.github.io/dota_lobby/configuration/bot-accounts/).
+Then:
+
+```bash
+mkdir -p config && cp config.yaml.example config/config.yaml   # edit the bots list
+export DOTA_LOBBY_TAG=1.2.3   # image tag, no leading "v"
+just docker up                # decrypt secrets/bots/*.sops.yaml to a tmpfs, compose up -d
+curl -s http://127.0.0.1:8080/readyz
+just docker down              # stop and delete the decrypted files
+```
+
+The container keeps its token store in the `dota_lobby_state` volume; the
+decrypted credentials stay on a host tmpfs (`$XDG_RUNTIME_DIR/dota_lobby`)
+and are mounted read-only. See
+[Docker Compose](https://kettleofketchup.github.io/dota_lobby/deployment/docker-compose/).
+
 ## Build and test
 
 ```bash
