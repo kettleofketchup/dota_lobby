@@ -203,6 +203,10 @@ On each logon a bot uses, in order:
 1. the token in its token store, `<state_dir>/bots/<username>/token.json`;
 2. `STEAM_REFRESH_TOKEN`, which **seeds** the store when the store has nothing usable (no file,
    an unreadable file or an expired token), or when it expires later than the stored token;
+   A seed that Steam has refused (the bot logged on with it and was told the token is dead)
+   is remembered by its SHA-256 fingerprint in `rejected.sha256` next to `token.json`, and is
+   not seeded again on a retry or restart. Put a newly minted token in `STEAM_REFRESH_TOKEN`
+   to replace it.
 3. otherwise password plus a Steam Guard code computed from `STEAM_SHARED_SECRET`, after which
    the new token is stored.
 

@@ -99,6 +99,10 @@ When the refresh token has under 14 days left, the service renews it in the back
 the bot's password and Steam Guard code. Renewal follows the same rules as a logon: a refused
 password is never sent twice, a rate limit (84 or 87) pauses logons for every bot, and a
 Steam Guard code that Steam rejects (88) is retried in the next code window, at most twice.
+Renewal only starts while the bot is `gc_ready` with a token that has not expired. A bot that
+is reconnecting is renewed once it is back; if its token runs out first, the reconnect logs in
+with the password and mints a new token, so there is never more than one password login in
+flight and no repeated Steam Guard code.
 
 If renewal stops for something only you can fix, the log shows `token renewal stopped` and
 `renew_blocked` in `/v1/bots` names the reason (`bad_credentials`, `guard_required` or

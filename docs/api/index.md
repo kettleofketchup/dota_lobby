@@ -68,6 +68,7 @@ Every error is JSON with the same envelope:
 | `405` | `method_not_allowed` | Wrong method on a known path |
 | `410` | `gone` | One of the removed pre-v1 endpoints |
 | `501` | `not_implemented` | The lobby endpoints |
+| `503` | `unavailable` | A bot did not take a `retry` within 5 s because its run loop is backed up |
 
 `retryable` is `true` only for `503` and `504`.
 
@@ -183,7 +184,7 @@ bot.
 
 `202`. A bot in `needs_attention`, `backoff` or `cooling_down` re-reads its token store and
 tries again at once. For a bot in any other state it does nothing. `404` if there is no such
-bot. Use it after fixing the cause, typically after `dota_lobby auth --bot <name> --force`;
+bot, and `503` (`unavailable`, `retryable: true`) if the bot's run loop does not take the request within 5 seconds. Use it after fixing the cause, typically after `dota_lobby auth --bot <name> --force`;
 see [Recovering a bot](../operations/troubleshooting.md#recovering-a-bot-in-needs_attention).
 
 ```bash
