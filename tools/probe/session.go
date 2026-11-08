@@ -256,7 +256,7 @@ func (s *session) eventLoop(ctx context.Context, token string) {
 		case *devents.GCConnectionStatusChanged:
 			s.rep.emit("", "gc_status", map[string]any{"old": e.OldState.String(), "new": e.NewState.String()})
 		case *devents.JoinedChatChannel:
-			s.rep.emit("D10", "chat_joined_event", chatJoinFields(&e.CMsgDOTAJoinChatChannelResponse))
+			s.rep.emit("chat", "chat_joined_event", chatJoinFields(&e.CMsgDOTAJoinChatChannelResponse))
 		case *devents.ChatMessage:
 			go s.onChat(&e.CMsgDOTAChatMessage)
 		case *devents.Popup:

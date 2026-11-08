@@ -143,7 +143,7 @@ func cmdCreate(ctx context.Context, c *config, rep *reporter) error {
 	if c.hold {
 		if c.chat {
 			if err := s.joinLobbyChat(ctx, lobby.GetLobbyId()); err != nil {
-				rep.emit("D10", "chat_join_failed", map[string]any{"error": err.Error()})
+				rep.emit("chat", "chat_join_failed", map[string]any{"error": err.Error()})
 			}
 		}
 		return s.console(ctx, lobbyEvents)
@@ -232,7 +232,7 @@ const consoleHelp = `commands:
   seat <strategy>           self_kick | player_pool | spectator | caster | unassigned (Q5)
   tv <wire>                 set dota_tv_delay raw wire value (Q6)
   mode <name|id>            set the game mode: ap cm rd sd ar cd ad 1v1 turbo, or a number
-  chat                      join the lobby chat channel and answer !commands (D10)
+  chat                      join the lobby chat channel and answer !commands
   say <text>                post a message in the lobby chat
   launch                    launch with an empty body (nonce check)
   leave | destroy           leave the lobby / destroy and leave
@@ -453,8 +453,8 @@ func parseGameMode(v string) (uint32, error) {
 }
 
 // joinLobbyChat joins the lobby's chat channel. The "Lobby_<id>" name with
-// the Lobby channel type comes from other libraries and was confirmed live
-// (D10); without the type the GC would make a new custom channel of that name.
+// the Lobby channel type comes from other libraries and was confirmed live;
+// without the type the GC would make a new custom channel of that name.
 func (s *session) joinLobbyChat(ctx context.Context, lobbyID uint64) error {
 	name := fmt.Sprintf("Lobby_%d", lobbyID)
 	// The GC does not echo the job ID on 7010 (seen live 2026-11-08), so
@@ -479,7 +479,7 @@ func (s *session) joinLobbyChat(ctx context.Context, lobbyID uint64) error {
 			fields := chatJoinFields(resp)
 			fields["requested_name"] = name
 			fields["target_job"] = uint64(p.TargetJobId)
-			s.rep.emit("D10", "chat_join", fields)
+			s.rep.emit("chat", "chat_join", fields)
 			if resp.GetResult() != protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS {
 				return fmt.Errorf("join %s: %s", name, resp.GetResult())
 			}
@@ -510,7 +510,7 @@ func chatJoinFields(r *protocol.CMsgDOTAJoinChatChannelResponse) map[string]any 
 func (s *session) onChat(m *protocol.CMsgDOTAChatMessage) {
 	text := strings.TrimSpace(m.GetText())
 	ch := s.chatChannel.Load()
-	s.rep.emit("D10", "chat_message", map[string]any{
+	s.rep.emit("chat", "chat_message", map[string]any{
 		"channel_id": m.GetChannelId(), "lobby_channel": ch != 0 && m.GetChannelId() == ch,
 		"account_id": m.GetAccountId(), "persona_name": m.GetPersonaName(), "text": text,
 	})
@@ -529,5 +529,5 @@ func (s *session) onChat(m *protocol.CMsgDOTAChatMessage) {
 		reply = "probe commands: !help, !ready, !start, !teams (test only, nothing happens yet)"
 	}
 	s.d.SendChannelMessage(ch, reply)
-	s.rep.emit("D10", "chat_reply", map[string]any{"command": cmd, "reply": reply})
+	s.rep.emit("chat", "chat_reply", map[string]any{"command": cmd, "reply": reply})
 }
