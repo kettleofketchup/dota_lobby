@@ -86,9 +86,10 @@ func (m *Manager) doGC(ctx context.Context, h bot.Handle, op string, fn func(ctx
 }
 
 // create has the bot create the lobby and checks the league read back.
+// It does not hold the lobby's op lock: a create may take up to
+// gc.create_timeout, and a DELETE meanwhile must answer at once. Every
+// result is applied through commit, which keeps a closing state.
 func (m *Manager) create(ctx context.Context, e *entry, h bot.Handle) {
-	e.op.Lock()
-	defer e.op.Unlock()
 	l := e.snapshot()
 	details := l.Spec.details(m.opts.Lobby, 0)
 	cctx, cancel := context.WithTimeout(ctx, m.opts.GC.CreateTimeout)

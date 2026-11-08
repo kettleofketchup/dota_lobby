@@ -385,6 +385,25 @@ func TestCreateFailures(t *testing.T) {
 	}
 }
 
+// A DELETE during a slow create answers at once; the lobby closes when
+// the create returns.
+func TestCloseDuringCreate(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	b := h.bot("bot1")
+	b.fc.BlockUntilDone("CreateLobby", true)
+	l := h.create(spec("game-1"))
+	h.waitCalls(b, "CreateLobby", 1)
+	start := time.Now()
+	closing, changed, err := h.m.Close(context.Background(), l.ID)
+	if err != nil || !changed || closing.State != StateClosing {
+		t.Fatalf("Close = %s %v %v", closing.State, changed, err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Errorf("Close waited %s for the create", d)
+	}
+	h.waitState(l.ID, StateClosed)
+}
+
 func TestBotNotReadyRequeues(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	b := h.bot("bot1")
