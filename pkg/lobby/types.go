@@ -355,7 +355,7 @@ func (m Match) Scored() *bool {
 	return &v
 }
 
-// outcomeNames are the EMatchOutcome names (research 06 §3.2).
+// outcomeNames are the EMatchOutcome names (research 06 §1.4).
 var outcomeNames = map[int32]string{
 	0:  "unknown",
 	2:  "radiant_victory",
