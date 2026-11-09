@@ -186,7 +186,8 @@ type BackupConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Dir     string `mapstructure:"dir"`
 	// Keep is how many automatic backups are kept; older ones are deleted
-	// after a new one is written. On-demand backups are never deleted.
+	// once the migrations after a new one have succeeded. On-demand
+	// backups do not count and are not pruned by this setting.
 	Keep int `mapstructure:"keep"`
 }
 

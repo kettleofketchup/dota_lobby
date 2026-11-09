@@ -215,7 +215,7 @@ func Load(opts Options) (*Config, error) {
 }
 
 // strictDecode rejects unknown keys so a typo fails loudly instead of being
-// silently ignored (the pre-PR loader never read sentry_hash), and refuses
+// silently ignored (sentry_hash was once ignored this way), and refuses
 // secrets that YAML did not read as strings.
 func strictDecode(c *mapstructure.DecoderConfig) {
 	c.ErrorUnused = true
