@@ -23,7 +23,11 @@ the API.
 | `GET` | `/v1/bots` | When an API key is set | Every bot and its state |
 | `GET` | `/v1/bots/{name}` | When an API key is set | One bot |
 | `POST` | `/v1/bots/{name}/retry` | When an API key is set | Make a waiting bot try again now |
-| `GET` | `/v1/leagues` | When an API key is set | Every league a bot may host, and which bots hold it |
+| `GET` | `/v1/bots/{name}/leagues` | When an API key is set | One bot's leagues, its last league refresh and recent ticket changes |
+| `POST` | `/v1/bots/{name}/leagues/refresh` | When an API key is set | Fetch one bot's leagues from the game coordinator now |
+| `GET` | `/v1/leagues` | When an API key is set | Every league a bot may host, which bots hold it and how many are free |
+| `GET` | `/v1/leagues/{id}` | When an API key is set | One league in that shape |
+| `POST` | `/v1/leagues/refresh` | When an API key is set | Fetch every ready bot's leagues now |
 | `GET` | `/v1/leagues/{id}/nodes` | When an API key is set | A league's lobby nodes, asked from the game coordinator |
 | `POST` | `/v1/lobbies` | When an API key is set | Ask for a lobby; it is created in the background |
 | `GET` | `/v1/lobbies` | When an API key is set | List lobbies, newest first |
@@ -134,7 +138,7 @@ A request that fails validation gets `422` with every problem listed in `errors`
 | `404` | `not_found` | Unknown path, no bot with that name, no lobby with that ID, or no configured bot holds that league |
 | `405` | `method_not_allowed` | Wrong method on a known path |
 | `409` | `conflict` | `external_ref` is used by an active lobby whose request was different |
-| `409` | `invalid_state` | The action is not allowed in the lobby's current state; `detail` names the state |
+| `409` | `invalid_state` | The action is not allowed in the lobby's current state; `detail` names the state. Also a league refresh while `league.sources` does not include `gc` |
 | `409` | `not_ready` | A launch without `force` while the lobby is `waiting`; `detail` lists what is missing |
 | `409` | `host_not_seated` | A launch while the host bot is still on a team |
 | `410` | `gone` | One of the removed pre-v1 endpoints |
@@ -145,7 +149,7 @@ A request that fails validation gets `422` with every problem listed in `errors`
 | `422` | `unknown_game_mode`, `unknown_region` | A name that is not in `lobby.game_modes` or `lobby.regions`, and not a number |
 | `429` | `invite_limited` | Every requested invite is within `lobby.invite.min_resend` or past `lobby.invite.max_per_player`. `Retry-After` is set unless every player reached the cap |
 | `500` | `internal` | A bug. The cause is logged, never sent |
-| `503` | `unavailable` | A bot did not take a `retry` within 5 s because its run loop is backed up, no ready bot can answer a game coordinator request, or the service is shutting down |
+| `503` | `unavailable` | A bot did not take a `retry` within 5 s because its run loop is backed up, no ready bot can answer a game coordinator request (a league refresh for a bot that is not `gc_ready` included), or the service is shutting down |
 | `504` | `gc_timeout` | The game coordinator did not answer within `gc.request_timeout` |
 
 A rejected body is never echoed back whole, so a lobby password in it does not end up in a
@@ -278,6 +282,59 @@ curl -fsS -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/league_bot_
 
 Retrying a cooldown early is allowed but rarely wise: Steam set it for a reason.
 
+## `GET /v1/bots/{name}/leagues`
+
+```json
+{
+  "bot": "league_bot_1",
+  "leagues": [
+    {"league_id": 17929, "name": "Spring Cup", "source": "gc", "verified": true,
+     "first_seen_at": "2026-11-01T09:12:40Z", "refreshed_at": "2026-11-08T11:48:04Z", "stale": false}
+  ],
+  "refresh": {"ok_at": "2026-11-08T11:48:04Z", "error": null, "error_at": null},
+  "changes": [
+    {"league_id": 20004, "change": "removed", "at": "2026-11-08T11:48:04Z"},
+    {"league_id": 17929, "change": "added", "at": "2026-11-01T09:12:40Z"}
+  ]
+}
+```
+
+What one bot holds and how its list is kept. The name is matched case-insensitively; `404` if
+there is no such bot.
+
+| Field | Meaning |
+|---|---|
+| `leagues` | The leagues the bot may host, by `league_id`, with the fields of [`GET /v1/leagues`](#get-v1leagues); `[]` when none |
+| `refresh.ok_at` | The last successful fetch of the bot's game coordinator list, or `null` if none yet |
+| `refresh.error`, `refresh.error_at` | Why and when the last fetch failed, or `null` when none failed since `ok_at` |
+| `changes` | Leagues that appeared in (`added`) or disappeared from (`removed`) the bot's game coordinator list, newest first, at most 50. `at` is the refresh that saw it, so a ticket granted between two refreshes shows up at the second. The first list a bot ever reports counts as added |
+
+Changes and first-seen times are kept in the database, and each change is logged at info as
+`bot league tickets changed` with `added` and `removed`.
+
+```bash
+curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/league_bot_1/leagues
+```
+
+## `POST /v1/bots/{name}/leagues/refresh`
+
+Fetches the bot's game coordinator list now, through the bot's GC worker, instead of waiting
+for `league.refresh_interval`, and answers the updated
+[`GET /v1/bots/{name}/leagues`](#get-v1botsnameleagues). Use it right after a ticket was added
+or taken away.
+
+| Status | When |
+|---|---|
+| `200` | The list was fetched |
+| `404 not_found` | No bot with that name |
+| `409 invalid_state` | `league.sources` does not include `gc` |
+| `503 unavailable` | The bot is not `gc_ready`, or the request failed; the previous list stays. Retry later |
+| `504 gc_timeout` | No answer within `gc.request_timeout` (10 s, capped at 12 s), time spent queued behind the bot's other GC requests included |
+
+```bash
+curl -fsS -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/league_bot_1/leagues/refresh
+```
+
 ## `GET /v1/leagues`
 
 ```json
@@ -286,6 +343,16 @@ Retrying a cooldown early is allowed but rarely wise: Steam set it for a reason.
     {
       "league_id": 17929,
       "name": "Spring Cup",
+      "holders": [
+        {"bot": "league_bot_1", "source": "gc", "verified": true,
+         "first_seen_at": "2026-11-01T09:12:40Z", "refreshed_at": "2026-11-08T11:48:04Z",
+         "bot_state": "gc_ready", "ready": true, "lobby_id": "lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"},
+        {"bot": "league_bot_2", "source": "config", "verified": false,
+         "first_seen_at": null, "refreshed_at": null,
+         "bot_state": "gc_ready", "ready": true, "lobby_id": null}
+      ],
+      "holders_total": 2,
+      "holders_free": 1,
       "bots": [
         {"name": "league_bot_1", "source": "gc", "verified": true,
          "refreshed_at": "2026-11-08T11:48:04Z", "stale": false},
@@ -298,11 +365,14 @@ Retrying a cooldown early is allowed but rarely wise: Steam set it for a reason.
 ```
 
 Every league at least one enabled bot may host lobbies for, by `league_id`, with those bots in
-config order. A bot gets its leagues from two sources:
+config order. League "tickets" are granted by hand: an organisation admin adds a bot's Steam
+account to the league's admins (see
+[Adding a league ticket](../configuration/bot-accounts.md#adding-a-league-ticket)), so bots
+usually hold different leagues. A bot gets its leagues from two sources:
 
 | `source` | Where the list comes from | `verified` |
 |---|---|---|
-| `gc` | The game coordinator's list of leagues the bot's Steam account administers, fetched when the bot reaches `gc_ready` and every `league.refresh_interval` (30 min) after | `true` |
+| `gc` | The game coordinator's list of leagues the bot's Steam account administers, fetched when the bot reaches `gc_ready`, every `league.refresh_interval` (30 min) after, and on [`POST /v1/bots/{name}/leagues/refresh`](#post-v1botsnameleaguesrefresh) | `true` |
 | `config` | The bot's `leagues` in `config.yaml` | `false` |
 
 The game coordinator list wins. A bot's configured leagues count only until its list has been
@@ -310,14 +380,62 @@ fetched once, or always when `league.allow_unverified` is `true`. A league the g
 does not list for a bot is not shown for that bot, even if it is configured; see
 [A bot does not list my league](../operations/troubleshooting.md#a-bot-does-not-list-my-league).
 
+A new lobby only ever goes to a holder listed here that is free. A league that appears in a
+bot's list counts for the next lobby at once; one that disappears stops new lobbies going to
+that bot but does not touch a lobby it already hosts.
+
 | Field | Meaning |
 |---|---|
 | `name` | The league's name from the game coordinator, or `null` until a bot has fetched it in this run |
-| `refreshed_at` | When the game coordinator list was fetched; `null` for `config` |
-| `stale` | The list was saved by an earlier run and has not been fetched again since the service started (the bot is not ready yet) |
+| `holders[].first_seen_at` | When the league first appeared in the bot's game coordinator list; `null` for `config`. Kept while the league stays in the list |
+| `holders[].refreshed_at` | When the bot's game coordinator list was last fetched; `null` for `config` |
+| `holders[].bot_state`, `holders[].ready` | The bot's `state` and `ready`, as in [`GET /v1/bots`](#get-v1bots) |
+| `holders[].lobby_id` | The lobby the bot hosts now, or `null` |
+| `holders_total` | How many bots hold the league |
+| `holders_free` | How many of them could take a new lobby now: `gc_ready`, lobby cache current (`lobby_stale` false) and no `lobby_id` |
+| `bots` | The holders in the shape earlier releases answered, kept for existing clients; prefer `holders` |
+| `bots[].stale` | The list was saved by an earlier run and has not been fetched again since the service started (the bot is not ready yet) |
 
 Lists are kept in the database, so they are available right after a restart, marked `stale`.
 `leagues` is `[]` when no bot holds any league.
+
+## `GET /v1/leagues/{id}`
+
+One league in the shape `GET /v1/leagues` lists. `404 not_found` when no enabled bot holds it,
+`422 invalid_request` when `id` is not a positive 32-bit number.
+
+```bash
+curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/leagues/17929
+```
+
+## `POST /v1/leagues/refresh`
+
+```json
+{
+  "results": [
+    {"bot": "league_bot_1", "status": "ok", "error": null, "leagues": [17929, 20004]},
+    {"bot": "league_bot_2", "status": "failed", "error": "the game coordinator did not answer in time", "leagues": [17929]},
+    {"bot": "league_bot_3", "status": "not_ready", "error": null, "leagues": []}
+  ]
+}
+```
+
+Fetches the game coordinator list of every `gc_ready` bot now, four bots at a time, the whole
+call bounded by `gc.request_timeout` (10 s, capped at 12 s). Every enabled bot gets a result, in
+config order:
+
+| `status` | Meaning |
+|---|---|
+| `ok` | The list was fetched; `leagues` is what the bot holds now |
+| `failed` | The request failed (`error` says why); the previous list stays |
+| `not_ready` | The bot was not `gc_ready` and was not asked |
+
+`200` whatever each bot's outcome; `409 invalid_state` when `league.sources` does not include
+`gc`.
+
+```bash
+curl -fsS -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/leagues/refresh
+```
 
 ## `GET /v1/leagues/{id}/nodes`
 

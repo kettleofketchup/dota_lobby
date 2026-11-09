@@ -151,8 +151,11 @@ When a league is missing for a bot:
 
 3. If the game coordinator does not list the league, the bot's Steam account is not one of the
    league's admins. Add it on [dota2.com/league](https://www.dota2.com/league), under the
-   league's **Admins**, using the account's Steam ID from `/v1/bots`. Then wait for the next
-   refresh, or make the bot reconnect (a restart of the service fetches every list again).
+   league's **Admins**, using the account's Steam ID from `/v1/bots`. Then fetch the list
+   again with `POST /v1/bots/<name>/leagues/refresh`, or wait for the next refresh; see
+   [Adding a league ticket](../configuration/bot-accounts.md#adding-a-league-ticket).
+   `GET /v1/bots/<name>/leagues` shows the last refresh's outcome and when each league
+   appeared or disappeared.
 
 Configured leagues are only a fallback, because a lobby created for a league the account does
 not administer is refused by the game coordinator. `league.allow_unverified: true` keeps them in
