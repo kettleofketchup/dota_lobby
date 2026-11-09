@@ -73,6 +73,7 @@ nav:
   - API: api/index.md
   - Operations:
       - Troubleshooting: operations/troubleshooting.md
+      - Lobby chat: operations/lobby-chat.md
       - Known limitations: known-limitations.md
   - Development:
       - Overview: development/index.md

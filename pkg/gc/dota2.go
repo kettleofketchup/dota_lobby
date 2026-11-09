@@ -66,6 +66,7 @@ type Adapter struct {
 
 	lobbies *fanout[LobbyEvent]
 	invites *fanout[InvitationCreated]
+	chats   *fanout[ChatMessage]
 }
 
 var _ Client = (*Adapter)(nil)
@@ -95,6 +96,7 @@ func New(opts Options) *Adapter {
 		},
 		lobbies: newFanout[LobbyEvent](16),
 		invites: newFanout[InvitationCreated](16),
+		chats:   newFanout[ChatMessage](32),
 	}
 }
 
@@ -441,6 +443,11 @@ func (a *Adapter) translate(c *conn, raw any) (Event, bool) {
 		return ev, true
 	case *devents.MatchSignedOut:
 		return MatchSignedOut{MatchID: e.GetMatchId()}, true
+	case *devents.ChatMessage:
+		// Chat only goes to SubscribeChat: a busy channel must not fill
+		// the supervisor's event stream.
+		a.chats.publish(chatMessage(&e.CMsgDOTAChatMessage))
+		return nil, false
 	}
 	return nil, false
 }
@@ -924,6 +931,81 @@ func (a *Adapter) Destroy(ctx context.Context) error {
 	}
 	return nil
 }
+
+// --- chat ---
+
+// JoinLobbyChat implements Client. It sends the join itself instead of
+// go-dota2's JoinChatChannel, whose MakeRequest waits for a job ID the GC
+// never echoes on 7010, and watches the tap for the reply with our
+// channel name. A refusal that names no channel is taken as the answer to
+// this join too: the bot's GC worker runs one join at a time, and
+// waiting it out would only hide the result.
+func (a *Adapter) JoinLobbyChat(ctx context.Context, gcLobbyID uint64) (uint64, error) {
+	c, err := a.session("join lobby chat")
+	if err != nil {
+		return 0, err
+	}
+	name := LobbyChannelName(gcLobbyID)
+	replies, stop := c.tap.watch(msgJoinChatResponse)
+	defer stop()
+	job := c.tap.nextJob()
+	msg := gamecoordinator.NewGCMsgProtobuf(dota2.AppID, msgJoinChatChannel, &protocol.CMsgDOTAJoinChatChannel{
+		ChannelName: &name,
+		// Without the lobby type the GC makes a new custom channel of
+		// that name.
+		ChannelType: protocol.DOTAChatChannelTypeT_DOTAChannelType_Lobby.Enum(),
+	})
+	msg.SetSourceJobId(sprotocol.JobId(job))
+	c.t.Write(msg)
+	a.log.Debug("chat join sent", "channel", name, "source_job", job)
+	for {
+		select {
+		case p := <-replies:
+			r, err := decodeJoinChat(p.Body)
+			if err != nil {
+				a.log.Warn("chat join reply", "err", err)
+				continue
+			}
+			if r.ChannelName != name && (r.ChannelName != "" || r.OK) {
+				continue
+			}
+			if !r.OK {
+				return 0, &ChatJoinError{Channel: name, Result: r.Result}
+			}
+			return r.ChannelID, nil
+		case <-ctx.Done():
+			return 0, fmt.Errorf("join chat %s: %w", name, ctx.Err())
+		case <-c.stop:
+			return 0, fmt.Errorf("join chat %s: %w", name, ErrNotConnected)
+		}
+	}
+}
+
+// SendChat implements Client.
+func (a *Adapter) SendChat(channelID uint64, text string) error {
+	c, err := a.session("send chat")
+	if err != nil {
+		return err
+	}
+	if channelID == 0 || text == "" {
+		return errors.New("send chat: need a channel and a text")
+	}
+	c.d.SendChannelMessage(channelID, text)
+	return nil
+}
+
+// LeaveChat implements Client.
+func (a *Adapter) LeaveChat(channelID uint64) error {
+	c, err := a.session("leave chat")
+	if err != nil {
+		return err
+	}
+	c.d.LeaveChatChannel(channelID)
+	return nil
+}
+
+// SubscribeChat implements Client.
+func (a *Adapter) SubscribeChat() (<-chan ChatMessage, func()) { return a.chats.subscribe() }
 
 // --- league / match ---
 

@@ -83,9 +83,13 @@ lobby:
   readopt_timeout: 5m      # after a restart, waiting for the lobby's bot
   drain_timeout: 10s
   destroy_on_shutdown: false  # false leaves lobbies for the next start
-  admins: []               # account IDs for admin chat commands (later)
+  admins: []               # account IDs allowed admin chat commands in every lobby
   invite: { min_resend: 30s, max_per_player: 5 }
-  chat: { enabled: false }
+  chat:
+    enabled: false         # true: the bot joins each lobby's chat and answers commands
+    prefix: "!"            # not "/": the Dota client never sends those
+    send_interval: 1s      # between two bot messages in one lobby
+    start_countdown: 10s   # from a start command to the launch
   # Wire values are unconfirmed; keep them current by hand.
   regions: { us_west: 1, us_east: 2, europe: 3, sea: 5 }
   game_modes: { ap: 1, cm: 2, cd: 16, ad: 22, turbo: 23 }

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -99,6 +100,11 @@ func (c *Config) Validate() error {
 		if id == 0 {
 			add("lobby.admins: 0 is not an account ID")
 		}
+	}
+	positive("lobby.chat.send_interval", c.Lobby.Chat.SendInterval)
+	positive("lobby.chat.start_countdown", c.Lobby.Chat.StartCountdown)
+	if p := c.Lobby.Chat.Prefix; p == "" || len(p) > 4 || strings.HasPrefix(p, "/") || strings.ContainsFunc(p, unicode.IsSpace) {
+		add("lobby.chat.prefix %q must be 1-4 characters without spaces and must not start with \"/\" (the Dota client never sends those)", p)
 	}
 	positive("store.retention", c.Store.Retention)
 	positive("match.settle_after", c.Match.SettleAfter)

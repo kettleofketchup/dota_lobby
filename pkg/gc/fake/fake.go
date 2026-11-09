@@ -43,6 +43,8 @@ type Client struct {
 	matches      map[uint64]*gc.MatchResult
 	lobbySubs    map[chan gc.LobbyEvent]struct{}
 	inviteSubs   map[chan gc.InvitationCreated]struct{}
+	chatSubs     map[chan gc.ChatMessage]struct{}
+	chatChannel  uint64
 	reactions    map[string]func(args []any)
 	blockOnCtx   map[string]bool
 	stickyErrors map[string]error
@@ -62,6 +64,7 @@ func New() *Client {
 		matches:      map[uint64]*gc.MatchResult{},
 		lobbySubs:    map[chan gc.LobbyEvent]struct{}{},
 		inviteSubs:   map[chan gc.InvitationCreated]struct{}{},
+		chatSubs:     map[chan gc.ChatMessage]struct{}{},
 		reactions:    map[string]func(args []any){},
 		blockOnCtx:   map[string]bool{},
 		stickyErrors: map[string]error{},
@@ -245,6 +248,37 @@ func (f *Client) EmitInvite(ev gc.InvitationCreated) {
 		default:
 		}
 	}
+}
+
+// SetChatChannel sets the channel ID JoinLobbyChat returns. Without it
+// the channel ID is the lobby ID plus 1<<32. Use FailNext or FailAlways
+// on "JoinLobbyChat" for a refused join.
+func (f *Client) SetChatChannel(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chatChannel = id
+}
+
+// EmitChat delivers a chat message to SubscribeChat subscribers, as the
+// GC pushes one.
+func (f *Client) EmitChat(m gc.ChatMessage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for ch := range f.chatSubs {
+		select {
+		case ch <- m:
+		default:
+		}
+	}
+}
+
+// ChatSent returns the texts sent with SendChat, in order.
+func (f *Client) ChatSent() []string {
+	var out []string
+	for _, c := range f.Calls("SendChat") {
+		out = append(out, c.Args[1].(string))
+	}
+	return out
 }
 
 // --- inspection ---
@@ -573,6 +607,43 @@ func (f *Client) Destroy(ctx context.Context) error {
 	}
 	f.SetLobby(nil)
 	return nil
+}
+
+// JoinLobbyChat implements gc.Client.
+func (f *Client) JoinLobbyChat(ctx context.Context, gcLobbyID uint64) (uint64, error) {
+	if err := f.record("JoinLobbyChat", gcLobbyID); err != nil {
+		return 0, err
+	}
+	if err := f.wait(ctx, "JoinLobbyChat"); err != nil {
+		return 0, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.chatChannel != 0 {
+		return f.chatChannel, nil
+	}
+	return gcLobbyID + 1<<32, nil
+}
+
+// SendChat implements gc.Client.
+func (f *Client) SendChat(channelID uint64, text string) error {
+	return f.op("SendChat", channelID, text)
+}
+
+// LeaveChat implements gc.Client.
+func (f *Client) LeaveChat(channelID uint64) error { return f.op("LeaveChat", channelID) }
+
+// SubscribeChat implements gc.Client.
+func (f *Client) SubscribeChat() (<-chan gc.ChatMessage, func()) {
+	ch := make(chan gc.ChatMessage, 32)
+	f.mu.Lock()
+	f.chatSubs[ch] = struct{}{}
+	f.mu.Unlock()
+	return ch, func() {
+		f.mu.Lock()
+		delete(f.chatSubs, ch)
+		f.mu.Unlock()
+	}
 }
 
 // ListAdminLeagues implements gc.Client.
