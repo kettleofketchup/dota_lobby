@@ -119,7 +119,7 @@ the credentials in `$RUNTIME_DIRECTORY` or through `LoadCredential=`. Or use
 dota_lobby [serve] [--config FILE] [--secrets FILE]
 dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
 dota_lobby healthcheck [--url URL] [--timeout 5s] [--config FILE]
-dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--db FILE] [--timeout 2m] [--config FILE]
+dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--missing-ok] [--db FILE] [--timeout 2m] [--config FILE]
 dota_lobby version
 ```
 
@@ -135,7 +135,9 @@ dota_lobby version
   from `store.path` and `state_dir` in the config (secrets are not read), or from `--db`. An
   `--out` that is a directory, or ends in `/`, gets a file named
   `dota_lobby-manual-<UTC time>.db`, and `--keep-manual N` then deletes all but the newest `N`
-  of those there. It never overwrites a file, and prints only the path it wrote. Take one
+  of those there. It never overwrites a file, and prints only the path it wrote. With
+  `--missing-ok`, a database that does not exist yet is not an error: it prints nothing and
+  exits `0`. Take one
   before every upgrade; see [Backups](docker-compose.md#backups) for restoring.
 
 Exit codes: `0` success, `1` failure, `2` usage error.

@@ -23,6 +23,8 @@ import (
 // command line as serve and ignored.
 //
 // stdout gets only the path written, for scripts; stderr gets the size.
+// With --missing-ok, a database that does not exist yet is not an error:
+// stdout stays empty and nothing is written.
 func (c cli) backup(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	var cf configFlags
@@ -31,6 +33,7 @@ func (c cli) backup(ctx context.Context, args []string) error {
 	dbPath := fs.String("db", "", "database file (default: store.path from the config)")
 	keepManual := fs.Int("keep-manual", 0, "with a directory --out, keep only the newest N dota_lobby-manual-*.db there (0 keeps all)")
 	timeout := fs.Duration("timeout", 2*time.Minute, "give up after this long")
+	missingOK := fs.Bool("missing-ok", false, "exit 0 without writing anything when the database does not exist yet")
 	if err := c.parse(fs, args); err != nil {
 		return err
 	}
@@ -61,6 +64,10 @@ func (c cli) backup(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 	db, err := store.OpenForBackup(ctx, path)
+	if *missingOK && errors.Is(err, os.ErrNotExist) {
+		_, _ = fmt.Fprintf(c.stderr, "no database at %s; nothing to back up\n", path)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

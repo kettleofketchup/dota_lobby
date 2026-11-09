@@ -8,9 +8,10 @@
 - `dota_lobby backup --out PATH` copies the database on demand. It opens it read-only and takes
   no lock, so it works while the service runs, and it needs no secrets. A directory `--out`
   gets a timestamped `dota_lobby-manual-*.db`, and `--keep-manual N` prunes older manual copies
-  there.
-- `just docker backup [dir]` takes that snapshot inside the container, running or stopped, and
-  copies it to a host directory (`backups/` by default).
+  there. `--missing-ok` exits `0` without writing anything when there is no database yet.
+- `just docker backup [dir]` takes that snapshot in a one-off container of the
+  `DOTA_LOBBY_TAG` image, next to the running service or without it, and copies it to a host
+  directory (`backups/` by default).
 - `just secrets webhook-secret <url>` generates a webhook signing secret into
   `secrets/service.sops.yaml` without printing it. `just secrets webhook-secret-env <url>
   <env_file>` hands the same secret to the receiver's env file, `just secrets webhook-token

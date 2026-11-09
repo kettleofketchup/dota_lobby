@@ -61,7 +61,7 @@ const usageText = `usage:
   dota_lobby [serve] [--config FILE] [--secrets FILE]
   dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
   dota_lobby healthcheck [--url URL] [--timeout 5s]
-  dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--db FILE] [--timeout 2m] [--config FILE]
+  dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--missing-ok] [--db FILE] [--timeout 2m] [--config FILE]
   dota_lobby version
 `
 

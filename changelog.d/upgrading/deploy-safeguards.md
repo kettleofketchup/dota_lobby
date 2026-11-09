@@ -13,5 +13,6 @@ Compose, after `docker compose pull` and before `just docker up`:
 just docker backup
 ```
 
-It works whether the old container is running or not, and with the new `DOTA_LOBBY_TAG`
-already set.
+It runs the new image in a one-off container on the state volume, never the old container,
+which has no `backup` command. So it works whether the old container is running or not, with
+the new `DOTA_LOBBY_TAG` set and pulled.

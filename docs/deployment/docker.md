@@ -31,12 +31,18 @@ The same rules as with Compose apply: keep the `dota_lobby_state` volume across 
 `just docker decrypt` again after a reboot, and run only
 [one instance per set of Steam accounts](docker-compose.md).
 
-Before an upgrade, snapshot the database with the backup subcommand; it takes no lock, so it
-runs next to the service (see [Backups](docker-compose.md#backups)):
+Before an upgrade, snapshot the database with the backup subcommand of the **new** image, in a
+one-off container on the same volume (see [Backups](docker-compose.md#backups)). Do not
+`docker exec` it in the running container: a release from before the subcommand existed
+rejects it. It takes no lock and migrates nothing, so it runs next to the service:
 
 ```bash
-docker exec dota_lobby /usr/local/bin/dota_lobby backup --out /app/state/backups/
-docker cp dota_lobby:/app/state/backups/dota_lobby-manual-<time>.db ./
+docker run --name dota_lobby-backup --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -v "$PWD/config:/app/config:ro" -v dota_lobby_state:/app/state \
+  ghcr.io/kettleofketchup/dota_lobby:1.2.4 backup --out /app/state/backups/ --missing-ok
+# prints /app/state/backups/dota_lobby-manual-<time>.db, or nothing if there is no database yet
+docker cp dota_lobby-backup:/app/state/backups/dota_lobby-manual-<time>.db ./
+docker rm dota_lobby-backup
 ```
 
 When you remove the container for good, delete the decrypted files with `just docker wipe`.

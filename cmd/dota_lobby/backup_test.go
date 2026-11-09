@@ -154,6 +154,36 @@ func TestBackupCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("no database with --missing-ok", func(t *testing.T) {
+		flags, _ := writeConfig(t, "8080", "bots: []\n", "{}\n")
+		c, stdout, stderr := newCLI()
+		dir := filepath.Join(t.TempDir(), "backups") + "/"
+		if code := c.run(ctx, append([]string{"backup", "--out", dir, "--missing-ok", "--keep-manual", "3"}, flags...)); code != exitOK {
+			t.Fatalf("exit %d\n%s", code, stderr)
+		}
+		if stdout.String() != "" {
+			t.Errorf("stdout %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr.String(), "nothing to back up") {
+			t.Errorf("stderr: %s", stderr)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("wrote %v without a database", entries)
+		}
+	})
+
+	t.Run("--missing-ok still fails on other errors", func(t *testing.T) {
+		flags, stateDir := writeConfig(t, "8080", "bots: []\n", "{}\n")
+		if err := os.MkdirAll(filepath.Join(stateDir, "dota_lobby.db"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		c, _, stderr := newCLI()
+		out := filepath.Join(t.TempDir(), "copy.db")
+		if code := c.run(ctx, append([]string{"backup", "--out", out, "--missing-ok"}, flags...)); code != exitError {
+			t.Fatalf("exit %d\n%s", code, stderr)
+		}
+	})
+
 	t.Run("--db needs no config", func(t *testing.T) {
 		s, _ := newDB(t)
 		t.Setenv("DOTA_LOBBY_CONFIG_FILE", "/nonexistent/config.yaml")

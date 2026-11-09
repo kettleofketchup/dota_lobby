@@ -279,14 +279,17 @@ just docker backup            # into ./backups/
 just docker backup /srv/dl    # or any host directory
 ```
 
-The recipe runs `dota_lobby backup` inside the container, which writes
-`/app/state/backups/dota_lobby-manual-<UTC time>.db`, then copies that file to the host
-directory (created mode `0700`, the copy `0600`) and prints its host path.
+The recipe runs `dota_lobby backup` in a one-off container of the image that
+`DOTA_LOBBY_TAG` names, on the service's volume, and removes the container afterwards. The
+binary writes `/app/state/backups/dota_lobby-manual-<UTC time>.db`; the recipe copies that
+file to the host directory (created mode `0700`, the copy `0600`) and prints its host path.
 
-- **While the service runs** it uses `docker compose exec`. The copy is a consistent snapshot;
-  the service keeps working.
-- **While it is stopped** it starts a one-off container from the image that `DOTA_LOBBY_TAG`
-  names, on the same volume, and removes it afterwards. It needs no decrypted secrets.
+- It never runs in the service's own container, which before an upgrade still holds the old
+  binary. So it works whether the service is running or not, and with the new
+  `DOTA_LOBBY_TAG` already set and pulled.
+- The backup opens the database read-only and takes no lock, so a running service keeps
+  working; the copy is a consistent snapshot. It needs no decrypted secrets.
+- When the volume holds no database yet, it says so and writes nothing.
 - Only the 3 newest manual copies stay in the volume; the host directory keeps all of them.
   The automatic copies are never touched.
 
@@ -531,8 +534,8 @@ just docker up
 just docker logs              # "pre-migration backup written" when there was something to migrate
 ```
 
-`just docker backup` runs in the old container if it is up, or in a one-off container of the
-new image if it is not. Either way it migrates nothing.
+`just docker backup` runs in a one-off container of the new image, next to the old service if
+it is still up, and migrates nothing.
 
 - `docker compose pull` and `up` with an **unchanged** `DOTA_LOBBY_TAG` change nothing: a
   pinned full-version tag never moves.
