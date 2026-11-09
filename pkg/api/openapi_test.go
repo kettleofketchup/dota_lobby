@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -110,6 +111,30 @@ func TestOpenAPIRoutes(t *testing.T) {
 	for _, want := range []string{"openapi: 3.1.0", "version: " + APIVersion, "X-API-Key", "lobby-event:", "LobbyEvent:"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("served spec lacks %q", want)
+		}
+	}
+}
+
+// The spec routes are public, so concurrent first requests must not race
+// on a lazily filled cache (run with -race).
+func TestOpenAPIRoutesConcurrent(t *testing.T) {
+	h := New(Options{}).Handler()
+	paths := []string{"/openapi.json", "/openapi.yaml", "/openapi-3.0.json", "/openapi-3.0.yaml"}
+	bodies := make([][]byte, 4*len(paths))
+	var wg sync.WaitGroup
+	for i := range bodies {
+		wg.Go(func() {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("GET", paths[i%len(paths)], nil))
+			if rec.Code == http.StatusOK {
+				bodies[i] = rec.Body.Bytes()
+			}
+		})
+	}
+	wg.Wait()
+	for i, b := range bodies {
+		if len(b) == 0 || !bytes.Equal(b, bodies[i%len(paths)]) {
+			t.Errorf("GET %s #%d: %d bytes, differs from the first answer", paths[i%len(paths)], i, len(b))
 		}
 	}
 }

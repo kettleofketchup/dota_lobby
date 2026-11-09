@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -204,9 +205,11 @@ func (s *Server) routes() http.Handler {
 	s.registerLeagues(r)
 	s.registerLobbies(r)
 	documentWebhook(s.api.OpenAPI())
-	for _, p := range []string{"/openapi.json", "/openapi.yaml", "/openapi-3.0.json", "/openapi-3.0.yaml"} {
-		r.learn(http.MethodGet, p, false)
-	}
+	oapi := s.api.OpenAPI()
+	r.handle("GET /openapi.json", s.specHandler(openAPIJSON, func() ([]byte, error) { return json.Marshal(oapi) }))
+	r.handle("GET /openapi.yaml", s.specHandler(openAPIYAML, oapi.YAML))
+	r.handle("GET /openapi-3.0.json", s.specHandler(openAPIJSON, oapi.Downgrade))
+	r.handle("GET /openapi-3.0.yaml", s.specHandler(openAPIYAML, oapi.DowngradeYAML))
 
 	// The pre-v1 placeholders; nothing depends on them.
 	r.handle("/bots", s.authed(gone("/v1/bots")))
@@ -218,6 +221,28 @@ func (s *Server) routes() http.Handler {
 	})
 	r.addMethodFallbacks()
 	return s.wrap(r.mux)
+}
+
+const (
+	openAPIJSON = "application/openapi+json"
+	openAPIYAML = "application/openapi+yaml"
+)
+
+// specHandler serves one rendering of the spec, made on first use. huma's
+// own spec routes fill their cache without a lock, so concurrent first
+// requests would race; the server serves these instead.
+func (s *Server) specHandler(contentType string, render func() ([]byte, error)) http.Handler {
+	spec := sync.OnceValues(render)
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		b, err := spec()
+		if err != nil {
+			s.log.Error("render the OpenAPI document", "content_type", contentType, "err", err)
+			writeProblem(w, http.StatusInternalServerError, "internal", "the OpenAPI document could not be rendered")
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, _ = w.Write(b)
+	})
 }
 
 // router remembers the method patterns registered on the mux, the plain

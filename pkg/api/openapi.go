@@ -35,6 +35,8 @@ func apiConfig() huma.Config {
 	// The docs UI loads its script from a CDN; the spec is served instead.
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""
+	// The server serves the spec itself (see specHandler).
+	cfg.OpenAPIPath = ""
 	cfg.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
 		"apiKey": {Type: "apiKey", In: "header", Name: "X-API-Key", Description: "The API key (secrets.api_key)."},
 		"bearer": {Type: "http", Scheme: "bearer", Description: "The same API key as a bearer token."},
