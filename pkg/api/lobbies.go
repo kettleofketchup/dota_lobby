@@ -353,8 +353,8 @@ func (s *Server) createLobby(ctx context.Context, in *createLobbyInput) (*create
 }
 
 // trimStateFilter drops the spaces around each comma-separated value of
-// GET /v1/lobbies?state=, so "waiting, ready" filters as it did before
-// huma, which checks each raw value against the state enum.
+// GET /v1/lobbies?state=, so "waiting, ready" still filters: huma checks
+// each raw value against the state enum.
 func trimStateFilter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/lobbies" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
