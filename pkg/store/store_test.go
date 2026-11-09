@@ -314,7 +314,8 @@ func TestLeagues(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]BotLeagueSet{
-		"bot1": {Bot: "bot1", Sources: map[string]LeagueSource{"gc": {IDs: []uint32{10, 20, 30}, RefreshedAt: t0}},
+		"bot1": {Bot: "bot1", Sources: map[string]LeagueSource{"gc": {IDs: []uint32{10, 20, 30}, RefreshedAt: t0,
+			FirstSeen: map[uint32]time.Time{10: t0, 20: t0, 30: t0}}},
 			OKAt: t0, Error: "not ready", ErrorAt: t0.Add(time.Minute)},
 		"bot2": {Bot: "bot2", Sources: map[string]LeagueSource{}, OKAt: t0},
 		"bot3": {Bot: "bot3", Sources: map[string]LeagueSource{}, Error: "gc timeout", ErrorAt: t0},
@@ -353,4 +354,90 @@ func mustMigrations(t *testing.T) []migration {
 		t.Fatal(err)
 	}
 	return ms
+}
+
+func TestLeagueFirstSeenAndChanges(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	l := s.Leagues()
+	t0 := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	t1, t2 := t0.Add(time.Hour), t0.Add(2*time.Hour)
+
+	steps := []struct {
+		at  time.Time
+		ids []uint32
+	}{
+		{t0, []uint32{10, 20}},
+		{t1, []uint32{20, 30}},
+		{t2, []uint32{20, 30}}, // no change
+	}
+	for _, st := range steps {
+		if err := l.ReplaceBotLeagues(ctx, "bot1", "gc", st.ids, st.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.ReplaceBotLeagues(ctx, "bot2", "gc", []uint32{10}, t1); err != nil {
+		t.Fatal(err)
+	}
+
+	sets, err := l.BotLeagues(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcSrc := sets["bot1"].Sources["gc"]
+	wantFirst := map[uint32]time.Time{20: t0, 30: t1}
+	if !reflect.DeepEqual(gcSrc.FirstSeen, wantFirst) || !gcSrc.RefreshedAt.Equal(t2) {
+		t.Errorf("bot1 gc = %+v, want first seen %v and refreshed %v", gcSrc, wantFirst, t2)
+	}
+
+	tests := []struct {
+		name   string
+		perBot int
+		bot    string
+		want   []LeagueChange
+	}{
+		{"all of bot1, newest first", 10, "bot1", []LeagueChange{
+			{Bot: "bot1", LeagueID: 30, Source: "gc", Change: ChangeAdded, At: t1},
+			{Bot: "bot1", LeagueID: 10, Source: "gc", Change: ChangeRemoved, At: t1},
+			{Bot: "bot1", LeagueID: 20, Source: "gc", Change: ChangeAdded, At: t0},
+			{Bot: "bot1", LeagueID: 10, Source: "gc", Change: ChangeAdded, At: t0},
+		}},
+		{"limited per bot", 1, "bot1", []LeagueChange{
+			{Bot: "bot1", LeagueID: 30, Source: "gc", Change: ChangeAdded, At: t1},
+		}},
+		{"other bot", 10, "bot2", []LeagueChange{
+			{Bot: "bot2", LeagueID: 10, Source: "gc", Change: ChangeAdded, At: t1},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := l.LeagueChanges(ctx, tt.perBot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got[tt.bot], tt.want) {
+				t.Errorf("changes of %s =\n%+v\nwant\n%+v", tt.bot, got[tt.bot], tt.want)
+			}
+		})
+	}
+}
+
+func TestLeagueChangesPruned(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	l := s.Leagues()
+	t0 := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	// Each step removes one league and adds another: two changes.
+	for i := range maxChangesPerBot {
+		if err := l.ReplaceBotLeagues(ctx, "bot1", "gc", []uint32{uint32(i + 1)}, t0.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM bot_league_changes WHERE bot = 'bot1'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != maxChangesPerBot {
+		t.Errorf("kept %d changes, want %d", n, maxChangesPerBot)
+	}
 }

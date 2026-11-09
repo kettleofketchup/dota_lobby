@@ -227,7 +227,7 @@ func TestLobbiesSweep(t *testing.T) {
 }
 
 // A database at the first schema version upgrades in place and keeps its
-// league lists.
+// league lists, each first seen at its last refresh.
 func TestMigrateFromLeaguesOnly(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dota_lobby.db")
@@ -237,7 +237,10 @@ func TestMigrateFromLeaguesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Leagues().ReplaceBotLeagues(ctx, "bot1", "gc", []uint32{17929}, t0); err != nil {
+	// Written as the first schema's code did; today's code needs columns
+	// that schema lacks.
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO bot_leagues (bot, league_id, source, refreshed_at) VALUES ('bot1', 17929, 'gc', ?)`,
+		formatTime(t0)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -254,7 +257,16 @@ func TestMigrateFromLeaguesOnly(t *testing.T) {
 	if err := s2.Lobbies().Insert(ctx, lobbyRow("lob_01", "game-1", "pending"), nil, nil); err != nil {
 		t.Errorf("lobbies table missing after upgrade: %v", err)
 	}
-	if sets, _ := s2.Leagues().BotLeagues(ctx); len(sets["bot1"].Sources["gc"].IDs) != 1 {
-		t.Errorf("league lists lost: %+v", sets)
+	sets, _ := s2.Leagues().BotLeagues(ctx)
+	if src := sets["bot1"].Sources["gc"]; len(src.IDs) != 1 || !src.FirstSeen[17929].Equal(t0) {
+		t.Errorf("league lists lost or first seen not backfilled: %+v", sets)
+	}
+	// The first refresh after the upgrade keeps the league as it was: no
+	// change recorded.
+	if err := s2.Leagues().ReplaceBotLeagues(ctx, "bot1", "gc", []uint32{17929}, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := s2.Leagues().LeagueChanges(ctx, 10); err != nil || len(ch) != 0 {
+		t.Errorf("changes after the upgrade = %+v, %v", ch, err)
 	}
 }
