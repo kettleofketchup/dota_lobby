@@ -61,8 +61,10 @@ func documentWebhook(oapi *huma.OpenAPI) {
 		"lobby-event": {Post: &huma.Operation{
 			OperationID: "lobby-event",
 			Summary:     "A lobby event",
-			Description: "One event, POSTed to every configured webhook URL, in order per lobby, " +
-				"retried until the receiver answers 2xx. The body is the same envelope " +
+			Description: "One event, POSTed to each configured webhook whose `events` patterns match its type (all types when it has none), " +
+				"in order per lobby. A 408, 425, 429, 5xx or no answer is retried with backoff until " +
+				"webhook_delivery.max_age; a 3xx or any other 4xx gives the delivery up at once. " +
+				"Deliveries are at least once: de-duplicate on `id`. The body is the same envelope " +
 				"GET /v1/lobbies/{id}/events lists. Verify the signature over the raw body.",
 			Tags: []string{"Lobbies"},
 			Parameters: []*huma.Param{

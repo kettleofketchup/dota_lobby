@@ -148,6 +148,13 @@ func TestSpecDocumentsWebhook(t *testing.T) {
 	if ref := hook.Post.RequestBody.Content["application/json"].Schema.Ref; ref != "#/components/schemas/LobbyEvent" {
 		t.Errorf("webhook body = %q", ref)
 	}
+	// The description must not promise every event to every hook, or
+	// retries until a 2xx: hooks filter on events, and 3xx/4xx give up.
+	for _, want := range []string{"`events` patterns", "gives the delivery up"} {
+		if !strings.Contains(hook.Post.Description, want) {
+			t.Errorf("webhook description lacks %q: %s", want, hook.Post.Description)
+		}
+	}
 	if _, ok := oapi.Components.Schemas.Map()["LobbySummary"]; !ok {
 		t.Error("LobbySummary schema missing")
 	}
