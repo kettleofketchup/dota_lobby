@@ -1,0 +1,2483 @@
+components:
+  schemas:
+    BotList:
+      additionalProperties: false
+      properties:
+        bots:
+          description: Every bot, in config order
+          items:
+            $ref: "#/components/schemas/BotView"
+          type:
+            - array
+            - "null"
+      required:
+        - bots
+      type: object
+    BotView:
+      additionalProperties: false
+      properties:
+        attempt:
+          format: int64
+          type: integer
+        gc_queue_position:
+          format: int32
+          type:
+            - integer
+            - "null"
+        last_error:
+          type:
+            - string
+            - "null"
+        last_error_message:
+          type:
+            - string
+            - "null"
+        leagues:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        limited:
+          type: boolean
+        lobby:
+          type:
+            - string
+            - "null"
+        lobby_stale:
+          type: boolean
+        name:
+          type: string
+        ready:
+          type: boolean
+        ready_since:
+          format: date-time
+          type:
+            - string
+            - "null"
+        reason:
+          type:
+            - string
+            - "null"
+        renew_blocked:
+          type:
+            - string
+            - "null"
+        since:
+          format: date-time
+          type: string
+        state:
+          type: string
+        steam_id:
+          type:
+            - string
+            - "null"
+        token_expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        username:
+          type: string
+      required:
+        - name
+        - username
+        - state
+        - ready
+        - reason
+        - last_error
+        - last_error_message
+        - since
+        - steam_id
+        - limited
+        - lobby_stale
+        - token_expires_at
+        - renew_blocked
+        - attempt
+        - gc_queue_position
+        - ready_since
+        - leagues
+        - lobby
+      type: object
+    CreateLobbyRequest:
+      additionalProperties: false
+      properties:
+        admins:
+          description: Account IDs allowed admin commands in this lobby's chat
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        allow_cheats:
+          type: boolean
+        allow_short_handed:
+          type: boolean
+        external_ref:
+          description: Your key for the lobby, 1-128 letters, digits, '.', '_', ':' or '-'; unique among lobbies that have not ended
+          examples:
+            - game-42
+          type: string
+        game_mode:
+          description: A name configured in lobby.game_modes or lobby.regions, or the wire number.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+        kick_strangers:
+          type: boolean
+        launch:
+          description: manual (default) or auto
+          type: string
+        league_id:
+          description: A league one of the bots administers; 0 for none
+          format: int32
+          minimum: 0
+          type: integer
+        league_node_id:
+          format: int32
+          minimum: 0
+          type: integer
+        metadata:
+          additionalProperties:
+            type: string
+          description: Up to 16 string pairs, returned in every response
+          type: object
+        name:
+          description: The lobby name, 1-64 characters
+          examples:
+            - Spring Cup R2 Ravens vs Owls
+          type: string
+        password:
+          description: Up to 32 characters; empty means none
+          type: string
+        ready_check:
+          type: boolean
+        region:
+          description: A name configured in lobby.game_modes or lobby.regions, or the wire number.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+        teams:
+          $ref: "#/components/schemas/TeamsReq"
+        tv_delay_seconds:
+          description: 10, 60, 120, 300 or 900
+          format: int32
+          minimum: 0
+          type: integer
+        visibility:
+          description: public (default), friends or unlisted
+          type: string
+      required:
+        - external_ref
+        - name
+        - teams
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    EventList:
+      additionalProperties: false
+      properties:
+        events:
+          description: Oldest first
+          items:
+            $ref: "#/components/schemas/LobbyEvent"
+          type:
+            - array
+            - "null"
+        next_after:
+          description: The last seq returned, or after when there is nothing new
+          format: int64
+          type: integer
+      required:
+        - events
+        - next_after
+      type: object
+    HostSeatView:
+      additionalProperties: false
+      properties:
+        confirmed:
+          description: False when every strategy failed; launches then answer 409 host_not_seated
+          type: boolean
+        strategy:
+          description: The host seat strategy that worked, or null
+          type:
+            - string
+            - "null"
+        team:
+          description: Where the bot sits, or null
+          type:
+            - string
+            - "null"
+      required:
+        - strategy
+        - confirmed
+        - team
+      type: object
+    InviteRequest:
+      additionalProperties: false
+      properties:
+        missing:
+          description: Invite every rostered player not in the lobby
+          type: boolean
+        players:
+          description: Rostered players to invite again; give this or missing
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+      type: object
+    InviteResult:
+      additionalProperties: false
+      properties:
+        invited:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        skipped:
+          items:
+            $ref: "#/components/schemas/InviteSkip"
+          type:
+            - array
+            - "null"
+      required:
+        - invited
+        - skipped
+      type: object
+    InviteSkip:
+      additionalProperties: false
+      properties:
+        account_id:
+          format: int32
+          minimum: 0
+          type: integer
+        reason:
+          description: in_lobby, pending_cooldown, cap or not_rostered
+          type: string
+      required:
+        - account_id
+        - reason
+      type: object
+    KickRequest:
+      additionalProperties: false
+      properties:
+        account_id:
+          examples:
+            - 99999999
+          format: int32
+          minimum: 1
+          type: integer
+        from:
+          description: "team (default): back to the unassigned pool; lobby: out of the lobby"
+          enum:
+            - team
+            - lobby
+          type: string
+      required:
+        - account_id
+      type: object
+    LaunchRequest:
+      additionalProperties: false
+      properties:
+        force:
+          description: Launch from waiting, past the roster check and the attempt limit; never past the host seat check
+          type: boolean
+      type: object
+    LeagueBotView:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        refreshed_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        source:
+          type: string
+        stale:
+          type: boolean
+        verified:
+          type: boolean
+      required:
+        - name
+        - source
+        - verified
+        - refreshed_at
+        - stale
+      type: object
+    LeagueList:
+      additionalProperties: false
+      properties:
+        leagues:
+          description: Every league a bot may host
+          items:
+            $ref: "#/components/schemas/LeagueView"
+          type:
+            - array
+            - "null"
+      required:
+        - leagues
+      type: object
+    LeagueNodeView:
+      additionalProperties: false
+      properties:
+        group_name:
+          type:
+            - string
+            - "null"
+        name:
+          type:
+            - string
+            - "null"
+        node_id:
+          format: int32
+          minimum: 0
+          type: integer
+        team_id_1:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        team_id_2:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+      required:
+        - node_id
+        - name
+        - group_name
+        - team_id_1
+        - team_id_2
+      type: object
+    LeagueNodes:
+      additionalProperties: false
+      properties:
+        bot:
+          description: The bot that asked the game coordinator
+          type: string
+        league_id:
+          format: int32
+          minimum: 0
+          type: integer
+        nodes:
+          items:
+            $ref: "#/components/schemas/LeagueNodeView"
+          type:
+            - array
+            - "null"
+      required:
+        - league_id
+        - bot
+        - nodes
+      type: object
+    LeagueView:
+      additionalProperties: false
+      properties:
+        bots:
+          items:
+            $ref: "#/components/schemas/LeagueBotView"
+          type:
+            - array
+            - "null"
+        league_id:
+          format: int32
+          minimum: 0
+          type: integer
+        name:
+          type:
+            - string
+            - "null"
+      required:
+        - league_id
+        - name
+        - bots
+      type: object
+    LobbyEvent:
+      additionalProperties: false
+      properties:
+        data:
+          additionalProperties: true
+          description: Depends on the event type (see the webhooks documentation). Never the password.
+          type: object
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type, e.g. lobby.state_changed, lobby.player_joined, match.started, match.ended
+          examples:
+            - lobby.state_changed
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyList:
+      additionalProperties: false
+      properties:
+        lobbies:
+          description: Newest first
+          items:
+            $ref: "#/components/schemas/LobbyView"
+          type:
+            - array
+            - "null"
+        next_cursor:
+          description: Pass as cursor for the next page; null on the last page
+          type:
+            - string
+            - "null"
+      required:
+        - lobbies
+        - next_cursor
+      type: object
+    LobbySummary:
+      additionalProperties: false
+      properties:
+        bot:
+          description: The hosting bot, null until assigned
+          type:
+            - string
+            - "null"
+        external_ref:
+          description: The caller's reference from the create request
+          type: string
+        gc_lobby_id:
+          description: The game coordinator's lobby ID (64-bit, as a string), null until created
+          type:
+            - string
+            - "null"
+        id:
+          description: The lobby ID
+          examples:
+            - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+          type: string
+        league_id:
+          description: The league, null for none
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        metadata:
+          additionalProperties:
+            type: string
+          description: The caller's metadata from the create request
+          type: object
+        state:
+          description: The state the lobby moved to with this event
+          type: string
+      required:
+        - id
+        - external_ref
+        - state
+        - bot
+        - gc_lobby_id
+        - league_id
+        - metadata
+      type: object
+    LobbyView:
+      additionalProperties: false
+      properties:
+        admins:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        allow_cheats:
+          type: boolean
+        allow_short_handed:
+          type: boolean
+        bot:
+          type:
+            - string
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        ended_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        external_ref:
+          type: string
+        game_mode:
+          description: The name as requested, or the wire number; null when unset.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+            - type: "null"
+        gc_lobby_id:
+          type:
+            - string
+            - "null"
+        host_seat:
+          $ref: "#/components/schemas/HostSeatView"
+        id:
+          examples:
+            - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+          type: string
+        kick_strangers:
+          type: boolean
+        launch:
+          type: string
+        launch_attempts:
+          format: int64
+          type: integer
+        league_id:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        league_node_id:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        league_verified:
+          type:
+            - boolean
+            - "null"
+        match:
+          $ref: "#/components/schemas/MatchView"
+        metadata:
+          additionalProperties:
+            type: string
+          type: object
+        name:
+          type: string
+        pending_invites:
+          description: Outstanding invites, as SteamID64 strings
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        ready_check:
+          type: boolean
+        region:
+          description: The name as requested, or the wire number; null when unset.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+            - type: "null"
+        seq:
+          description: The number of the lobby's last event
+          format: int64
+          type: integer
+        state:
+          type: string
+        state_reason:
+          type:
+            - string
+            - "null"
+        strangers:
+          description: Members who are neither rostered nor the bot
+          items:
+            $ref: "#/components/schemas/MemberView"
+          type:
+            - array
+            - "null"
+        teams:
+          $ref: "#/components/schemas/TeamsView"
+        tv_delay_seconds:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+        visibility:
+          type: string
+      required:
+        - id
+        - external_ref
+        - state
+        - state_reason
+        - seq
+        - bot
+        - gc_lobby_id
+        - league_id
+        - league_node_id
+        - league_verified
+        - name
+        - game_mode
+        - region
+        - tv_delay_seconds
+        - visibility
+        - allow_cheats
+        - launch
+        - ready_check
+        - allow_short_handed
+        - kick_strangers
+        - admins
+        - host_seat
+        - teams
+        - strangers
+        - pending_invites
+        - match
+        - launch_attempts
+        - metadata
+        - created_at
+        - updated_at
+        - expires_at
+        - ended_at
+      type: object
+    LobbyWithPassword:
+      additionalProperties: false
+      properties:
+        admins:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        allow_cheats:
+          type: boolean
+        allow_short_handed:
+          type: boolean
+        bot:
+          type:
+            - string
+            - "null"
+        created_at:
+          format: date-time
+          type: string
+        ended_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        external_ref:
+          type: string
+        game_mode:
+          description: The name as requested, or the wire number; null when unset.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+            - type: "null"
+        gc_lobby_id:
+          type:
+            - string
+            - "null"
+        host_seat:
+          $ref: "#/components/schemas/HostSeatView"
+        id:
+          examples:
+            - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+          type: string
+        kick_strangers:
+          type: boolean
+        launch:
+          type: string
+        launch_attempts:
+          format: int64
+          type: integer
+        league_id:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        league_node_id:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        league_verified:
+          type:
+            - boolean
+            - "null"
+        match:
+          $ref: "#/components/schemas/MatchView"
+        metadata:
+          additionalProperties:
+            type: string
+          type: object
+        name:
+          type: string
+        password:
+          description: The lobby password, null for none
+          type:
+            - string
+            - "null"
+        pending_invites:
+          description: Outstanding invites, as SteamID64 strings
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        ready_check:
+          type: boolean
+        region:
+          description: The name as requested, or the wire number; null when unset.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+            - type: "null"
+        seq:
+          description: The number of the lobby's last event
+          format: int64
+          type: integer
+        state:
+          type: string
+        state_reason:
+          type:
+            - string
+            - "null"
+        strangers:
+          description: Members who are neither rostered nor the bot
+          items:
+            $ref: "#/components/schemas/MemberView"
+          type:
+            - array
+            - "null"
+        teams:
+          $ref: "#/components/schemas/TeamsView"
+        tv_delay_seconds:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+        visibility:
+          type: string
+      required:
+        - password
+        - id
+        - external_ref
+        - state
+        - state_reason
+        - seq
+        - bot
+        - gc_lobby_id
+        - league_id
+        - league_node_id
+        - league_verified
+        - name
+        - game_mode
+        - region
+        - tv_delay_seconds
+        - visibility
+        - allow_cheats
+        - launch
+        - ready_check
+        - allow_short_handed
+        - kick_strangers
+        - admins
+        - host_seat
+        - teams
+        - strangers
+        - pending_invites
+        - match
+        - launch_attempts
+        - metadata
+        - created_at
+        - updated_at
+        - expires_at
+        - ended_at
+      type: object
+    MatchView:
+      additionalProperties: false
+      properties:
+        duration_seconds:
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        ended_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        match_id:
+          description: 64-bit, as a string
+          type:
+            - string
+            - "null"
+        outcome:
+          description: The raw EMatchOutcome
+          format: int32
+          type:
+            - integer
+            - "null"
+        outcome_name:
+          type:
+            - string
+            - "null"
+        scored:
+          type:
+            - boolean
+            - "null"
+        started_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        winner_side:
+          type:
+            - string
+            - "null"
+        winner_team_ref:
+          type:
+            - string
+            - "null"
+      required:
+        - match_id
+        - outcome
+        - outcome_name
+        - winner_side
+        - winner_team_ref
+        - scored
+        - duration_seconds
+        - started_at
+        - ended_at
+      type: object
+    MemberView:
+      additionalProperties: false
+      properties:
+        account_id:
+          format: int32
+          minimum: 0
+          type: integer
+        seat:
+          type: string
+      required:
+        - account_id
+        - seat
+      type: object
+    PlayerReq:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The 32-bit account ID; give this or steam_id
+          examples:
+            - 11111111
+          format: int32
+          minimum: 0
+          type: integer
+        captain:
+          type: boolean
+        steam_id:
+          description: An individual account's SteamID64 as a string; give this or account_id
+          examples:
+            - "76561197971376839"
+          type: string
+      type: object
+    PlayerView:
+      additionalProperties: false
+      properties:
+        account_id:
+          format: int32
+          minimum: 0
+          type: integer
+        captain:
+          type: boolean
+        invite_confirmed:
+          type: boolean
+        invites_sent:
+          format: int64
+          type: integer
+        last_invite_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        ready:
+          description: Typed !ready in the lobby chat and has not left their side since
+          type: boolean
+        seat:
+          description: Where the player sits now, or null when not in the lobby
+          type:
+            - string
+            - "null"
+        status:
+          description: pending, invited, joined, seated or left
+          type: string
+        steam_id:
+          description: SteamID64 as a string
+          type: string
+      required:
+        - account_id
+        - steam_id
+        - captain
+        - status
+        - seat
+        - ready
+        - invites_sent
+        - last_invite_at
+        - invite_confirmed
+      type: object
+    Problem:
+      additionalProperties: false
+      properties:
+        code:
+          description: "Stable machine-readable error code: invalid_request, unauthorized, not_found, method_not_allowed, conflict, invalid_state, not_ready, host_not_seated, gone, payload_too_large, unsupported_media_type, league_not_held, unknown_game_mode, unknown_region, invite_limited, internal, unavailable or gc_timeout"
+          examples:
+            - not_found
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          examples:
+            - Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          examples:
+            - https://example.com/error-log/abc123
+          format: uri
+          type: string
+        retryable:
+          description: True when the same request may succeed later (503 and 504)
+          type: boolean
+        status:
+          description: HTTP status code
+          examples:
+            - 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          examples:
+            - Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          examples:
+            - https://example.com/errors/example
+          format: uri
+          type: string
+      required:
+        - code
+        - retryable
+      type: object
+    RetryAccepted:
+      additionalProperties: false
+      properties:
+        status:
+          description: Always retry_requested
+          enum:
+            - retry_requested
+          type: string
+      required:
+        - status
+      type: object
+    RosterRequest:
+      additionalProperties: false
+      properties:
+        teams:
+          $ref: "#/components/schemas/TeamsReq"
+      required:
+        - teams
+      type: object
+    TeamReq:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        players:
+          description: Up to 5 players; empty for an open lobby
+          items:
+            $ref: "#/components/schemas/PlayerReq"
+          type:
+            - array
+            - "null"
+        team_ref:
+          description: Your reference for the team
+          type: string
+      type: object
+    TeamView:
+      additionalProperties: false
+      properties:
+        name:
+          type:
+            - string
+            - "null"
+        players:
+          items:
+            $ref: "#/components/schemas/PlayerView"
+          type:
+            - array
+            - "null"
+        team_ref:
+          type:
+            - string
+            - "null"
+      required:
+        - team_ref
+        - name
+        - players
+      type: object
+    TeamsReq:
+      additionalProperties: false
+      properties:
+        dire:
+          $ref: "#/components/schemas/TeamReq"
+        radiant:
+          $ref: "#/components/schemas/TeamReq"
+      type: object
+    TeamsView:
+      additionalProperties: false
+      properties:
+        dire:
+          $ref: "#/components/schemas/TeamView"
+        radiant:
+          $ref: "#/components/schemas/TeamView"
+      required:
+        - radiant
+        - dire
+      type: object
+    UpdateLobbyRequest:
+      additionalProperties: false
+      properties:
+        admins:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type: array
+        allow_cheats:
+          type: boolean
+        allow_short_handed:
+          type: boolean
+        game_mode:
+          description: A name configured in lobby.game_modes or lobby.regions, or the wire number.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+        kick_strangers:
+          type: boolean
+        launch:
+          type: string
+        metadata:
+          additionalProperties:
+            type: string
+          type: object
+        name:
+          type: string
+        password:
+          description: Empty removes the password
+          type: string
+        ready_check:
+          type: boolean
+        region:
+          description: A name configured in lobby.game_modes or lobby.regions, or the wire number.
+          oneOf:
+            - type: string
+            - maximum: 4294967295
+              minimum: 0
+              type: integer
+        tv_delay_seconds:
+          format: int32
+          minimum: 0
+          type: integer
+        visibility:
+          type: string
+      type: object
+  securitySchemes:
+    apiKey:
+      description: The API key (secrets.api_key).
+      in: header
+      name: X-API-Key
+      type: apiKey
+    bearer:
+      description: The same API key as a bearer token.
+      scheme: bearer
+      type: http
+info:
+  description: Dota 2 lobby management through Steam bot accounts. Errors are RFC 9457 problem details (application/problem+json) with a stable `code`. The /v1 operations need the API key when the service has one configured; /livez, /readyz and /health are always open and not part of this document.
+  title: dota_lobby
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /v1/bots:
+    get:
+      description: Every bot and its state. Credentials never appear.
+      operationId: list-bots
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotList"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: List the bots
+      tags:
+        - Bots
+  /v1/bots/{name}:
+    get:
+      operationId: get-bot
+      parameters:
+        - description: The bot's name from the config, matched case-insensitively
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The bot's name from the config, matched case-insensitively
+            examples:
+              - league_bot_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Get a bot
+      tags:
+        - Bots
+  /v1/bots/{name}/retry:
+    post:
+      description: The way out of needs_attention, e.g. after `dota_lobby auth --bot <name> --force` stored a new token or a password was fixed; also cuts a backoff or cooldown short. A no-op for a bot that is not waiting. 503 when the bot's run loop is too backed up to take the request.
+      operationId: retry-bot
+      parameters:
+        - description: The bot's name from the config, matched case-insensitively
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The bot's name from the config, matched case-insensitively
+            examples:
+              - league_bot_1
+            type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryAccepted"
+          description: Accepted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Make a waiting bot try again now
+      tags:
+        - Bots
+  /v1/leagues:
+    get:
+      description: Every league a bot may host, and which bots hold it.
+      operationId: list-leagues
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeagueList"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: List the leagues
+      tags:
+        - Leagues
+  /v1/leagues/{id}/nodes:
+    get:
+      description: Asks a ready bot that holds the league for its nodes, bounded by gc.request_timeout.
+      operationId: list-league-nodes
+      parameters:
+        - description: The league ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The league ID
+            examples:
+              - 17929
+            format: int32
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeagueNodes"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: List a league's lobby nodes
+      tags:
+        - Leagues
+  /v1/lobbies:
+    get:
+      description: Newest first, without passwords.
+      operationId: list-lobbies
+      parameters:
+        - description: Only lobbies in these states, comma-separated
+          explode: false
+          in: query
+          name: state
+          schema:
+            description: Only lobbies in these states, comma-separated
+            items:
+              enum:
+                - pending
+                - creating
+                - waiting
+                - ready
+                - launching
+                - in_game
+                - post_game
+                - finished
+                - failed
+                - closing
+                - closed
+                - timed_out
+              type: string
+            type:
+              - array
+              - "null"
+        - description: Only lobbies with this external_ref, ended ones included
+          explode: false
+          in: query
+          name: external_ref
+          schema:
+            description: Only lobbies with this external_ref, ended ones included
+            type: string
+        - description: Only lobbies that have not ended
+          explode: false
+          in: query
+          name: active
+          schema:
+            description: Only lobbies that have not ended
+            type: boolean
+        - description: Page size, default 50
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: Page size, default 50
+            format: int64
+            maximum: 200
+            minimum: 1
+            type: integer
+        - description: The next_cursor of the previous page
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: The next_cursor of the previous page
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyList"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: List lobbies
+      tags:
+        - Lobbies
+    post:
+      description: Accepts the request (202) and creates the lobby in the background; follow it with get-lobby. Sending the same request again while the lobby is active returns it with 200. The response carries the password.
+      operationId: create-lobby
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLobbyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyWithPassword"
+          description: An active lobby with this external_ref and the same request exists; it is returned.
+          headers:
+            Location:
+              schema:
+                description: The lobby's URL
+                type: string
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyWithPassword"
+          description: Accepted
+          headers:
+            Location:
+              schema:
+                description: The lobby's URL
+                type: string
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Ask for a lobby
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}:
+    delete:
+      description: 202 when the lobby closes or starts closing; 200 when it was already closing or ended.
+      operationId: close-lobby
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: The lobby was already closing or ended; nothing changed.
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: Accepted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Close a lobby that has not launched
+      tags:
+        - Lobbies
+    get:
+      description: The lobby with its password.
+      operationId: get-lobby
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyWithPassword"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Get a lobby
+      tags:
+        - Lobbies
+    patch:
+      description: Allowed in pending, waiting and ready.
+      operationId: update-lobby
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLobbyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Change a lobby's settings
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/events:
+    get:
+      description: Events with a seq above after, oldest first, in the envelope webhooks deliver.
+      operationId: list-lobby-events
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+        - description: Only events with a higher seq
+          explode: false
+          in: query
+          name: after
+          schema:
+            description: Only events with a higher seq
+            format: int64
+            minimum: 0
+            type: integer
+        - description: Page size
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 100
+            description: Page size
+            format: int64
+            maximum: 500
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: List a lobby's events
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/invite:
+    post:
+      description: Only rostered players, in waiting and ready. 429 when every requested invite is rate-limited.
+      operationId: invite-lobby-players
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteResult"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Send invites again
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/kick:
+    post:
+      description: The lobby shows the result once the game coordinator applies it.
+      operationId: kick-lobby-member
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KickRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: Accepted
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Move a member to the pool or out of the lobby
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/launch:
+    post:
+      description: Allowed in ready, and in waiting with force. The body is optional.
+      operationId: launch-lobby
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LaunchRequest"
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: Accepted
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Start the match
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/roster:
+    post:
+      description: In waiting and ready.
+      operationId: set-lobby-roster
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RosterRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Replace both rosters
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/teams/flip:
+    post:
+      description: Swaps Radiant and Dire in the lobby and in the rosters, in waiting and ready.
+      operationId: flip-lobby-teams
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: Accepted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Swap the sides
+      tags:
+        - Lobbies
+  /v1/lobbies/{id}/teams/shuffle:
+    post:
+      description: Only when both rosters are empty.
+      operationId: shuffle-lobby-teams
+      parameters:
+        - description: The lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The lobby ID
+            examples:
+              - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
+            type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LobbyView"
+          description: Accepted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Balanced shuffle of an open lobby
+      tags:
+        - Lobbies
+tags:
+  - description: The Steam bot accounts and their state.
+    name: Bots
+  - description: The leagues the bots may host.
+    name: Leagues
+  - description: Create and drive lobbies.
+    name: Lobbies
+webhooks:
+  lobby-event:
+    post:
+      description: One event, POSTed to every configured webhook URL, in order per lobby, retried until the receiver answers 2xx. The body is the same envelope GET /v1/lobbies/{id}/events lists. Verify the signature over the raw body.
+      operationId: lobby-event
+      parameters:
+        - description: The event ID; the same on every retry.
+          in: header
+          name: X-Dota-Lobby-Event-Id
+          required: true
+          schema:
+            type: string
+        - description: The event type, as in the body.
+          in: header
+          name: X-Dota-Lobby-Event-Type
+          required: true
+          schema:
+            type: string
+        - description: When this attempt was signed, in Unix seconds.
+          in: header
+          name: X-Dota-Lobby-Timestamp
+          required: true
+          schema:
+            type: string
+        - description: "\"v1=\" and the hex HMAC-SHA256 of \"<timestamp>.<body>\" under the webhook secret; several comma-separated during a secret rotation."
+          in: header
+          name: X-Dota-Lobby-Signature
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LobbyEvent"
+        required: true
+      responses:
+        2XX:
+          description: Delivered.
+        default:
+          description: Retried with backoff (408, 425, 429, 5xx, no answer) or given up (3xx, other 4xx).
+      summary: A lobby event
+      tags:
+        - Lobbies
