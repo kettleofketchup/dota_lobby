@@ -317,6 +317,8 @@ its deliveries.
 | `manifest unknown` on `pull` / `up` | `DOTA_LOBBY_TAG` has a leading `v`, or no image exists for that version | Use `1.2.3`, not `v1.2.3`. If it still fails, [build locally](../deployment/docker.md#build-the-image-locally) |
 | `unauthorized` (or `denied`) on pull | The image package is private. This happens with a fork whose repository is private, or before a maintainer has made the package public | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
 | `401` with `missing or invalid API key` | Key header missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` |
+| `422 invalid_request` from a `/v1` call | A field or parameter failed validation (older releases answered `400`) | Read `errors[].location` and `errors[].message` in the response; see [Errors](../api/index.md#errors) |
+| A client cannot read error responses | It expects the old `{"error": {...}}` envelope | Read `code`, `detail` and `retryable` at the top level of the `application/problem+json` body; see [Errors](../api/index.md#errors) |
 | `410 gone` on `/bots` or `/lobby/...` | The old endpoints were removed | Use `/v1/bots` |
 | `422 league_not_held` from `POST /v1/lobbies` | No enabled bot holds the league | See [A bot does not list my league](#a-bot-does-not-list-my-league) |
 | `409 conflict` from `POST /v1/lobbies` | An active lobby already uses that `external_ref` with a different request | Close it, or send exactly the same request to get it back |

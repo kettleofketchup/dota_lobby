@@ -38,10 +38,28 @@ the API.
 | `POST` | `/v1/lobbies/{id}/teams/shuffle` | When an API key is set | Balanced shuffle of an open lobby |
 | `GET` | `/v1/lobbies/{id}/events` | When an API key is set | A lobby's events, oldest first |
 | any | `/bots`, `/lobby/create`, `/lobby/info` | When an API key is set | `410`, the old endpoints are gone |
+| `GET` | `/openapi.json`, `/openapi.yaml` | Never | The OpenAPI 3.1 description of the `/v1` API |
 
 `GET` endpoints also answer `HEAD`. A known path with the wrong method gets `405` with an
 `Allow` header; an unknown path gets `404`. Request bodies are limited to
 `server.max_body_bytes` (64 KiB).
+
+## OpenAPI
+
+The `/v1` operations, their request and response schemas, the error format and the
+[webhook](../operations/webhooks.md) event envelope are described in an OpenAPI 3.1 document.
+Generate clients from it rather than from the examples on this page.
+
+- The running service serves it at `/openapi.json` and `/openapi.yaml`, without the API key
+  (`/openapi-3.0.json` and `/openapi-3.0.yaml` hold an OpenAPI 3.0.3 version for older
+  generators). There is no built-in docs UI.
+- The same document is in the repository as
+  [`api/openapi.yaml`](https://github.com/kettleofketchup/dota_lobby/blob/main/api/openapi.yaml),
+  regenerated with `just go::openapi`; a test fails when it no longer matches the code.
+- Each operation has a stable `operationId` (`create-lobby`, `list-lobby-events`, ...) that client
+  generators use for method names. The event envelope a webhook receives is the
+  `LobbyEvent` schema, and the delivery is described under `webhooks.lobby-event`.
+- `info.version` is the version of the `/v1` API, not of the service.
 
 ## Authentication
 
@@ -61,40 +79,75 @@ Authorization: Bearer <your api_key>
 - The `Bearer` scheme is matched case-insensitively.
 - The key is compared in constant time.
 
-A missing or wrong key gets `401` with a `WWW-Authenticate: Bearer realm="dota_lobby"` header
-and the error body below. The key is checked before the method: a wrong method on a
+A missing or wrong key gets `401 unauthorized` with a
+`WWW-Authenticate: Bearer realm="dota_lobby"` header. The key is checked before the method: a wrong method on a
 protected path such as `/v1/bots` gets `401` without a valid key, so the `Allow` list is not
 revealed, and `405` with one. The open probe paths (`/livez`, `/readyz`, `/health`) answer `405`
 to a wrong method without a key.
 
 ## Errors
 
-Every error is JSON with the same envelope:
+Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem, sent as
+`Content-Type: application/problem+json`:
 
 ```json
-{"error":{"code":"unauthorized","message":"missing or invalid API key","retryable":false}}
+{
+  "title": "Conflict",
+  "status": 409,
+  "detail": "lobby is in_game",
+  "code": "invalid_state",
+  "retryable": false
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | The HTTP status |
+| `title` | The status text |
+| `detail` | What went wrong, for people. Do not parse it |
+| `code` | Stable and machine-readable; see below. Key on this, not on `detail` |
+| `retryable` | `true` only for `503` and `504`: the same request may work later |
+| `errors` | For `400` and `422` only: one entry per problem, each with a `message` and a `location` such as `body.teams.radiant.players[0]` or `query.limit`, and the offending `value` where it is a single value |
+
+A request that fails validation gets `422` with every problem listed in `errors`:
+
+```json
+{
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "validation failed",
+  "errors": [
+    {"message": "unexpected property", "location": "body.nmae"},
+    {"message": "expected number >= 1", "location": "query.limit", "value": 0}
+  ],
+  "code": "invalid_request",
+  "retryable": false
+}
 ```
 
 | Status | `code` | When |
 |---|---|---|
-| `400` | `invalid_request` | A malformed path parameter or query, bad JSON, an unknown JSON field, or a value that fails validation. The message names the field |
+| `400` | `invalid_request` | The body is not JSON, is empty where one is required, or holds more than one value |
 | `401` | `unauthorized` | Missing or wrong API key |
 | `404` | `not_found` | Unknown path, no bot with that name, no lobby with that ID, or no configured bot holds that league |
 | `405` | `method_not_allowed` | Wrong method on a known path |
 | `409` | `conflict` | `external_ref` is used by an active lobby whose request was different |
-| `409` | `invalid_state` | The action is not allowed in the lobby's current state; the message names the state |
-| `409` | `not_ready` | A launch without `force` while the lobby is `waiting`; the message lists what is missing |
+| `409` | `invalid_state` | The action is not allowed in the lobby's current state; `detail` names the state |
+| `409` | `not_ready` | A launch without `force` while the lobby is `waiting`; `detail` lists what is missing |
 | `409` | `host_not_seated` | A launch while the host bot is still on a team |
 | `410` | `gone` | One of the removed pre-v1 endpoints |
 | `413` | `payload_too_large` | The body is over `server.max_body_bytes` |
-| `415` | `unsupported_media_type` | A body without `Content-Type: application/json` |
+| `415` | `unsupported_media_type` | A body with a `Content-Type` other than `application/json` (none is read as JSON) |
+| `422` | `invalid_request` | A path parameter, query parameter or body field that fails validation: a wrong type, an unknown field, a missing required field, a value out of range, or a rule such as "account_id or steam_id" |
 | `422` | `league_not_held` | No configured bot holds the requested league, ready or not |
 | `422` | `unknown_game_mode`, `unknown_region` | A name that is not in `lobby.game_modes` or `lobby.regions`, and not a number |
 | `429` | `invite_limited` | Every requested invite is within `lobby.invite.min_resend` or past `lobby.invite.max_per_player`. `Retry-After` is set unless every player reached the cap |
+| `500` | `internal` | A bug. The cause is logged, never sent |
 | `503` | `unavailable` | A bot did not take a `retry` within 5 s because its run loop is backed up, no ready bot can answer a game coordinator request, or the service is shutting down |
 | `504` | `gc_timeout` | The game coordinator did not answer within `gc.request_timeout` |
 
-`retryable` is `true` only for `503` and `504`.
+A rejected body is never echoed back whole, so a lobby password in it does not end up in a
+client's error log. The cause of a `5xx` goes to the service log only.
 
 ## `GET /livez`
 
@@ -283,7 +336,7 @@ is not retried on another bot. `bot` is the bot that answered. Empty fields are 
 
 | Status | When |
 |---|---|
-| `400 invalid_request` | `id` is not a positive 32-bit number |
+| `422 invalid_request` | `id` is not a positive 32-bit number |
 | `404 not_found` | No enabled bot holds the league |
 | `503 unavailable` | Bots hold the league, but none is `gc_ready`, or the request failed. Retry later |
 | `504 gc_timeout` | No answer within `gc.request_timeout` (10 s, capped at 12 s), time spent queued behind the bot's other GC requests included |
@@ -378,7 +431,7 @@ background; follow it with `GET /v1/lobbies/{id}`.
 | `metadata` | no | Up to 16 string pairs, returned in every response |
 
 A player is `{"account_id": <32-bit number>}` or `{"steam_id": "<SteamID64 as a string>"}`,
-with `"captain": true` optionally. A player may appear only once. Unknown fields are refused.
+with `"captain": true` optionally. A player may appear only once. Unknown fields are refused with `422`.
 
 | Status | When |
 |---|---|
@@ -532,7 +585,7 @@ with `Retry-After`.
 
 `from` is `team` (default: back to the unassigned pool) or `lobby` (out of the lobby). `202`;
 the lobby object shows the result once the game coordinator applies it. Kicking the bot itself
-is `400`.
+is `422 invalid_request`.
 
 ### `POST /v1/lobbies/{id}/roster`
 
@@ -663,7 +716,7 @@ curl -s -H "X-API-Key: $API_KEY" \
 ```
 
 `next_after` is the last `seq` returned, or `after` when there is nothing new: pass it as
-`after` to read on. Unknown lobby: `404 not_found`. A bad `after` or `limit`: `400`. Events of
+`after` to read on. Unknown lobby: `404 not_found`. A bad `after` or `limit`: `422`. Events of
 lobbies the retention sweep deleted are gone with them.
 
 ### Restarts

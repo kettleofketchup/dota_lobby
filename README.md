@@ -177,8 +177,10 @@ dies it goes to `needs_attention`. Run `dota_lobby auth --bot NAME --force`
 Health endpoints are open. Everything under `/v1` needs the API key
 (`secrets.api_key`) when one is set, as `X-API-Key: <key>` or
 `Authorization: Bearer <key>`. Without a key `/v1` is open and a warning is
-logged. Errors share one envelope:
-`{"error": {"code": "...", "message": "...", "retryable": false}}`.
+logged. Errors are RFC 9457 problems (`application/problem+json`) with a
+stable `code` and `retryable`; validation failures are `422` with an
+`errors` list. The OpenAPI 3.1 spec is served at `/openapi.json` and
+`/openapi.yaml` and committed as [`api/openapi.yaml`](api/openapi.yaml).
 
 | Method | Path | Auth | Response |
 |---|---|---|---|
