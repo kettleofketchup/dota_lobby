@@ -2,7 +2,7 @@
 
 Dota Lobby is a Go service for league lobby hosting. It keeps one or more Steam bot accounts
 logged in to Steam and the Dota 2 game coordinator, with no one at a keyboard, and exposes an
-HTTP API that reports their state. Lobby hosting through the same API comes next. You run it
+HTTP API that reports their state and hosts league lobbies. You run it
 yourself, on your own machine, with your own bot accounts.
 
 !!! warning "Project status"
@@ -10,7 +10,8 @@ yourself, on your own machine, with your own bot accounts.
     - **Bots log in headless.** Each bot has a Steam Guard authenticator linked once with
       steamguard-cli; the service computes its Steam Guard codes, stores refresh tokens and
       renews them. This is built and tested against fakes, **not yet against live Steam**.
-    - **Lobby creation is not implemented yet.** `/v1/lobbies` answers `501`.
+    - **Lobby hosting is tested against fakes only.** Which way of moving the host bot off its
+      team lets a launch reach a game has not been seen live yet.
 
     Use dedicated Steam accounts and start with a single bot. See
     [Known limitations](known-limitations.md) for the full list.

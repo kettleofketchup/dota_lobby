@@ -165,6 +165,12 @@ type Handle interface {
 	Status() Status
 	// Do runs fn on the bot's serialized GC worker; see Worker.Do.
 	Do(ctx context.Context, op string, fn func(ctx context.Context, c gc.Client) error) error
+	// CurrentLobby, SubscribeLobby and SubscribeInvites read the bot's
+	// lobby state without going through the worker; they never block on
+	// the GC. See gc.Client.
+	CurrentLobby() (*gc.LobbyView, bool)
+	SubscribeLobby() (<-chan gc.LobbyEvent, func())
+	SubscribeInvites() (<-chan gc.InvitationCreated, func())
 }
 
 // Source lists the running bots. *Manager implements it.

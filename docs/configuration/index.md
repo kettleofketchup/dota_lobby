@@ -88,11 +88,38 @@ fatal error. A secrets file that is still sops-encrypted is refused with
 | `steam.totp_skew` | duration | `0s` | Steam's clock minus the host clock, added before computing Steam Guard codes. At most ±10m. Keep the host on NTP instead whenever you can |
 | `gc.hello_interval` | duration | `10s` | How often the game coordinator hello is repeated until the welcome |
 | `gc.request_timeout` | duration | `10s` | Default timeout of a game coordinator request. For a request an API call waits on, such as `/v1/leagues/{id}/nodes`, it includes the time queued behind the bot's other requests and is capped at `12s` so the answer arrives before the 15 s write timeout |
+| `gc.create_timeout` | duration | `2m` | How long a lobby create may take before the lobby fails with `create_timeout` |
 | `league.sources` | list | `[gc, config]` | Where a bot's leagues come from: `gc` asks the game coordinator which leagues the account administers, `config` uses `bots[].leagues`. `web` is accepted but not used yet |
 | `league.refresh_interval` | duration | `30m` | How often each ready bot's league list is fetched again. It is also fetched every time the bot reaches `gc_ready` |
 | `league.allow_unverified` | bool | `false` | Keep using a bot's configured leagues after the game coordinator list is known, even those the game coordinator does not list. Leave it off unless the game coordinator list is wrong |
-| `store.path` | path | empty | The SQLite database. Empty means `<state_dir>/dota_lobby.db`. Created mode `0600`; keep it on the persistent state volume |
+| `store.path` | path | empty | The SQLite database. Empty means `<state_dir>/dota_lobby.db`. Created mode `0600`; keep it on the persistent state volume. It holds the lobby passwords |
+| `store.retention` | duration | `720h` | How long ended lobbies and their events are kept before an hourly sweep deletes them |
 | `bots` | list | empty | The bots, see below |
+
+### `lobby`
+
+How lobbies run. See [Lobbies](../api/index.md#lobbies) for what each step does.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `lobby.host_seat_strategy` | list | `[caster, self_kick]` | How the bot leaves its player slot, tried in order: `caster`, `self_kick`, `player_pool`, `spectator`, `no_team`. A launch that fails moves on to the next one. See [Host seat](../api/index.md#host-seat) |
+| `lobby.host_seat_confirm_timeout` | duration | `3s` | How long one strategy may take to show in the lobby before the next is tried |
+| `lobby.max_launch_attempts` | int | `3` | Launches before only a forced launch tries again, 1-10 |
+| `lobby.pending_timeout` | duration | `10m` | How long a lobby waits for a free bot before it times out |
+| `lobby.idle_timeout` | duration | `30m` | How long after it was accepted a lobby may wait for its launch |
+| `lobby.auto_launch_delay` | duration | `10s` | How long a `launch: auto` lobby stays `ready` before it launches |
+| `lobby.launch_settle_timeout` | duration | `2m` | A launch that leaves the lobby screen unchanged this long has failed |
+| `lobby.server_stall_timeout` | duration | `10m` | How long a game server may take before the lobby times out |
+| `lobby.ingame_backstop` | duration | `3h` | How long a match is followed without an outcome |
+| `lobby.postgame_linger` | duration | `30s` | How long the bot stays in the lobby after the outcome |
+| `lobby.enforce_cooldown` | duration | `10s` | Least time between two seat corrections for the same member |
+| `lobby.readopt_timeout` | duration | `5m` | After a restart, how long a lobby waits for its bot to be ready again |
+| `lobby.drain_timeout` | duration | `10s` | Time the lobby step of shutdown may take |
+| `lobby.destroy_on_shutdown` | bool | `false` | Destroy lobbies that have not launched at shutdown, instead of leaving them for the next start |
+| `lobby.invite.min_resend` | duration | `30s` | Least time between two invites to the same player |
+| `lobby.invite.max_per_player` | int | `5` | Invites per player, the automatic one included |
+| `lobby.regions` | map | `{us_west: 1, us_east: 2, europe: 3, sea: 5}` | Region names for requests. The numbers are unconfirmed; keep them current by hand |
+| `lobby.game_modes` | map | `{ap: 1, cm: 2, cd: 16, ad: 22, turbo: 23}` | Game mode names for requests |
 
 ### `bots[]`
 
@@ -111,8 +138,8 @@ file. Two bots may not use the same Steam account.
 ### Accepted, not used yet
 
 These keys are validated so a config written now keeps working, but nothing reads them in this
-version: `metrics.addr` (no metrics listener yet), `gc.create_timeout`,
-`league.webapi_enrichment`, `lobby.*`, `match.*` and `webhooks`. Their defaults are in
+version: `metrics.addr` (no metrics listener yet), `league.webapi_enrichment`, `lobby.chat.*`,
+`lobby.admins`, `lobby.series_types`, `match.*` and `webhooks`. Their defaults are in
 [`config.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/config.yaml.example).
 
 ## Secrets

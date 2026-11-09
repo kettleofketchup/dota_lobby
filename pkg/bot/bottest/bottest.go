@@ -84,6 +84,34 @@ func (b *Bot) Do(ctx context.Context, op string, fn func(ctx context.Context, c 
 	return fn(ctx, b.client)
 }
 
+// CurrentLobby implements bot.Handle.
+func (b *Bot) CurrentLobby() (*gc.LobbyView, bool) { return b.client.CurrentLobby() }
+
+// SubscribeLobby implements bot.Handle.
+func (b *Bot) SubscribeLobby() (<-chan gc.LobbyEvent, func()) { return b.client.SubscribeLobby() }
+
+// SubscribeInvites implements bot.Handle.
+func (b *Bot) SubscribeInvites() (<-chan gc.InvitationCreated, func()) {
+	return b.client.SubscribeInvites()
+}
+
+// SetState sets the bot's state without touching Ready, e.g. to
+// needs_attention after SetReady(time.Time{}).
+func (b *Bot) SetState(st bot.State) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.status.State = st
+}
+
+// SetSteamID sets Status.SteamID.
+func (b *Bot) SetSteamID(id uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.status.SteamID = id
+}
+
+var _ bot.Handle = (*Bot)(nil)
+
 // Source is a bot.Source over a fixed list of bots.
 type Source struct {
 	bots []*Bot

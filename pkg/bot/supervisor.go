@@ -212,6 +212,22 @@ func (s *Supervisor) Do(ctx context.Context, op string, fn func(ctx context.Cont
 	return s.worker.Do(ctx, op, fn)
 }
 
+// CurrentLobby returns the lobby in the bot's SO cache; see
+// gc.Client.CurrentLobby.
+func (s *Supervisor) CurrentLobby() (*gc.LobbyView, bool) { return s.client.CurrentLobby() }
+
+// SubscribeLobby streams the bot's lobby SO changes; see
+// gc.Client.SubscribeLobby.
+func (s *Supervisor) SubscribeLobby() (<-chan gc.LobbyEvent, func()) {
+	return s.client.SubscribeLobby()
+}
+
+// SubscribeInvites streams the bot's sent-invite confirmations; see
+// gc.Client.SubscribeInvites.
+func (s *Supervisor) SubscribeInvites() (<-chan gc.InvitationCreated, func()) {
+	return s.client.SubscribeInvites()
+}
+
 // Status returns the current status.
 func (s *Supervisor) Status() Status {
 	s.mu.Lock()

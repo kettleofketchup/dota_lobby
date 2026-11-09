@@ -146,8 +146,12 @@ func TestLobbyLifecycle(t *testing.T) {
 	if cur, ok := f.CurrentLobby(); !ok || cur != v {
 		t.Error("created lobby is not current")
 	}
-	f.Invite(76561198000000002)
-	f.KickFromTeam(2)
+	if err := f.Invite(76561198000000002); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.KickFromTeam(2); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.Destroy(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -216,5 +220,58 @@ func TestDisconnectedEventAllowsReconnect(t *testing.T) {
 				t.Fatalf("reconnect: %v", err)
 			}
 		})
+	}
+}
+
+func TestLobbyOps(t *testing.T) {
+	f := New()
+	f.SetSteamID(gc.SteamID64(5))
+	if _, err := f.CreateLobby(t.Context(), gc.LobbyDetails{GameName: "g"}); err != nil {
+		t.Fatal(err)
+	}
+	// A reaction plays the GC's answer: the host moves to the pool.
+	f.OnCall("KickFromTeam", func(args []any) {
+		id := args[0].(uint32)
+		f.UpdateLobby(func(v *gc.LobbyView) {
+			for i := range v.Members {
+				if gc.AccountID(v.Members[i].SteamID) == id {
+					v.Members[i].Team = gc.TeamPlayerPool
+				}
+			}
+		})
+	})
+	before, _ := f.CurrentLobby()
+	if err := f.KickFromTeam(5); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := f.CurrentLobby()
+	if after.Members[0].Team != gc.TeamPlayerPool || before.Members[0].Team != gc.TeamRadiant {
+		t.Errorf("before %v after %v: UpdateLobby must copy, then apply", before.Members, after.Members)
+	}
+
+	f.FailNext("Launch", gc.ErrNotReady)
+	if err := f.Launch(); !errors.Is(err, gc.ErrNotReady) {
+		t.Errorf("Launch = %v, want ErrNotReady", err)
+	}
+	if err := f.Launch(); err != nil {
+		t.Errorf("second Launch = %v", err)
+	}
+	if err := f.SetLobbyDetails(gc.LobbyDetails{TVDelaySeconds: 42}); err == nil {
+		t.Error("SetLobbyDetails accepted a TV delay of 42 s")
+	}
+	if got := f.CallCount("Launch"); got != 2 {
+		t.Errorf("Launch calls = %d", got)
+	}
+
+	invites, stop := f.SubscribeInvites()
+	defer stop()
+	f.EmitInvite(gc.InvitationCreated{SteamID: gc.SteamID64(7)})
+	select {
+	case ev := <-invites:
+		if ev.SteamID != gc.SteamID64(7) {
+			t.Errorf("invite %+v", ev)
+		}
+	default:
+		t.Fatal("no invite event")
 	}
 }

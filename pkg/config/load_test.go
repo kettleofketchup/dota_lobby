@@ -74,7 +74,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.GC.HelloInterval != 10*time.Second || cfg.GC.CreateTimeout != 2*time.Minute {
 		t.Errorf("gc defaults: %+v", cfg.GC)
 	}
-	if fmt.Sprint(cfg.League.Sources) != "[gc config]" || len(cfg.Lobby.HostSeatStrategy) != 4 {
+	if fmt.Sprint(cfg.League.Sources) != "[gc config]" || fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[caster self_kick]" {
 		t.Errorf("league %v seats %v", cfg.League.Sources, cfg.Lobby.HostSeatStrategy)
 	}
 	if cfg.Lobby.Regions["europe"] != 3 || cfg.Lobby.GameModes["turbo"] != 23 {
@@ -82,6 +82,15 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(cfg.Bots) != 0 || cfg.Secrets.APIKey.IsSet() {
 		t.Errorf("unexpected bots or api key")
+	}
+	l := cfg.Lobby
+	if l.HostSeatConfirmTimeout != 3*time.Second || l.MaxLaunchAttempts != 3 || l.PendingTimeout != 10*time.Minute ||
+		l.AutoLaunchDelay != 10*time.Second || l.PostgameLinger != 30*time.Second || l.EnforceCooldown != 10*time.Second ||
+		l.ReadoptTimeout != 5*time.Minute || l.DrainTimeout != 10*time.Second || l.DestroyOnShutdown || len(l.Admins) != 0 {
+		t.Errorf("lobby defaults: %+v", l)
+	}
+	if cfg.Store.Retention != 720*time.Hour {
+		t.Errorf("store.retention = %s", cfg.Store.Retention)
 	}
 }
 
@@ -93,6 +102,9 @@ steam: { login_stagger: 3s }
 gc: { hello_interval: 15s }
 lobby:
   regions: { us_west: 7 }
+  host_seat_strategy: [player_pool, no_team]
+  admins: [11111111, 22222222]
+  destroy_on_shutdown: true
 webhooks:
   - url: https://league.internal/hooks/dota
     events: ["lobby.*"]
@@ -131,6 +143,9 @@ func TestLoadFull(t *testing.T) {
 	}
 	if cfg.Lobby.Regions["us_west"] != 7 || cfg.Lobby.Regions["europe"] != 3 {
 		t.Errorf("regions should merge over defaults: %v", cfg.Lobby.Regions)
+	}
+	if fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[player_pool no_team]" || fmt.Sprint(cfg.Lobby.Admins) != "[11111111 22222222]" || !cfg.Lobby.DestroyOnShutdown {
+		t.Errorf("lobby values not applied: %+v", cfg.Lobby)
 	}
 	if cfg.Secrets.APIKey.Reveal() != "the-api-key" || cfg.Secrets.WebAPIKey.Reveal() != "the-webapi-key" {
 		t.Errorf("secrets not loaded")
@@ -379,6 +394,15 @@ webhooks: [{ url: "ftp://x", events: [] }]
 		{"unquoted float password", "bots:\n  - name: a\n", "secrets:\n  bots:\n    a: { password: 1e3 }\n", []string{"password", "quoted string"}},
 		{"unquoted api key", "", "secrets:\n  api_key: 12345\n", []string{"api_key", "quoted string"}},
 		{"totp skew too large", "steam: { totp_skew: 1h }\n", "", []string{"steam.totp_skew"}},
+		{"lobby limits", `
+lobby:
+  host_seat_strategy: [caster, caster, sideways]
+  max_launch_attempts: 11
+  pending_timeout: 0s
+  host_seat_confirm_timeout: -1s
+  admins: [0]
+store: { retention: 0s }
+`, "", []string{"\"caster\" listed twice", "unknown value \"sideways\"", "max_launch_attempts 11", "lobby.pending_timeout", "lobby.host_seat_confirm_timeout", "lobby.admins", "store.retention"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -500,5 +524,20 @@ func TestLoadAcceptsLooseSharedSecret(t *testing.T) {
 		if cfg.Bots[0].Credentials.SharedSecret.Reveal() != v {
 			t.Errorf("shared_secret not loaded for %q", v)
 		}
+	}
+}
+
+// The shipped example must load with the current keys and defaults.
+func TestExampleConfigLoads(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.yaml.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := load(t, files{config: string(example)})
+	if err != nil {
+		t.Fatalf("config.yaml.example: %v", err)
+	}
+	if fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[caster self_kick]" || cfg.Store.Retention != 720*time.Hour || cfg.Lobby.MaxLaunchAttempts != 3 {
+		t.Errorf("example values: %v %s %d", cfg.Lobby.HostSeatStrategy, cfg.Store.Retention, cfg.Lobby.MaxLaunchAttempts)
 	}
 }

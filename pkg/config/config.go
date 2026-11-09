@@ -94,16 +94,40 @@ type LeagueConfig struct {
 // LobbyConfig holds lobby lifecycle timeouts and the operator-maintained
 // name-to-wire tables. Map keys are lowercased by the loader.
 type LobbyConfig struct {
-	HostSeatStrategy    []string          `mapstructure:"host_seat_strategy"`
-	IdleTimeout         time.Duration     `mapstructure:"idle_timeout"`
-	LaunchSettleTimeout time.Duration     `mapstructure:"launch_settle_timeout"`
-	ServerStallTimeout  time.Duration     `mapstructure:"server_stall_timeout"`
-	IngameBackstop      time.Duration     `mapstructure:"ingame_backstop"`
-	Invite              InviteConfig      `mapstructure:"invite"`
-	Chat                ChatConfig        `mapstructure:"chat"`
-	Regions             map[string]uint32 `mapstructure:"regions"`
-	GameModes           map[string]uint32 `mapstructure:"game_modes"`
-	SeriesTypes         map[string]uint32 `mapstructure:"series_types"`
+	// HostSeatStrategy is the ordered list of ways to get the host out of
+	// a player slot: caster, self_kick, player_pool, spectator, no_team.
+	HostSeatStrategy []string `mapstructure:"host_seat_strategy"`
+	// HostSeatConfirmTimeout is how long one strategy may take to show in
+	// the lobby before the next is tried.
+	HostSeatConfirmTimeout time.Duration `mapstructure:"host_seat_confirm_timeout"`
+	// MaxLaunchAttempts bounds automatic and chat launches; after that only
+	// a forced API launch tries again.
+	MaxLaunchAttempts   int           `mapstructure:"max_launch_attempts"`
+	PendingTimeout      time.Duration `mapstructure:"pending_timeout"`
+	AutoLaunchDelay     time.Duration `mapstructure:"auto_launch_delay"`
+	IdleTimeout         time.Duration `mapstructure:"idle_timeout"`
+	LaunchSettleTimeout time.Duration `mapstructure:"launch_settle_timeout"`
+	ServerStallTimeout  time.Duration `mapstructure:"server_stall_timeout"`
+	IngameBackstop      time.Duration `mapstructure:"ingame_backstop"`
+	PostgameLinger      time.Duration `mapstructure:"postgame_linger"`
+	// EnforceCooldown spaces seating kicks aimed at the same member.
+	EnforceCooldown time.Duration `mapstructure:"enforce_cooldown"`
+	// ReadoptTimeout is how long a lobby found in the database at startup
+	// waits for its bot to be ready again.
+	ReadoptTimeout time.Duration `mapstructure:"readopt_timeout"`
+	// DrainTimeout bounds the lobby step of shutdown.
+	DrainTimeout time.Duration `mapstructure:"drain_timeout"`
+	// DestroyOnShutdown destroys lobbies that have not launched at
+	// shutdown instead of leaving them to be re-adopted.
+	DestroyOnShutdown bool `mapstructure:"destroy_on_shutdown"`
+	// Admins are account IDs that may run admin chat commands in every
+	// lobby, on top of each lobby's own list.
+	Admins      []uint32          `mapstructure:"admins"`
+	Invite      InviteConfig      `mapstructure:"invite"`
+	Chat        ChatConfig        `mapstructure:"chat"`
+	Regions     map[string]uint32 `mapstructure:"regions"`
+	GameModes   map[string]uint32 `mapstructure:"game_modes"`
+	SeriesTypes map[string]uint32 `mapstructure:"series_types"`
 }
 
 // InviteConfig rate-limits invites per player.
@@ -141,6 +165,8 @@ type WebAPIConfig struct {
 // <state_dir>/dota_lobby.db.
 type StoreConfig struct {
 	Path string `mapstructure:"path"`
+	// Retention is how long finished lobbies and their events are kept.
+	Retention time.Duration `mapstructure:"retention"`
 }
 
 // WebhookConfig is one event receiver. Its signing secret is looked up with
@@ -247,14 +273,24 @@ func defaults() map[string]any {
 		"league::allow_unverified":  false,
 		"league::webapi_enrichment": true,
 
-		"lobby::host_seat_strategy":     []string{"self_kick", "player_pool", "spectator", "caster"},
-		"lobby::idle_timeout":           "30m",
-		"lobby::launch_settle_timeout":  "2m",
-		"lobby::server_stall_timeout":   "10m",
-		"lobby::ingame_backstop":        "3h",
-		"lobby::invite::min_resend":     "30s",
-		"lobby::invite::max_per_player": 5,
-		"lobby::chat::enabled":          false,
+		"lobby::host_seat_strategy":        []string{"caster", "self_kick"},
+		"lobby::host_seat_confirm_timeout": "3s",
+		"lobby::max_launch_attempts":       3,
+		"lobby::pending_timeout":           "10m",
+		"lobby::auto_launch_delay":         "10s",
+		"lobby::postgame_linger":           "30s",
+		"lobby::enforce_cooldown":          "10s",
+		"lobby::readopt_timeout":           "5m",
+		"lobby::drain_timeout":             "10s",
+		"lobby::destroy_on_shutdown":       false,
+		"lobby::admins":                    []uint32{},
+		"lobby::idle_timeout":              "30m",
+		"lobby::launch_settle_timeout":     "2m",
+		"lobby::server_stall_timeout":      "10m",
+		"lobby::ingame_backstop":           "3h",
+		"lobby::invite::min_resend":        "30s",
+		"lobby::invite::max_per_player":    5,
+		"lobby::chat::enabled":             false,
 		// Region and series values are UNCERTAIN (01 §7.10, §7.11); operators
 		// maintain them.
 		"lobby::regions":      map[string]any{"us_west": 1, "us_east": 2, "europe": 3, "sea": 5},
@@ -268,7 +304,8 @@ func defaults() map[string]any {
 		"match::webapi::enabled":    true,
 		"match::webapi::rps":        1.0,
 
-		"store::path": "",
+		"store::path":      "",
+		"store::retention": "720h",
 	}
 }
 

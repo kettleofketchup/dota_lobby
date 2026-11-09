@@ -13,6 +13,7 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/api"
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/league"
+	"github.com/kettleofketchup/dota_lobby/pkg/lobby"
 	"github.com/kettleofketchup/dota_lobby/pkg/pool"
 	"github.com/kettleofketchup/dota_lobby/pkg/store"
 )
@@ -22,9 +23,9 @@ import (
 const httpShutdownTimeout = 5 * time.Second
 
 // serve runs the service until ctx ends (SIGINT/SIGTERM) or the listener
-// fails, then shuts down in this order: fail /readyz, stop HTTP, stop the
-// league registry, stop the bots (releasing the state-dir lock), close the
-// database.
+// fails, then shuts down in this order: fail /readyz, stop HTTP, drain the
+// lobbies, stop the league registry, stop the bots (releasing the
+// state-dir lock), close the database.
 func (c cli) serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cf configFlags
@@ -69,6 +70,19 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	regDone := make(chan struct{})
 	go func() { defer close(regDone); reg.Run(regCtx) }()
 	bots := pool.New(mgr, reg, pool.Options{})
+	lobbies := lobby.New(lobby.Options{
+		Store: db.Lobbies(), Pool: bots, Holders: reg, Bots: mgr,
+		Lobby: cfg.Lobby, GC: cfg.GC, Retention: cfg.Store.Retention, Logger: log,
+	})
+	// Re-adopts the lobbies a previous run left; their bots are leased
+	// again before any new lobby can take them.
+	if err := lobbies.Start(ctx); err != nil {
+		_ = ln.Close()
+		drainLobbies(lobbies, cfg.Lobby.DrainTimeout, log)
+		stopReg()
+		<-regDone
+		return errors.Join(err, stopBots(mgr, log))
+	}
 
 	srv := api.New(api.Options{
 		Addr:             addr,
@@ -76,6 +90,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		Bots:             mgr,
 		Leagues:          reg,
 		Leases:           bots,
+		Lobbies:          lobbies,
 		MinReadyBots:     cfg.Readiness.MinReadyBots,
 		GCRequestTimeout: cfg.GC.RequestTimeout,
 		MaxBodyBytes:     cfg.Server.MaxBodyBytes,
@@ -103,6 +118,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	if err := srv.Shutdown(hctx); err != nil {
 		log.Warn("http shutdown incomplete", "err", err)
 	}
+	drainLobbies(lobbies, cfg.Lobby.DrainTimeout, log)
 	stopReg()
 	<-regDone
 	if err := stopBots(mgr, log); err != nil {
@@ -112,6 +128,18 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		log.Info("stopped cleanly")
 	}
 	return runErr
+}
+
+// drainLobbies stops the lobby trackers before the bots go, so none of
+// them sees its bot disconnect; see lobby.Manager.Drain.
+func drainLobbies(m *lobby.Manager, budget time.Duration, log *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	if err := m.Drain(ctx); err != nil {
+		log.Warn("lobby drain incomplete", "err", err)
+		return
+	}
+	log.Info("lobbies drained")
 }
 
 // closeStore closes the database last, after everything that writes to it

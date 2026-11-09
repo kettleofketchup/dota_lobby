@@ -66,11 +66,24 @@ league:
   webapi_enrichment: true
 
 lobby:
-  host_seat_strategy: [self_kick, player_pool, spectator, caster]
-  idle_timeout: 30m
+  # How the bot leaves its player slot before a launch, tried in order:
+  # caster, self_kick, player_pool, spectator, no_team. A launch that does
+  # not reach a game moves on to the next one.
+  host_seat_strategy: [caster, self_kick]
+  host_seat_confirm_timeout: 3s
+  max_launch_attempts: 3   # then only a forced launch tries again
+  pending_timeout: 10m     # waiting for a free bot
+  idle_timeout: 30m        # from the request until the launch
+  auto_launch_delay: 10s   # launch: auto, once ready
   launch_settle_timeout: 2m
   server_stall_timeout: 10m
   ingame_backstop: 3h
+  postgame_linger: 30s
+  enforce_cooldown: 10s    # between two seat corrections of one member
+  readopt_timeout: 5m      # after a restart, waiting for the lobby's bot
+  drain_timeout: 10s
+  destroy_on_shutdown: false  # false leaves lobbies for the next start
+  admins: []               # account IDs for admin chat commands (later)
   invite: { min_resend: 30s, max_per_player: 5 }
   chat: { enabled: false }
   # Wire values are unconfirmed; keep them current by hand.
@@ -85,6 +98,7 @@ match:
 
 store:
   path: ""                 # empty = <state_dir>/dota_lobby.db
+  retention: 720h          # ended lobbies and their events
 
 # webhooks:
 #   - url: https://league.internal/hooks/dota

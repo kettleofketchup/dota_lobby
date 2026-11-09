@@ -4,7 +4,7 @@
 
     - **Not yet run against live Steam.** Headless login is built and tested against fakes;
       the first live run is pending. See [Known limitations](../known-limitations.md).
-    - **Lobbies are not created yet.** The lobby endpoints answer `501`.
+    - **Lobby hosting is tested against fakes only.** The first live launches are pending.
 
     Use dedicated Steam accounts that you can afford to lose, and start with a single bot.
 

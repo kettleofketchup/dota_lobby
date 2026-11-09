@@ -52,22 +52,43 @@ type Client interface {
 	// readers lose the oldest events; the channel is never closed, so call
 	// the returned func to stop.
 	SubscribeLobby() (<-chan LobbyEvent, func())
+	// SubscribeInvites streams InvitationCreated across reconnects, with
+	// the same drop-oldest policy as SubscribeLobby. The events still go
+	// to Events() as well.
+	SubscribeInvites() (<-chan InvitationCreated, func())
 	// CreateLobby leaves any stale lobby, sends a job-addressed create and
 	// waits for the lobby to appear in the SO cache. A failed 7055
 	// or a NOT_LEAGUE_ADMIN popup returns *CreateError. A lobby may still
 	// exist after an error, so callers check CurrentLobby before reuse.
 	CreateLobby(ctx context.Context, d LobbyDetails) (*LobbyView, error)
-	// SetLobbyDetails sends the full detail set. LobbyID 0 means the current
-	// lobby.
-	SetLobbyDetails(d LobbyDetails)
-	Invite(steamID64 uint64)
-	KickFromTeam(accountID uint32)
-	Kick(accountID uint32)
-	JoinTeam(team Team, slot uint32)
-	FlipTeams()
-	BalancedShuffle()
+	// SetLobbyDetails sends the full detail set: the GC replaces every
+	// detail with what it gets, so callers always send the merged set.
+	// LobbyID 0 means the current lobby. An unsupported TV delay is an
+	// error and nothing is sent.
+	SetLobbyDetails(d LobbyDetails) error
+
+	// The lobby operations below write one GC message and return at once.
+	// None has a reliable reply: the effect shows up in the lobby SO.
+	// They fail with ErrNotConnected or ErrNotReady when there is no GC
+	// session to send on.
+
+	// Invite invites a SteamID64; InvitationCreated (see SubscribeInvites)
+	// confirms it was sent.
+	Invite(steamID64 uint64) error
+	// KickFromTeam moves a member to the unassigned pool. With the
+	// bot's own account ID it moves the host.
+	KickFromTeam(accountID uint32) error
+	// Kick removes a member from the lobby.
+	Kick(accountID uint32) error
+	// JoinTeam moves the bot itself; a host cannot seat anyone else.
+	JoinTeam(team Team, slot uint32) error
+	// JoinBroadcastChannel moves the bot into a broadcaster (caster) slot
+	// of the given channel.
+	JoinBroadcastChannel(channel uint32) error
+	FlipTeams() error
+	BalancedShuffle() error
 	// Launch sends an empty CMsgPracticeLobbyLaunch (no nonce, research 03 §8.3).
-	Launch()
+	Launch() error
 	Leave()
 	// Abandon is only for the experimental in-game delete path (Q14).
 	Abandon()
@@ -463,7 +484,26 @@ type Member struct {
 	Slot      uint32
 	Leaver    int32
 	HeroID    int32
+	// CoachTeam is the team the member coaches, nil when the wire omitted
+	// it. A value other than TeamNoTeam marks a coach, who is not a player
+	// (research 11 §5.4).
+	CoachTeam *Team
 }
+
+// Coach reports whether the member is a coach rather than a player.
+func (m Member) Coach() bool { return m.CoachTeam != nil && *m.CoachTeam != TeamNoTeam }
+
+// steamID64Base is the SteamID64 of account 0 in the public universe as an
+// individual account: universe 1, type 1, instance 1.
+const steamID64Base uint64 = 76561197960265728
+
+// AccountID is the 32-bit account ID inside a SteamID64, the ID that kick
+// messages and chat use.
+func AccountID(steamID64 uint64) uint32 { return uint32(steamID64 & 0xFFFFFFFF) }
+
+// SteamID64 is the SteamID64 of an individual account in the public
+// universe, the ID that invites and lobby members use.
+func SteamID64(account uint32) uint64 { return steamID64Base + uint64(account) }
 
 // LobbyEventKind is the SO cache change type.
 type LobbyEventKind int
