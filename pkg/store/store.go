@@ -66,10 +66,11 @@ func withMigrations(fsys fs.FS) Option {
 }
 
 // WithPreMigrateBackup makes Open copy an existing database into dir
-// before it applies any pending migration, and keep the newest keep of
-// those copies. A fresh database, or one with nothing to migrate, is not
-// copied. When the copy fails, Open fails with ErrBackupFailed and applies
-// nothing.
+// before it applies any pending migration. Once every migration has been
+// applied, only the newest keep of those copies are kept; after a failed
+// migration none is deleted. A fresh database, or one with nothing to
+// migrate, is not copied. When the copy fails, Open fails with
+// ErrBackupFailed and applies nothing.
 func WithPreMigrateBackup(dir string, keep int) Option {
 	return func(o *options) { o.backup = &backupOptions{dir: dir, keep: keep} }
 }
@@ -212,7 +213,8 @@ func loadMigrations(fsys fs.FS) ([]migration, error) {
 
 // migrate applies every migration newer than the database, each in its own
 // transaction together with its schema_migrations row. With backup set, an
-// existing database is copied first.
+// existing database is copied first, and old copies are pruned only after
+// every migration has been applied.
 func (s *Store) migrate(ctx context.Context, fsys fs.FS, backup *backupOptions) error {
 	ms, err := loadMigrations(fsys)
 	if err != nil {
@@ -229,7 +231,8 @@ func (s *Store) migrate(ctx context.Context, fsys fs.FS, backup *backupOptions) 
 	if current > len(ms) {
 		return fmt.Errorf("%w: database at version %d, binary knows %d", ErrSchemaTooNew, current, len(ms))
 	}
-	if backup != nil && current > 0 && current < len(ms) {
+	backedUp := backup != nil && current > 0 && current < len(ms)
+	if backedUp {
 		if err := s.preMigrateBackup(ctx, *backup, current, len(ms)); err != nil {
 			return err
 		}
@@ -238,6 +241,9 @@ func (s *Store) migrate(ctx context.Context, fsys fs.FS, backup *backupOptions) 
 		if err := s.apply(ctx, m); err != nil {
 			return err
 		}
+	}
+	if backedUp {
+		s.pruneAutoBackups(*backup)
 	}
 	return nil
 }

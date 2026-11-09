@@ -265,7 +265,9 @@ The copy is checked (SQLite's `quick_check`, and its schema version) before anyt
 migrated. If it cannot be written or does not check out, the service applies no migration and
 exits with `refusing to migrate: pre-migration backup failed`; see
 [Troubleshooting](../operations/troubleshooting.md#startup-failures). The newest 5 automatic
-copies are kept (`store.backup.keep`). A new database, or one with nothing to migrate, is not
+copies are kept (`store.backup.keep`), by the time in their names. Older ones are deleted only
+after the migrations have succeeded: if a migration fails and the container keeps restarting,
+every start adds a copy and none is deleted, so the copy from before the upgrade survives. A new database, or one with nothing to migrate, is not
 copied. Each copy is as large as the database, so leave that much free space on the volume.
 
 Leave this on. `store.backup.enabled: false` turns it off and logs a warning at every start.

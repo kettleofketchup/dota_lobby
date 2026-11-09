@@ -1,7 +1,8 @@
 - **Backup before migrations.** Before it applies a pending migration to an existing database,
   the service writes a copy to `<state_dir>/backups/`
-  (`dota_lobby-<from>-to-<to>-<UTC time>.db`), checks it, and keeps the newest 5. If the copy
-  fails, nothing is migrated and the service exits with
+  (`dota_lobby-<from>-to-<to>-<UTC time>.db`) and checks it. Once the migrations have
+  succeeded it keeps the newest 5; a failed migration deletes none. If the copy fails,
+  nothing is migrated and the service exits with
   `refusing to migrate: pre-migration backup failed`. New keys: `store.backup.enabled`,
   `store.backup.dir` and `store.backup.keep`.
 - `dota_lobby backup --out PATH` copies the database on demand. It opens it read-only and takes

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -19,8 +21,8 @@ import (
 // way back.
 var ErrBackupFailed = errors.New("refusing to migrate: pre-migration backup failed")
 
-// backupTimeLayout names backup files. Fixed width, so name order is time
-// order.
+// backupTimeLayout names backup files. Every backup name ends in
+// -<time>.db with this fixed-width time, which pruning sorts on.
 const backupTimeLayout = "20060102T150405Z"
 
 var (
@@ -181,8 +183,10 @@ func verifyBackup(ctx context.Context, path string, wantVersion int) error {
 }
 
 // preMigrateBackup copies the database at version from before migrations
-// up to version to run, verifies the copy and prunes old automatic
-// backups. A prune failure is only logged.
+// up to version to run and verifies the copy. It deletes nothing: old
+// copies are pruned only once the migrations have succeeded
+// (pruneAutoBackups), so a migration that fails on every restart cannot
+// prune away the copy taken before the upgrade.
 func (s *Store) preMigrateBackup(ctx context.Context, b backupOptions, from, to int) error {
 	if err := os.MkdirAll(b.dir, 0o700); err != nil {
 		return fmt.Errorf("%w: %w", ErrBackupFailed, err)
@@ -199,10 +203,15 @@ func (s *Store) preMigrateBackup(ctx context.Context, b backupOptions, from, to 
 		size = fi.Size()
 	}
 	s.log.Info("pre-migration backup written", "path", out, "from", from, "to", to, "bytes", size)
+	return nil
+}
+
+// pruneAutoBackups keeps the newest b.keep automatic backups. A failure is
+// only logged.
+func (s *Store) pruneAutoBackups(b backupOptions) {
 	if err := pruneBackups(b.dir, autoBackupName, b.keep); err != nil {
 		s.log.Warn("could not prune old pre-migration backups", "dir", b.dir, "err", err)
 	}
-	return nil
 }
 
 // PruneManualBackups deletes all but the newest keep on-demand backups
@@ -212,8 +221,9 @@ func PruneManualBackups(dir string, keep int) error {
 }
 
 // pruneBackups deletes all but the newest keep files in dir whose names
-// match re. Names carry a fixed-width UTC time, so name order is time
-// order.
+// match re. Age comes from the time at the end of the name, not the whole
+// name: an automatic name starts with schema versions, so a copy just
+// taken from an older schema sorts before older copies by name.
 func pruneBackups(dir string, re *regexp.Regexp, keep int) error {
 	if keep < 1 {
 		return fmt.Errorf("prune backups: keep %d must be at least 1", keep)
@@ -231,7 +241,9 @@ func pruneBackups(dir string, re *regexp.Regexp, keep int) error {
 	if len(names) <= keep {
 		return nil
 	}
-	slices.Sort(names)
+	slices.SortFunc(names, func(a, b string) int {
+		return cmp.Or(strings.Compare(backupTime(a), backupTime(b)), strings.Compare(a, b))
+	})
 	var errs []error
 	for _, n := range names[:len(names)-keep] {
 		if err := os.Remove(filepath.Join(dir, n)); err != nil {
@@ -242,4 +254,11 @@ func pruneBackups(dir string, re *regexp.Regexp, keep int) error {
 		return fmt.Errorf("prune backups: %w", err)
 	}
 	return nil
+}
+
+// backupTime is the fixed-width time at the end of a backup name
+// (...-<time>.db), which sorts as text in time order.
+func backupTime(name string) string {
+	base := strings.TrimSuffix(name, ".db")
+	return base[strings.LastIndexByte(base, '-')+1:]
 }

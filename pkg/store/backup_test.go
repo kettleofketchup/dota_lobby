@@ -179,6 +179,94 @@ func TestOpenRejectsBadBackupOptions(t *testing.T) {
 	}
 }
 
+// A migration that fails on every start, as under restart: unless-stopped,
+// must not prune away the copy taken before the upgrade.
+func TestFailedMigrationKeepsBackups(t *testing.T) {
+	ctx := context.Background()
+	path := openAtV1(t)
+	dir := filepath.Join(filepath.Dir(path), "backups")
+	broken := fstest.MapFS{
+		"0001_a.sql":   migV1["0001_a.sql"],
+		"0002_b.sql":   migV2["0002_b.sql"],
+		"0003_bad.sql": {Data: []byte("CREATE TABLE b (y INTEGER);")},
+	}
+	const keep = 2
+	if _, err := Open(ctx, path, withMigrations(broken), WithPreMigrateBackup(dir, keep)); err == nil {
+		t.Fatal("Open applied a failing migration")
+	}
+	files := backupFiles(t, dir)
+	if len(files) != 1 || !strings.HasPrefix(files[0], "dota_lobby-0001-to-0003-") {
+		t.Fatalf("backups after the first failed start = %v", files)
+	}
+	preUpgrade := files[0]
+
+	// Copies from earlier restarts, all newer than the pre-upgrade one.
+	for i := range keep + 1 {
+		n := autoBackupFile(2, 3, time.Now().Add(time.Duration(i+1)*time.Hour))
+		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(ctx, path, withMigrations(broken), WithPreMigrateBackup(dir, keep)); err == nil {
+		t.Fatal("Open applied a failing migration")
+	}
+	files = backupFiles(t, dir)
+	if !slices.Contains(files, preUpgrade) {
+		t.Fatalf("pre-upgrade copy %s pruned after a failed migration: %v", preUpgrade, files)
+	}
+	if len(files) != keep+3 {
+		t.Errorf("backups after a failed migration = %v, want all %d kept", files, keep+3)
+	}
+	if v := schemaVersionOf(t, filepath.Join(dir, preUpgrade)); v != 1 {
+		t.Errorf("pre-upgrade copy schema version = %d, want 1", v)
+	}
+
+	// Once a release migrates successfully, the old copies are pruned. It
+	// goes up to 0004, so its copy's name differs from the last one even
+	// within the same second.
+	fixed := fstest.MapFS{
+		"0001_a.sql":  migV1["0001_a.sql"],
+		"0002_b.sql":  migV2["0002_b.sql"],
+		"0003_ok.sql": {Data: []byte("CREATE TABLE c (z INTEGER);")},
+		"0004_ok.sql": {Data: []byte("CREATE TABLE d (w INTEGER);")},
+	}
+	s, err := Open(ctx, path, withMigrations(fixed), WithPreMigrateBackup(dir, keep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if files := backupFiles(t, dir); len(files) != keep {
+		t.Errorf("backups after a successful migration = %v, want %d", files, keep)
+	}
+}
+
+// Age is the time in the name, not the schema versions in front of it.
+func TestPruneBackupsByTime(t *testing.T) {
+	dir := t.TempDir()
+	at := func(min int) time.Time { return time.Date(2026, 11, 9, 12, min, 0, 0, time.UTC) }
+	old := []string{
+		autoBackupFile(3, 5, at(0)),
+		autoBackupFile(4, 5, at(1)),
+		autoBackupFile(3, 5, at(2)),
+		autoBackupFile(4, 5, at(3)),
+	}
+	newest := autoBackupFile(1, 5, at(4))
+	for _, n := range append(slices.Clone(old), newest) {
+		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pruneBackups(dir, autoBackupName, 2); err != nil {
+		t.Fatal(err)
+	}
+	got := backupFiles(t, dir)
+	want := []string{newest, old[3]}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("after prune:\n got %v\nwant %v", got, want)
+	}
+}
+
 func TestPruneBackups(t *testing.T) {
 	dir := t.TempDir()
 	var auto []string

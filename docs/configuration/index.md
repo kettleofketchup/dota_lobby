@@ -96,7 +96,7 @@ fatal error. A secrets file that is still sops-encrypted is refused with
 | `store.retention` | duration | `720h` | How long ended lobbies and their events are kept before an hourly sweep deletes them |
 | `store.backup.enabled` | bool | `true` | Copy the database before applying any pending migration. If the copy fails, startup stops and nothing is migrated. See [Backups](../deployment/docker-compose.md#backups) |
 | `store.backup.dir` | path | empty | Where those copies go. Empty means `<state_dir>/backups`. Created mode `0700`, each copy `0600` |
-| `store.backup.keep` | int | `5` | How many automatic copies to keep; older ones are deleted after a new one is written. At least `1`. Copies from `dota_lobby backup` are never deleted by this |
+| `store.backup.keep` | int | `5` | How many automatic copies to keep. Older ones are deleted once the migrations have succeeded; after a failed migration none is deleted. At least `1`. Copies from `dota_lobby backup` are never deleted by this |
 | `webhooks` | list | empty | Event receivers, see [`webhooks[]`](#webhooks) |
 | `webhook_delivery.timeout` | duration | `10s` | How long one delivery attempt may take, response included |
 | `webhook_delivery.max_age` | duration | `24h` | How long after an event a failing delivery is retried before it is given up |
