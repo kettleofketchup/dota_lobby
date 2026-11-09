@@ -3,6 +3,7 @@
 //	dota_lobby [serve] [flags]          run the service (the default)
 //	dota_lobby auth --bot NAME [flags]  log a bot on with its password once and store the token
 //	dota_lobby healthcheck [flags]      GET /livez on this host; exit 0 when alive
+//	dota_lobby backup --out PATH        copy the database, also while serve runs
 //	dota_lobby version                  print the build version
 package main
 
@@ -60,6 +61,7 @@ const usageText = `usage:
   dota_lobby [serve] [--config FILE] [--secrets FILE]
   dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
   dota_lobby healthcheck [--url URL] [--timeout 5s]
+  dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--db FILE] [--timeout 2m] [--config FILE]
   dota_lobby version
 `
 
@@ -76,6 +78,8 @@ func (c cli) run(ctx context.Context, args []string) int {
 		err = c.auth(ctx, args)
 	case "healthcheck":
 		err = c.healthcheck(ctx, args)
+	case "backup":
+		err = c.backup(ctx, args)
 	case "version":
 		_, err = fmt.Fprintf(c.stdout, "dota_lobby %s (commit %s, built %s)\n", version, commit, buildDate)
 	case "help", "-h", "--help":

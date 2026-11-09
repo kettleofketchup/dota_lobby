@@ -58,6 +58,8 @@ func TestRunDispatch(t *testing.T) {
 		{[]string{"serve", "--nope"}, exitUsage},
 		{[]string{"auth"}, exitUsage},
 		{[]string{"healthcheck", "-h"}, exitOK},
+		{[]string{"backup"}, exitUsage},
+		{[]string{"backup", "-h"}, exitOK},
 	}
 	for _, tt := range tests {
 		c, _, _ := newCLI()
