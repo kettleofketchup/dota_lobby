@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -41,7 +42,18 @@ var (
 	ErrUnknownLeague = errors.New("league: no configured bot holds this league")
 	// ErrNoReadyHolder means bots hold the league but none is ready.
 	ErrNoReadyHolder = errors.New("league: no ready bot holds this league")
+	// ErrGCSourceDisabled means league.sources does not include "gc", so
+	// there is no GC list to refresh.
+	ErrGCSourceDisabled = errors.New(`league: the "gc" source is not enabled`)
 )
+
+// MaxRecentChanges is how many of a bot's league changes the registry
+// keeps in memory for listings.
+const MaxRecentChanges = 50
+
+// refreshAllWorkers bounds how many bots RefreshAll asks at once. Each bot
+// has its own GC connection, so this only limits the burst.
+const refreshAllWorkers = 4
 
 // Holding is one bot's claim on a league.
 type Holding struct {
@@ -61,9 +73,51 @@ type LeagueBot struct {
 	// RefreshedAt is when the GC list was fetched; zero for the config
 	// source.
 	RefreshedAt time.Time
+	// FirstSeenAt is when the league first appeared in the bot's GC list;
+	// zero for the config source.
+	FirstSeenAt time.Time
 	// Stale means the GC list was loaded from the database and has not been
 	// fetched again since this process started.
 	Stale bool
+}
+
+// BotLeague is one league a bot holds.
+type BotLeague struct {
+	LeagueID uint32
+	// Name is from the GC list; empty when unknown.
+	Name string
+	LeagueBot
+}
+
+// Change is a league appearing in or disappearing from a bot's GC list.
+type Change struct {
+	LeagueID uint32
+	// Kind is store.ChangeAdded or store.ChangeRemoved.
+	Kind string
+	At   time.Time
+}
+
+// Inventory is everything known about one bot's leagues.
+type Inventory struct {
+	Bot     string
+	Leagues []BotLeague
+	// OKAt is the last successful GC refresh; zero if none.
+	OKAt time.Time
+	// Error is the last refresh failure since OKAt, if any.
+	Error   string
+	ErrorAt time.Time
+	// Changes are the most recent changes, newest first, at most
+	// MaxRecentChanges.
+	Changes []Change
+}
+
+// RefreshResult is one bot's outcome in RefreshAll.
+type RefreshResult struct {
+	Bot string
+	// NotReady means the bot was not gc_ready and was not asked.
+	NotReady bool
+	// Err is the refresh failure, if any.
+	Err error
 }
 
 // League is one league and the bots that hold it.
@@ -80,6 +134,7 @@ type Store interface {
 	ReplaceBotLeagues(ctx context.Context, bot, source string, ids []uint32, at time.Time) error
 	RecordRefreshError(ctx context.Context, bot string, err error, at time.Time) error
 	BotLeagues(ctx context.Context) (map[string]store.BotLeagueSet, error)
+	LeagueChanges(ctx context.Context, perBot int) (map[string][]store.LeagueChange, error)
 }
 
 // Options configures a Registry.
@@ -113,11 +168,16 @@ type Registry struct {
 	mu    sync.Mutex
 	state map[string]*botState // keyed by lowercased name
 	names map[uint32]string
+	// refreshing holds one token per bot, so one bot's refreshes (Run's
+	// and an operator's) never overlap. Keyed by lowercased name.
+	refreshing map[string]chan struct{}
 }
 
 type botState struct {
 	gcKnown     bool
 	gc          []uint32 // sorted
+	firstSeen   map[uint32]time.Time
+	changes     []Change // newest first
 	refreshedAt time.Time
 	stale       bool
 	lastErr     string
@@ -157,6 +217,7 @@ func New(st Store, bots bot.Source, cfg config.LeagueConfig, botCfgs []config.Bo
 		configured: map[string][]uint32{},
 		state:      map[string]*botState{},
 		names:      map[uint32]string{},
+		refreshing: map[string]chan struct{}{},
 	}
 	for _, b := range botCfgs {
 		ids := slices.Clone(b.Leagues)
@@ -185,6 +246,10 @@ func (r *Registry) load(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load bot leagues: %w", err)
 	}
+	changes, err := r.store.LeagueChanges(ctx, MaxRecentChanges)
+	if err != nil {
+		return fmt.Errorf("load bot league changes: %w", err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for name, set := range sets {
@@ -193,12 +258,25 @@ func (r *Registry) load(ctx context.Context) error {
 			continue // already fetched in this process
 		}
 		if !set.OKAt.IsZero() {
+			src := set.Sources[SourceGC]
 			bs.gcKnown = true
-			bs.gc = slices.Clone(set.Sources[SourceGC].IDs)
+			bs.gc = slices.Clone(src.IDs)
+			bs.firstSeen = maps.Clone(src.FirstSeen)
 			bs.refreshedAt = set.OKAt
 			bs.stale = true
 		}
 		bs.lastErr, bs.lastErrAt = set.Error, set.ErrorAt
+	}
+	for name, list := range changes {
+		bs := r.botLocked(name)
+		if len(bs.changes) > 0 {
+			continue // already refreshed in this process
+		}
+		for _, c := range list {
+			if c.Source == SourceGC {
+				bs.changes = append(bs.changes, Change{LeagueID: c.LeagueID, Kind: c.Change, At: c.At})
+			}
+		}
 	}
 	return nil
 }
@@ -264,20 +342,90 @@ func (r *Registry) poll(ctx context.Context) {
 	}
 }
 
-// Refresh fetches one bot's GC list now. It is what Run does for a due
-// bot, exported for tests and operator tooling.
+// Refresh fetches one bot's GC list now, as Run does for a due bot. It
+// fails with bot.ErrUnknownBot, with ErrGCSourceDisabled, or with
+// bot.ErrNotReady when the bot is not gc_ready; those are not recorded as
+// refresh failures.
 func (r *Registry) Refresh(ctx context.Context, name string) error {
 	h, ok := r.bots.Bot(name)
 	if !ok {
 		return fmt.Errorf("refresh leagues: %w: %q", bot.ErrUnknownBot, name)
 	}
-	return r.refresh(ctx, h, h.Status().ReadySince)
+	if !r.useGC {
+		return fmt.Errorf("refresh leagues of %s: %w", h.Name(), ErrGCSourceDisabled)
+	}
+	st := h.Status()
+	if !st.Ready {
+		return fmt.Errorf("refresh leagues of %s: %w", h.Name(), bot.ErrNotReady)
+	}
+	return r.refresh(ctx, h, st.ReadySince)
+}
+
+// RefreshAll refreshes every gc_ready bot, a few at a time, and reports
+// each enabled bot's outcome in config order. A bot that is not ready is
+// reported as NotReady and not asked.
+func (r *Registry) RefreshAll(ctx context.Context) ([]RefreshResult, error) {
+	if !r.useGC {
+		return nil, fmt.Errorf("refresh leagues: %w", ErrGCSourceDisabled)
+	}
+	names := r.bots.Names()
+	out := make([]RefreshResult, len(names))
+	sem := make(chan struct{}, refreshAllWorkers)
+	var wg sync.WaitGroup
+	for i, name := range names {
+		out[i].Bot = name
+		h, ok := r.bots.Bot(name)
+		if !ok {
+			out[i].Err = fmt.Errorf("refresh leagues: %w: %q", bot.ErrUnknownBot, name)
+			continue
+		}
+		st := h.Status()
+		if !st.Ready {
+			out[i].NotReady = true
+			continue
+		}
+		wg.Go(func() {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				out[i].Err = r.refresh(ctx, h, st.ReadySince)
+			case <-ctx.Done():
+				out[i].Err = fmt.Errorf("refresh leagues of %s: %w", name, ctx.Err())
+			}
+		})
+	}
+	wg.Wait()
+	return out, nil
+}
+
+// lockRefresh waits for name's refresh token; the returned func gives it
+// back.
+func (r *Registry) lockRefresh(ctx context.Context, name string) (func(), error) {
+	k := key(name)
+	r.mu.Lock()
+	tok, ok := r.refreshing[k]
+	if !ok {
+		tok = make(chan struct{}, 1)
+		r.refreshing[k] = tok
+	}
+	r.mu.Unlock()
+	select {
+	case tok <- struct{}{}:
+		return func() { <-tok }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Time) error {
 	name := h.Name()
+	unlock, err := r.lockRefresh(ctx, name)
+	if err != nil {
+		return fmt.Errorf("refresh leagues of %s: %w", name, err)
+	}
+	defer unlock()
 	var infos []gc.LeagueInfo
-	err := h.Do(ctx, "list admin leagues", func(ctx context.Context, c gc.Client) error {
+	err = h.Do(ctx, "list admin leagues", func(ctx context.Context, c gc.Client) error {
 		var err error
 		infos, err = c.ListAdminLeagues(ctx)
 		return err
@@ -313,12 +461,39 @@ func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Ti
 	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
+	added, removed := diff(bs.gc, ids)
+	if bs.firstSeen == nil {
+		bs.firstSeen = map[uint32]time.Time{}
+	}
+	for _, id := range removed {
+		delete(bs.firstSeen, id)
+	}
+	for _, id := range ids {
+		if _, ok := bs.firstSeen[id]; !ok {
+			bs.firstSeen[id] = now
+		}
+	}
+	var changes []Change
+	for _, id := range removed {
+		changes = append(changes, Change{LeagueID: id, Kind: store.ChangeRemoved, At: now})
+	}
+	for _, id := range added {
+		changes = append(changes, Change{LeagueID: id, Kind: store.ChangeAdded, At: now})
+	}
+	slices.Reverse(changes) // newest first, added before removed as the store lists them
+	bs.changes = append(changes, bs.changes...)
+	if len(bs.changes) > MaxRecentChanges {
+		bs.changes = bs.changes[:MaxRecentChanges]
+	}
 	bs.gcKnown, bs.gc, bs.refreshedAt, bs.stale = true, ids, now, false
 	bs.lastErr, bs.lastErrAt = "", time.Time{}
 	bs.nextAttempt = now.Add(r.cfg.RefreshInterval)
 	r.mu.Unlock()
 
 	r.log.Info("league list refreshed", "bot", name, "leagues", ids)
+	if len(added) > 0 || len(removed) > 0 {
+		r.log.Info("bot league tickets changed", "bot", name, "added", added, "removed", removed)
+	}
 	if r.useCfg {
 		var missing []uint32
 		for _, id := range r.configured[key(name)] {
@@ -395,21 +570,76 @@ func (r *Registry) Holders(l uint32) []Holding {
 	return out
 }
 
+// diff returns the IDs only in b (added) and only in a (removed); both
+// inputs are sorted.
+func diff(a, b []uint32) (added, removed []uint32) {
+	for _, id := range b {
+		if _, found := slices.BinarySearch(a, id); !found {
+			added = append(added, id)
+		}
+	}
+	for _, id := range a {
+		if _, found := slices.BinarySearch(b, id); !found {
+			removed = append(removed, id)
+		}
+	}
+	return added, removed
+}
+
+// heldLocked lists the leagues bot name holds, by league ID.
+func (r *Registry) heldLocked(name string) []BotLeague {
+	var ids []uint32
+	bs, known := r.state[key(name)]
+	if known && bs.gcKnown {
+		ids = append(ids, bs.gc...)
+	}
+	ids = append(ids, r.configured[key(name)]...)
+	slices.Sort(ids)
+	var out []BotLeague
+	for _, id := range slices.Compact(ids) {
+		h, ok := r.holdsLocked(name, id)
+		if !ok {
+			continue
+		}
+		lb := LeagueBot{Name: name, Source: h.Source, Verified: h.Verified}
+		if h.Source == SourceGC {
+			lb.RefreshedAt, lb.Stale, lb.FirstSeenAt = bs.refreshedAt, bs.stale, bs.firstSeen[id]
+		}
+		out = append(out, BotLeague{LeagueID: id, Name: r.names[id], LeagueBot: lb})
+	}
+	return out
+}
+
 // BotLeagues returns the leagues bot holds, sorted.
 func (r *Registry) BotLeagues(name string) []uint32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []uint32
-	if bs, ok := r.state[key(name)]; ok && bs.gcKnown {
-		out = append(out, bs.gc...)
+	for _, bl := range r.heldLocked(name) {
+		out = append(out, bl.LeagueID)
 	}
-	for _, id := range r.configured[key(name)] {
-		if _, ok := r.holdsLocked(name, id); ok {
-			out = append(out, id)
+	return out
+}
+
+// Inventory returns what is known about one enabled bot's leagues, or
+// false for no such bot.
+func (r *Registry) Inventory(name string) (Inventory, bool) {
+	h, ok := r.bots.Bot(name)
+	if !ok {
+		return Inventory{}, false
+	}
+	name = h.Name()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inv := Inventory{Bot: name, Leagues: r.heldLocked(name)}
+	if bs, ok := r.state[key(name)]; ok {
+		if bs.gcKnown {
+			inv.OKAt = bs.refreshedAt
 		}
+		inv.Error, inv.ErrorAt = bs.lastErr, bs.lastErrAt
+		inv.Changes = slices.Clone(bs.changes)
 	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	return inv, true
 }
 
 // All lists every league some enabled bot holds, by league ID, with its
@@ -419,32 +649,14 @@ func (r *Registry) All() []League {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	byID := map[uint32]*League{}
-	add := func(id uint32, lb LeagueBot) {
-		l, ok := byID[id]
-		if !ok {
-			l = &League{LeagueID: id, Name: r.names[id]}
-			byID[id] = l
-		}
-		l.Bots = append(l.Bots, lb)
-	}
 	for _, n := range names {
-		var ids []uint32
-		if bs, ok := r.state[key(n)]; ok && bs.gcKnown {
-			ids = append(ids, bs.gc...)
-		}
-		ids = append(ids, r.configured[key(n)]...)
-		slices.Sort(ids)
-		for _, id := range slices.Compact(ids) {
-			h, ok := r.holdsLocked(n, id)
+		for _, bl := range r.heldLocked(n) {
+			l, ok := byID[bl.LeagueID]
 			if !ok {
-				continue
+				l = &League{LeagueID: bl.LeagueID, Name: bl.Name}
+				byID[bl.LeagueID] = l
 			}
-			lb := LeagueBot{Name: n, Source: h.Source, Verified: h.Verified}
-			if h.Source == SourceGC {
-				bs := r.state[key(n)]
-				lb.RefreshedAt, lb.Stale = bs.refreshedAt, bs.stale
-			}
-			add(id, lb)
+			l.Bots = append(l.Bots, bl.LeagueBot)
 		}
 	}
 	out := make([]League, 0, len(byID))
@@ -453,6 +665,23 @@ func (r *Registry) All() []League {
 	}
 	slices.SortFunc(out, func(a, b League) int { return cmp.Compare(a.LeagueID, b.LeagueID) })
 	return out
+}
+
+// League returns one league with its holders, or false when no enabled
+// bot holds it.
+func (r *Registry) League(id uint32) (League, bool) {
+	names := r.bots.Names()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	l := League{LeagueID: id, Name: r.names[id]}
+	for _, n := range names {
+		for _, bl := range r.heldLocked(n) {
+			if bl.LeagueID == id {
+				l.Bots = append(l.Bots, bl.LeagueBot)
+			}
+		}
+	}
+	return l, len(l.Bots) > 0
 }
 
 // Nodes fetches league L's lobby nodes through a ready holder, verified

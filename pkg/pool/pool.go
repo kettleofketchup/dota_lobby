@@ -79,6 +79,10 @@ func New(bots bot.Source, holders Holders, opts Options) *Pool {
 
 func key(name string) string { return strings.ToLower(name) }
 
+// CanHost reports whether a bot in this state may take a new lobby,
+// leases and leagues aside: gc_ready, with its lobby cache current.
+func CanHost(st bot.Status) bool { return st.Ready && !st.LobbyStale }
+
 type candidate struct {
 	holding  league.Holding
 	released time.Time
@@ -94,6 +98,11 @@ func (p *Pool) Reserve(ctx context.Context, l uint32, owner string) (*Lease, err
 	}
 	holders := p.holders.Holders(l)
 	if len(holders) == 0 {
+		// The owner's bot may have lost the league since it was leased;
+		// the lease stands.
+		if ls := p.leaseOf(owner); ls != nil {
+			return ls, nil
+		}
 		return nil, fmt.Errorf("reserve bot for league %d: %w", l, ErrNoHolder)
 	}
 	// Statuses are read before taking the lock; a bot that drops in
@@ -101,17 +110,14 @@ func (p *Pool) Reserve(ctx context.Context, l uint32, owner string) (*Lease, err
 	ready := make(map[string]bool, len(holders))
 	for _, h := range holders {
 		if b, ok := p.bots.Bot(h.Bot); ok {
-			st := b.Status()
-			ready[key(h.Bot)] = st.Ready && !st.LobbyStale
+			ready[key(h.Bot)] = CanHost(b.Status())
 		}
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, ls := range p.leases {
-		if ls.Owner == owner {
-			return ls, nil
-		}
+	if ls := p.leaseOfLocked(owner); ls != nil {
+		return ls, nil
 	}
 	var cands []candidate
 	for _, h := range holders {
@@ -140,6 +146,21 @@ func (p *Pool) Reserve(ctx context.Context, l uint32, owner string) (*Lease, err
 	ls := &Lease{Bot: best.Bot, Owner: owner, LeagueID: l, Verified: best.Verified, Since: p.now()}
 	p.leases[key(best.Bot)] = ls
 	return ls, nil
+}
+
+func (p *Pool) leaseOf(owner string) *Lease {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.leaseOfLocked(owner)
+}
+
+func (p *Pool) leaseOfLocked(owner string) *Lease {
+	for _, ls := range p.leases {
+		if ls.Owner == owner {
+			return ls
+		}
+	}
+	return nil
 }
 
 // Release ends a lease. Releasing a lease that was already released, or

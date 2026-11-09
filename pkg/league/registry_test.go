@@ -200,10 +200,10 @@ func TestHoldersAndAll(t *testing.T) {
 	all := r.All()
 	wantAll := []League{
 		{LeagueID: 100, Name: "Spring Cup", Bots: []LeagueBot{
-			{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0},
+			{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0, FirstSeenAt: t0},
 			{Name: "bot2", Source: SourceConfig},
 		}},
-		{LeagueID: 200, Bots: []LeagueBot{{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0}}},
+		{LeagueID: 200, Bots: []LeagueBot{{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0, FirstSeenAt: t0}}},
 		{LeagueID: 300, Bots: []LeagueBot{{Name: "bot2", Source: SourceConfig}}},
 	}
 	if !reflect.DeepEqual(all, wantAll) {
