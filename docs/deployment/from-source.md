@@ -119,6 +119,7 @@ the credentials in `$RUNTIME_DIRECTORY` or through `LoadCredential=`. Or use
 dota_lobby [serve] [--config FILE] [--secrets FILE]
 dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
 dota_lobby healthcheck [--url URL] [--timeout 5s] [--config FILE]
+dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--db FILE] [--timeout 2m] [--config FILE]
 dota_lobby version
 ```
 
@@ -129,5 +130,12 @@ dota_lobby version
 - **healthcheck** does `GET /livez` on the loopback address and the `server.port` from the config
   (same `--config`, `DOTA_LOBBY_CONFIG_FILE` and search path as `serve`; secrets are not read) and
   exits `0` only on `200`. `--url` overrides the address.
+- **backup** writes a consistent copy of the database to `--out` and checks it. It opens the
+  database read-only and takes no lock, so it works while `serve` runs. It finds the database
+  from `store.path` and `state_dir` in the config (secrets are not read), or from `--db`. An
+  `--out` that is a directory, or ends in `/`, gets a file named
+  `dota_lobby-manual-<UTC time>.db`, and `--keep-manual N` then deletes all but the newest `N`
+  of those there. It never overwrites a file, and prints only the path it wrote. Take one
+  before every upgrade; see [Backups](docker-compose.md#backups) for restoring.
 
 Exit codes: `0` success, `1` failure, `2` usage error.
