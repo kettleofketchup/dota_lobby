@@ -109,7 +109,7 @@ Every error is an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem, se
 | `detail` | What went wrong, for people. Do not parse it |
 | `code` | Stable and machine-readable; see below. Key on this, not on `detail` |
 | `retryable` | `true` only for `503` and `504`: the same request may work later |
-| `errors` | For `400` and `422` only: one entry per problem, each with a `message` and a `location` such as `body.teams.radiant.players[0]` or `query.limit`, and the offending `value` where it is a single value |
+| `errors` | For `400`, `415` and `422` only: one entry per problem, each with a `message` and a `location` such as `body.teams.radiant.players[0]` or `query.limit`, and the offending `value` where it is a single value |
 
 A request that fails validation gets `422` with every problem listed in `errors`:
 
