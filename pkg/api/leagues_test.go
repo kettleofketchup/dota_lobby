@@ -16,15 +16,62 @@ import (
 type fakeLeagues struct {
 	all      []league.League
 	perBot   map[string][]uint32
+	inv      map[string]league.Inventory
 	nodesBot string
 	nodes    []gc.LeagueNode
 	nodesErr error
 	asked    []uint32
 	deadline time.Duration // time left on the ctx Nodes got; -1 without one
+
+	refreshErr   error
+	refreshed    []string
+	refreshAll   []league.RefreshResult
+	refreshAllEr error
+	// afterRefresh, when set, replaces inv[bot] once Refresh succeeds.
+	afterRefresh map[string]league.Inventory
 }
 
 func (f *fakeLeagues) All() []league.League            { return f.all }
 func (f *fakeLeagues) BotLeagues(name string) []uint32 { return f.perBot[name] }
+func (f *fakeLeagues) League(id uint32) (league.League, bool) {
+	for _, l := range f.all {
+		if l.LeagueID == id {
+			return l, true
+		}
+	}
+	return league.League{}, false
+}
+
+func (f *fakeLeagues) Inventory(name string) (league.Inventory, bool) {
+	inv, ok := f.inv[name]
+	return inv, ok
+}
+
+func (f *fakeLeagues) Refresh(ctx context.Context, name string) error {
+	f.deadline = -1
+	if d, ok := ctx.Deadline(); ok {
+		f.deadline = time.Until(d)
+	}
+	if _, ok := f.inv[name]; !ok {
+		return fmt.Errorf("refresh: %w", bot.ErrUnknownBot)
+	}
+	if f.refreshErr != nil {
+		return f.refreshErr
+	}
+	f.refreshed = append(f.refreshed, name)
+	if inv, ok := f.afterRefresh[name]; ok {
+		f.inv[name] = inv
+	}
+	return nil
+}
+
+func (f *fakeLeagues) RefreshAll(ctx context.Context) ([]league.RefreshResult, error) {
+	f.deadline = -1
+	if d, ok := ctx.Deadline(); ok {
+		f.deadline = time.Until(d)
+	}
+	return f.refreshAll, f.refreshAllEr
+}
 func (f *fakeLeagues) Nodes(ctx context.Context, id uint32) (string, []gc.LeagueNode, error) {
 	f.asked = append(f.asked, id)
 	f.deadline = -1

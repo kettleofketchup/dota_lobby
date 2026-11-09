@@ -114,6 +114,10 @@ legacy handlers:
    unless a path-only pattern exists, so feed huma routes into the existing fallback table:
    walk `api.OpenAPI().Paths` after registration and record each method/path (protected
    when `op.Security` is non-empty) before `addMethodFallbacks()`.
+   A path-only fallback panics when a literal path overlaps a wildcard one with a different
+   method (`POST /v1/leagues/refresh` vs `GET /v1/leagues/{id}`: "matches more methods ...
+   but has a more specific path"); `addMethodFallbacks` registers per-method fallbacks for
+   such overlapping paths instead.
 4. Health routes (`/livez`, `/readyz`, `/health`) can stay plain handlers; if converted,
    keep them public and their status semantics (503 when not ready via `Status int`).
 5. Legacy error envelope and huma problem+json coexist during migration; finish a whole
