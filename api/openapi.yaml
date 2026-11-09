@@ -420,13 +420,29 @@ components:
         - name
         - bots
       type: object
-    LobbyEvent:
+    LobbyCreateFailedData:
       additionalProperties: false
       properties:
+        code:
+          description: Why the create failed; lobby.failed follows
+          enum:
+            - league_rejected
+            - create_timeout
+            - gc_error
+          type: string
+        message:
+          description: The cause, for people
+          type: string
+      required:
+        - code
+        - message
+      type: object
+    LobbyCreateFailedEvent:
+      additionalProperties: false
+      description: The lobby could not be created.
+      properties:
         data:
-          additionalProperties: true
-          description: Depends on the event type (see the webhooks documentation). Never the password.
-          type: object
+          $ref: "#/components/schemas/LobbyCreateFailedData"
         id:
           description: Unique per event; the same on every delivery attempt
           examples:
@@ -444,9 +460,338 @@ components:
           format: int64
           type: integer
         type:
-          description: The event type, e.g. lobby.state_changed, lobby.player_joined, match.started, match.ended
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.create_failed
           examples:
-            - lobby.state_changed
+            - lobby.create_failed
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyCreatedData:
+      additionalProperties: false
+      properties:
+        gc_lobby_id:
+          description: The game coordinator's lobby ID (64-bit, as a string)
+          type: string
+        league_verified:
+          description: Whether the game coordinator confirmed the league
+          type: boolean
+      required:
+        - gc_lobby_id
+        - league_verified
+      type: object
+    LobbyCreatedEvent:
+      additionalProperties: false
+      description: The game coordinator created the lobby.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyCreatedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.created
+          examples:
+            - lobby.created
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyEndedData:
+      additionalProperties: false
+      properties:
+        reason:
+          description: Why the lobby ended, as in lobby.state_changed
+          type:
+            - string
+            - "null"
+      required:
+        - reason
+      type: object
+    LobbyEndedEvent:
+      additionalProperties: false
+      description: The lobby ended.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyEndedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.finished
+            - lobby.closed
+            - lobby.failed
+            - lobby.timed_out
+          examples:
+            - lobby.finished
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyEnforcementStoppedData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The member the bot stopped moving
+          format: int32
+          minimum: 0
+          type: integer
+        kicks:
+          description: How often the bot moved the member
+          format: int64
+          type: integer
+      required:
+        - account_id
+        - kicks
+      type: object
+    LobbyEnforcementStoppedEvent:
+      additionalProperties: false
+      description: The bot stopped moving a member.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyEnforcementStoppedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.enforcement_stopped
+          examples:
+            - lobby.enforcement_stopped
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyEvent:
+      description: One lobby event. `type` names the event and decides the shape of `data`.
+      discriminator:
+        mapping:
+          lobby.closed: "#/components/schemas/LobbyEndedEvent"
+          lobby.create_failed: "#/components/schemas/LobbyCreateFailedEvent"
+          lobby.created: "#/components/schemas/LobbyCreatedEvent"
+          lobby.enforcement_stopped: "#/components/schemas/LobbyEnforcementStoppedEvent"
+          lobby.failed: "#/components/schemas/LobbyEndedEvent"
+          lobby.finished: "#/components/schemas/LobbyEndedEvent"
+          lobby.launch_failed: "#/components/schemas/LobbyLaunchFailedEvent"
+          lobby.launching: "#/components/schemas/LobbyLaunchingEvent"
+          lobby.player_invited: "#/components/schemas/LobbyPlayerInvitedEvent"
+          lobby.player_joined: "#/components/schemas/LobbyPlayerPresenceEvent"
+          lobby.player_kicked: "#/components/schemas/LobbyPlayerKickedEvent"
+          lobby.player_left: "#/components/schemas/LobbyPlayerPresenceEvent"
+          lobby.player_ready: "#/components/schemas/LobbyPlayerReadyEvent"
+          lobby.player_seated: "#/components/schemas/LobbyPlayerSeatedEvent"
+          lobby.player_unready: "#/components/schemas/LobbyPlayerUnreadyEvent"
+          lobby.ready: "#/components/schemas/LobbyReadyEvent"
+          lobby.roster_changed: "#/components/schemas/LobbyTeamsEvent"
+          lobby.state_changed: "#/components/schemas/LobbyStateChangedEvent"
+          lobby.teams_flipped: "#/components/schemas/LobbyTeamsEvent"
+          lobby.timed_out: "#/components/schemas/LobbyEndedEvent"
+          lobby.unready: "#/components/schemas/LobbyUnreadyEvent"
+          lobby.updated: "#/components/schemas/LobbyUpdatedEvent"
+          match.ended: "#/components/schemas/MatchEndedEvent"
+          match.started: "#/components/schemas/MatchStartedEvent"
+        propertyName: type
+      oneOf:
+        - $ref: "#/components/schemas/LobbyStateChangedEvent"
+        - $ref: "#/components/schemas/LobbyCreatedEvent"
+        - $ref: "#/components/schemas/LobbyCreateFailedEvent"
+        - $ref: "#/components/schemas/LobbyUpdatedEvent"
+        - $ref: "#/components/schemas/LobbyTeamsEvent"
+        - $ref: "#/components/schemas/LobbyPlayerInvitedEvent"
+        - $ref: "#/components/schemas/LobbyPlayerPresenceEvent"
+        - $ref: "#/components/schemas/LobbyPlayerSeatedEvent"
+        - $ref: "#/components/schemas/LobbyPlayerKickedEvent"
+        - $ref: "#/components/schemas/LobbyEnforcementStoppedEvent"
+        - $ref: "#/components/schemas/LobbyPlayerReadyEvent"
+        - $ref: "#/components/schemas/LobbyPlayerUnreadyEvent"
+        - $ref: "#/components/schemas/LobbyReadyEvent"
+        - $ref: "#/components/schemas/LobbyUnreadyEvent"
+        - $ref: "#/components/schemas/LobbyLaunchingEvent"
+        - $ref: "#/components/schemas/LobbyLaunchFailedEvent"
+        - $ref: "#/components/schemas/MatchStartedEvent"
+        - $ref: "#/components/schemas/MatchEndedEvent"
+        - $ref: "#/components/schemas/LobbyEndedEvent"
+    LobbyLaunchFailedData:
+      additionalProperties: false
+      properties:
+        attempt:
+          description: The launch attempt that failed
+          format: int64
+          type: integer
+        next_strategy:
+          description: The host seat strategy the next launch tries; null when none is left
+          type:
+            - string
+            - "null"
+        reason:
+          description: Why, e.g. host_not_seated, server_stall, load_failed, ignored
+          type: string
+      required:
+        - reason
+        - attempt
+        - next_strategy
+      type: object
+    LobbyLaunchFailedEvent:
+      additionalProperties: false
+      description: A launch did not reach a game.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyLaunchFailedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.launch_failed
+          examples:
+            - lobby.launch_failed
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyLaunchingData:
+      additionalProperties: false
+      properties:
+        attempt:
+          description: The launch attempt, from 1
+          format: int64
+          type: integer
+        by_account_id:
+          description: Who started it in chat; null otherwise
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        host_seat_strategy:
+          description: How the bot left the teams for this launch (lobby.host_seat_strategy)
+          type: string
+        trigger:
+          description: What started the launch
+          enum:
+            - api
+            - chat
+            - auto
+          type: string
+      required:
+        - trigger
+        - by_account_id
+        - attempt
+        - host_seat_strategy
+      type: object
+    LobbyLaunchingEvent:
+      additionalProperties: false
+      description: A launch started.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyLaunchingData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.launching
+          examples:
+            - lobby.launching
           type: string
       required:
         - id
@@ -474,6 +819,451 @@ components:
       required:
         - lobbies
         - next_cursor
+      type: object
+    LobbyPlayerInvitedData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The player's 32-bit account ID
+          format: int32
+          minimum: 0
+          type: integer
+        confirmed:
+          description: "Always false: Steam does not confirm an invite"
+          type: boolean
+        invites_sent:
+          description: Invites sent to this player so far
+          format: int64
+          type: integer
+        steam_id:
+          description: The player's 64-bit Steam ID, as a string
+          type: string
+      required:
+        - account_id
+        - steam_id
+        - invites_sent
+        - confirmed
+      type: object
+    LobbyPlayerInvitedEvent:
+      additionalProperties: false
+      description: The bot invited a rostered player.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyPlayerInvitedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.player_invited
+          examples:
+            - lobby.player_invited
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyPlayerKickedData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The member's 32-bit account ID
+          format: int32
+          minimum: 0
+          type: integer
+        from:
+          description: Moved off a team slot, or out of the lobby
+          enum:
+            - team
+            - lobby
+          type: string
+        reason:
+          description: Why
+          enum:
+            - wrong_side
+            - stranger
+            - api
+            - roster
+          type: string
+      required:
+        - account_id
+        - from
+        - reason
+      type: object
+    LobbyPlayerKickedEvent:
+      additionalProperties: false
+      description: The bot moved a member off a team or out of the lobby.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyPlayerKickedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.player_kicked
+          examples:
+            - lobby.player_kicked
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyPlayerPresenceData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The member's 32-bit account ID
+          format: int32
+          minimum: 0
+          type: integer
+        rostered:
+          description: Whether the member is on the lobby's roster
+          type: boolean
+        team_ref:
+          description: The rostered team's reference; null when not rostered or the team has none
+          type:
+            - string
+            - "null"
+      required:
+        - account_id
+        - rostered
+        - team_ref
+      type: object
+    LobbyPlayerPresenceEvent:
+      additionalProperties: false
+      description: A member joined or left the lobby.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyPlayerPresenceData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.player_joined
+            - lobby.player_left
+          examples:
+            - lobby.player_joined
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyPlayerReadyData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The player's 32-bit account ID
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - account_id
+      type: object
+    LobbyPlayerReadyEvent:
+      additionalProperties: false
+      description: A player said ready in chat.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyPlayerReadyData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.player_ready
+          examples:
+            - lobby.player_ready
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyPlayerSeatedData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The member's 32-bit account ID
+          format: int32
+          minimum: 0
+          type: integer
+        correct:
+          description: Whether that is the member's rostered side (always true without a roster)
+          type: boolean
+        seat:
+          description: The side the member took
+          enum:
+            - radiant
+            - dire
+          type: string
+      required:
+        - account_id
+        - seat
+        - correct
+      type: object
+    LobbyPlayerSeatedEvent:
+      additionalProperties: false
+      description: A member took a team slot.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyPlayerSeatedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.player_seated
+          examples:
+            - lobby.player_seated
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyPlayerUnreadyData:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The player's 32-bit account ID
+          format: int32
+          minimum: 0
+          type: integer
+        reason:
+          description: Said so in chat, moved off the side, or left the lobby
+          enum:
+            - chat
+            - moved
+            - left
+          type: string
+      required:
+        - account_id
+        - reason
+      type: object
+    LobbyPlayerUnreadyEvent:
+      additionalProperties: false
+      description: A player is no longer ready.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyPlayerUnreadyData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.player_unready
+          examples:
+            - lobby.player_unready
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyReadyData:
+      additionalProperties: false
+      type: object
+    LobbyReadyEvent:
+      additionalProperties: false
+      description: The lobby is ready to launch.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyReadyData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.ready
+          examples:
+            - lobby.ready
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyStateChangedData:
+      additionalProperties: false
+      properties:
+        from:
+          description: The state before; null for the first event of a lobby
+          type:
+            - string
+            - "null"
+        reason:
+          description: Why, e.g. accepted, created, api, idle_timeout; null when there is no particular reason
+          type:
+            - string
+            - "null"
+        to:
+          description: The state after, as in lobby.state
+          type: string
+      required:
+        - from
+        - to
+        - reason
+      type: object
+    LobbyStateChangedEvent:
+      additionalProperties: false
+      description: Sent with every state change, next to the specific event.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyStateChangedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.state_changed
+          examples:
+            - lobby.state_changed
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
       type: object
     LobbySummary:
       additionalProperties: false
@@ -519,6 +1309,161 @@ components:
         - gc_lobby_id
         - league_id
         - metadata
+      type: object
+    LobbyTeamsData:
+      additionalProperties: false
+      properties:
+        dire_team_ref:
+          description: The Dire team's reference after the change
+          type:
+            - string
+            - "null"
+        radiant_team_ref:
+          description: The Radiant team's reference after the change
+          type:
+            - string
+            - "null"
+      required:
+        - radiant_team_ref
+        - dire_team_ref
+      type: object
+    LobbyTeamsEvent:
+      additionalProperties: false
+      description: The roster was replaced or the sides flipped.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyTeamsData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.roster_changed
+            - lobby.teams_flipped
+          examples:
+            - lobby.roster_changed
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyUnreadyData:
+      additionalProperties: false
+      properties:
+        missing:
+          description: What the lobby is waiting for
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - missing
+      type: object
+    LobbyUnreadyEvent:
+      additionalProperties: false
+      description: The lobby is no longer ready.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyUnreadyData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.unready
+          examples:
+            - lobby.unready
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyUpdatedData:
+      additionalProperties: false
+      properties:
+        fields:
+          description: The settings the PATCH changed
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - fields
+      type: object
+    LobbyUpdatedEvent:
+      additionalProperties: false
+      description: A PATCH changed the lobby's settings.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyUpdatedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.updated
+          examples:
+            - lobby.updated
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
       type: object
     LobbyView:
       additionalProperties: false
@@ -853,6 +1798,161 @@ components:
         - updated_at
         - expires_at
         - ended_at
+      type: object
+    MatchEndedData:
+      additionalProperties: false
+      properties:
+        duration_seconds:
+          description: The game's length; null when unknown
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        match_id:
+          description: The match ID (64-bit, as a string)
+          type: string
+        outcome:
+          description: "The raw EMatchOutcome: 2 Radiant won, 3 Dire won"
+          format: int32
+          type: integer
+        outcome_name:
+          description: The outcome's name
+          type: string
+        provisional:
+          description: Always true
+          enum:
+            - true
+          type: boolean
+        scored:
+          description: Whether the match counts; null when unknown
+          type:
+            - boolean
+            - "null"
+        source:
+          description: Always lobby
+          enum:
+            - lobby
+          type: string
+        winner_side:
+          description: radiant or dire; null when nobody won
+          type:
+            - string
+            - "null"
+        winner_team_ref:
+          description: The winning team's reference
+          type:
+            - string
+            - "null"
+      required:
+        - match_id
+        - outcome
+        - outcome_name
+        - winner_side
+        - winner_team_ref
+        - scored
+        - duration_seconds
+        - provisional
+        - source
+      type: object
+    MatchEndedEvent:
+      additionalProperties: false
+      description: "The match ended. Provisional: what the lobby reported."
+      properties:
+        data:
+          $ref: "#/components/schemas/MatchEndedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - match.ended
+          examples:
+            - match.ended
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    MatchStartedData:
+      additionalProperties: false
+      properties:
+        dire_team_ref:
+          description: The Dire team's reference
+          type:
+            - string
+            - "null"
+        host_seat_strategy:
+          description: The host seat strategy of the launch
+          type: string
+        match_id:
+          description: The match ID (64-bit, as a string)
+          type: string
+        radiant_team_ref:
+          description: The Radiant team's reference
+          type:
+            - string
+            - "null"
+      required:
+        - match_id
+        - host_seat_strategy
+        - radiant_team_ref
+        - dire_team_ref
+      type: object
+    MatchStartedEvent:
+      additionalProperties: false
+      description: The match started.
+      properties:
+        data:
+          $ref: "#/components/schemas/MatchStartedData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - match.started
+          examples:
+            - match.started
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
       type: object
     MatchView:
       additionalProperties: false

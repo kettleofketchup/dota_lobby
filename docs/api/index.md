@@ -57,8 +57,10 @@ Generate clients from it rather than from the examples on this page.
   [`api/openapi.yaml`](https://github.com/kettleofketchup/dota_lobby/blob/main/api/openapi.yaml),
   regenerated with `just go::openapi`; a test fails when it no longer matches the code.
 - Each operation has a stable `operationId` (`create-lobby`, `list-lobby-events`, ...) that client
-  generators use for method names. The event envelope a webhook receives is the
-  `LobbyEvent` schema, and the delivery is described under `webhooks.lobby-event`.
+  generators use for method names. The event a webhook receives is the `LobbyEvent` schema:
+  a `oneOf` with a discriminator on `type`, one schema per data shape (`MatchEndedEvent` with
+  `MatchEndedData`, for example), so a generated receiver gets typed `data`. The delivery is
+  described under `webhooks.lobby-event`.
 - `info.version` is the version of the `/v1` API, not of the service.
 
 ## Authentication

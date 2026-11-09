@@ -153,7 +153,7 @@ func (eventData) Schema(huma.Registry) *huma.Schema {
 	return &huma.Schema{
 		Type:                 huma.TypeObject,
 		AdditionalProperties: true,
-		Description:          "Depends on the event type (see the webhooks documentation). Never the password.",
+		Description:          "Depends on the event type. Never the password.",
 	}
 }
 
@@ -173,7 +173,7 @@ type LobbySummary struct {
 // events endpoint lists.
 type LobbyEvent struct {
 	ID         string       `json:"id" doc:"Unique per event; the same on every delivery attempt" example:"evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0"`
-	Type       string       `json:"type" doc:"The event type, e.g. lobby.state_changed, lobby.player_joined, match.started, match.ended" example:"lobby.state_changed"`
+	Type       string       `json:"type" doc:"The event type; it decides the shape of data"`
 	Seq        int64        `json:"seq" doc:"The event's number within its lobby: starts at 1, grows by one, no gaps"`
 	OccurredAt time.Time    `json:"occurred_at" doc:"When the change happened (UTC)"`
 	Lobby      LobbySummary `json:"lobby" doc:"The lobby right after the change"`
