@@ -62,3 +62,9 @@ clean:
     @echo "Cleaning..."
     {{GO}} clean
     rm -rf {{BIN_DIR}}
+
+# Regenerate the committed OpenAPI spec (api/openapi.yaml) from pkg/api
+[group('go')]
+openapi:
+    {{GO}} test ./pkg/api -run '^TestOpenAPISpecUpToDate$' -count=1 -update
+    @echo "Wrote api/openapi.yaml"

@@ -82,6 +82,8 @@ func newTestServer(t *testing.T, key config.Secret, minReady int, bots *fakeBots
 	return New(Options{APIKey: key, Bots: bots, MinReadyBots: minReady, Version: "test", Now: func() time.Time { return since.Add(time.Minute) }})
 }
 
+var healthPaths = map[string]bool{"/livez": true, "/readyz": true, "/health": true}
+
 type response struct {
 	code int
 	hdr  http.Header
@@ -98,8 +100,13 @@ func do(t *testing.T, s *Server, method, path string, hdr map[string]string) res
 	s.Handler().ServeHTTP(rec, req)
 	out := response{code: rec.Code, hdr: rec.Header()}
 	if method != http.MethodHead {
-		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-			t.Errorf("%s %s: Content-Type %q", method, path, ct)
+		want := "application/json"
+		// The probes answer their own JSON whatever the status.
+		if rec.Code >= 400 && (!healthPaths[path] || method != http.MethodGet) {
+			want = problemContentType
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != want {
+			t.Errorf("%s %s: Content-Type %q, want %q", method, path, ct, want)
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out.body); err != nil {
 			t.Fatalf("%s %s: body %q: %v", method, path, rec.Body.String(), err)
@@ -108,9 +115,9 @@ func do(t *testing.T, s *Server, method, path string, hdr map[string]string) res
 	return out
 }
 
+// errCode is the problem's stable code.
 func errCode(r response) string {
-	e, _ := r.body["error"].(map[string]any)
-	code, _ := e["code"].(string)
+	code, _ := r.body["code"].(string)
 	return code
 }
 
@@ -330,7 +337,7 @@ func TestBotRetryBusy(t *testing.T) {
 	if r.code != http.StatusServiceUnavailable || errCode(r) != "unavailable" {
 		t.Fatalf("busy retry = %d %v", r.code, r.body)
 	}
-	if retryable, _ := r.body["error"].(map[string]any)["retryable"].(bool); !retryable {
+	if retryable, _ := r.body["retryable"].(bool); !retryable {
 		t.Errorf("busy retry not marked retryable: %v", r.body)
 	}
 }
@@ -388,8 +395,10 @@ func TestRouting(t *testing.T) {
 	if r := do(t, s, "POST", "/livez", nil); r.hdr.Get("Allow") != "GET, HEAD" {
 		t.Errorf("Allow = %q", r.hdr.Get("Allow"))
 	}
-	if r := do(t, s, http.MethodHead, "/livez", nil); r.code != 200 {
-		t.Errorf("HEAD /livez = %d", r.code)
+	for _, p := range []string{"/livez", "/v1/bots"} {
+		if r := do(t, s, http.MethodHead, p, nil); r.code != 200 {
+			t.Errorf("HEAD %s = %d", p, r.code)
+		}
 	}
 }
 
@@ -408,6 +417,10 @@ func TestMethodFallbackNeedsKey(t *testing.T) {
 		{"protected with wrong key", "DELETE", "/v1/bots", map[string]string{"X-API-Key": "nope"}, 401, ""},
 		{"protected with key", "DELETE", "/v1/bots", map[string]string{"X-API-Key": testKey}, 405, "GET, HEAD"},
 		{"open probe without key", "POST", "/livez", nil, 405, "GET, HEAD"},
+		{"lobbies without key", "PUT", "/v1/lobbies", nil, 401, ""},
+		{"lobbies with key", "PUT", "/v1/lobbies", map[string]string{"X-API-Key": testKey}, 405, "POST, GET, HEAD"},
+		{"lobby with key", "POST", "/v1/lobbies/lob_1", map[string]string{"X-API-Key": testKey}, 405, "GET, PATCH, DELETE, HEAD"},
+		{"open spec", "POST", "/openapi.yaml", nil, 405, "GET, HEAD"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

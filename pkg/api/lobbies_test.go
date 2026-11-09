@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -201,47 +202,80 @@ func TestLobbyCreate(t *testing.T) {
 	}
 }
 
+// locations lists the problem's errors[].location values.
+func locations(body map[string]any) []string {
+	var out []string
+	errs, _ := body["errors"].([]any)
+	for _, e := range errs {
+		if m, ok := e.(map[string]any); ok {
+			loc, _ := m["location"].(string)
+			out = append(out, loc)
+		}
+	}
+	return out
+}
+
 func TestLobbyCreateRejects(t *testing.T) {
-	s := lobbyServer(t, &fakeLobbies{lobby: sampleLobby(), created: true})
+	const base = `"external_ref":"a","name":"x"`
 	tests := []struct {
 		name string
 		body string
 		ct   string
 		code int
 		err  string
-		msg  string
+		loc  string
 	}{
-		{"not json content type", createBody, "text/plain", 415, "unsupported_media_type", ""},
-		{"unknown field", `{"external_ref":"a","nmae":"x","teams":{}}`, "", 400, "invalid_request", "nmae"},
-		{"truncated", `{"external_ref":`, "", 400, "invalid_request", "invalid JSON"},
-		{"syntax", `{"external_ref" 1}`, "", 400, "invalid_request", "syntax error"},
-		{"two values", `{"teams":{}} {}`, "", 400, "invalid_request", "more than one"},
-		{"no teams", `{"external_ref":"a","name":"x"}`, "", 400, "invalid_request", "teams is required"},
-		{"both ids", `{"teams":{"radiant":{"players":[{"account_id":1,"steam_id":"76561197960265729"}]}}}`, "", 400, "invalid_request", "not both"},
-		{"no id", `{"teams":{"radiant":{"players":[{"captain":true}]}}}`, "", 400, "invalid_request", "required"},
-		{"group steam id", `{"teams":{"dire":{"players":[{"steam_id":"103582791429521412"}]}}}`, "", 400, "invalid_request", "steam_id"},
-		{"steam id as number", `{"teams":{"dire":{"players":[{"steam_id":76561197960265729}]}}}`, "", 400, "invalid_request", "steam_id"},
-		{"negative account", `{"teams":{"dire":{"players":[{"account_id":-1}]}}}`, "", 400, "invalid_request", "account_id"},
-		{"bad game mode type", `{"game_mode":true,"teams":{}}`, "", 400, "invalid_request", "name or a non-negative"},
+		{"not json content type", createBody, "text/plain", 415, "unsupported_media_type", "body"},
+		{"unknown field", `{` + base + `,"nmae":"x","teams":{}}`, "", 422, "invalid_request", "body.nmae"},
+		{"truncated", `{"external_ref":`, "", 400, "invalid_request", "body"},
+		{"syntax", `{"external_ref" 1}`, "", 400, "invalid_request", "body"},
+		{"two values", `{"teams":{}} {}`, "", 400, "invalid_request", "body"},
+		{"no teams", `{` + base + `}`, "", 422, "invalid_request", "body"},
+		{"both ids", `{` + base + `,"teams":{"radiant":{"players":[{"account_id":1,"steam_id":"76561197960265729"}]}}}`, "", 422, "invalid_request", "body.teams.radiant.players[0]"},
+		{"no id", `{` + base + `,"teams":{"radiant":{"players":[{"captain":true}]}}}`, "", 422, "invalid_request", "body.teams.radiant.players[0]"},
+		{"group steam id", `{` + base + `,"teams":{"dire":{"players":[{"steam_id":"103582791429521412"}]}}}`, "", 422, "invalid_request", "body.teams.dire.players[0].steam_id"},
+		{"steam id as number", `{` + base + `,"teams":{"dire":{"players":[{"steam_id":76561197960265729}]}}}`, "", 422, "invalid_request", "body.teams.dire.players[0].steam_id"},
+		{"negative account", `{` + base + `,"teams":{"dire":{"players":[{"account_id":-1}]}}}`, "", 422, "invalid_request", "body.teams.dire.players[0].account_id"},
+		{"bad game mode type", `{` + base + `,"game_mode":true,"teams":{}}`, "", 422, "invalid_request", "body.game_mode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeLobbies{lobby: sampleLobby(), created: true}
 			hdr := map[string]string{}
 			if tt.ct != "" {
 				hdr["Content-Type"] = tt.ct
 			}
-			r := send(t, s, "POST", "/v1/lobbies", tt.body, hdr)
+			r := send(t, lobbyServer(t, f), "POST", "/v1/lobbies", tt.body, hdr)
 			if r.code != tt.code || errCode(r.response) != tt.err {
 				t.Fatalf("= %d %v, want %d %s", r.code, r.body, tt.code, tt.err)
 			}
-			if msg := r.body["error"].(map[string]any)["message"].(string); !strings.Contains(msg, tt.msg) {
-				t.Errorf("message %q does not mention %q", msg, tt.msg)
+			if locs := locations(r.body); !slices.ContainsFunc(locs, func(l string) bool { return strings.HasPrefix(l, tt.loc) }) {
+				t.Errorf("error locations %q do not name %s", locs, tt.loc)
+			}
+			if len(f.calls) != 0 {
+				t.Errorf("rejected request reached the manager: %v", f.calls)
 			}
 		})
 	}
+	s := lobbyServer(t, &fakeLobbies{lobby: sampleLobby(), created: true})
 	big := `{"name":"` + strings.Repeat("x", DefaultMaxBodyBytes) + `"}`
 	if r := send(t, s, "POST", "/v1/lobbies", big, nil); r.code != 413 || errCode(r.response) != "payload_too_large" {
 		t.Errorf("big body = %d %v", r.code, r.body)
+	}
+}
+
+// A rejected body is not echoed back: it may hold the lobby password.
+func TestLobbyRejectNeverEchoesPassword(t *testing.T) {
+	s := lobbyServer(t, &fakeLobbies{lobby: sampleLobby(), created: true})
+	for _, body := range []string{
+		`{"external_ref":"a","name":"x","password":"k3tt1e","nmae":1,"teams":{}}`,
+		`{"external_ref":"a","name":"x","password":"k3tt1e",`,
+		`{"external_ref":"a","password":"k3tt1e","teams":{}}`,
+	} {
+		r := send(t, s, "POST", "/v1/lobbies", body, nil)
+		if r.code < 400 || strings.Contains(r.raw, "k3tt1e") {
+			t.Errorf("%s = %d %s", body, r.code, r.raw)
+		}
 	}
 }
 
@@ -251,7 +285,7 @@ func TestLobbyErrorMapping(t *testing.T) {
 		code  int
 		ecode string
 	}{
-		{fmt.Errorf("%w: name must be 1-64 characters", lobby.ErrInvalid), 400, "invalid_request"},
+		{fmt.Errorf("%w: name must be 1-64 characters", lobby.ErrInvalid), 422, "invalid_request"},
 		{fmt.Errorf("%w: lob_x", lobby.ErrNotFound), 404, "not_found"},
 		{lobby.ErrConflict, 409, "conflict"},
 		{fmt.Errorf("%w: lobby is in_game", lobby.ErrInvalidState), 409, "invalid_state"},
@@ -271,6 +305,15 @@ func TestLobbyErrorMapping(t *testing.T) {
 			r := send(t, s, "GET", "/v1/lobbies/lob_x", "", nil)
 			if r.code != tt.code || errCode(r.response) != tt.ecode {
 				t.Errorf("= %d %v, want %d %s", r.code, r.body, tt.code, tt.ecode)
+			}
+			if ct := r.hdr.Get("Content-Type"); ct != problemContentType {
+				t.Errorf("Content-Type %q", ct)
+			}
+			if r.body["status"] != float64(tt.code) || r.body["title"] != http.StatusText(tt.code) || r.body["detail"] == "" {
+				t.Errorf("problem fields %v", r.body)
+			}
+			if r.body["retryable"] != (tt.code == 503 || tt.code == 504) {
+				t.Errorf("retryable = %v", r.body["retryable"])
 			}
 			if tt.code == 429 && r.hdr.Get("Retry-After") != "2" {
 				t.Errorf("Retry-After %q", r.hdr.Get("Retry-After"))
@@ -334,9 +377,42 @@ func TestLobbyListNeverHasPassword(t *testing.T) {
 		t.Errorf("filter = %+v", fl)
 	}
 	for _, q := range []string{"state=bogus", "active=maybe", "limit=0", "limit=201"} {
-		if r := send(t, s, "GET", "/v1/lobbies?"+q, "", nil); r.code != 400 {
+		if r := send(t, s, "GET", "/v1/lobbies?"+q, "", nil); r.code != 422 || errCode(r.response) != "invalid_request" {
 			t.Errorf("%s = %d", q, r.code)
 		}
+	}
+}
+
+// The state filter takes spaces around the commas, as it always has.
+func TestLobbyListStateFilter(t *testing.T) {
+	tests := []struct {
+		query string
+		code  int
+		want  []lobby.State
+	}{
+		{"state=waiting,ready", 200, []lobby.State{lobby.StateWaiting, lobby.StateReady}},
+		{"state=waiting,%20ready", 200, []lobby.State{lobby.StateWaiting, lobby.StateReady}},
+		{"state=+waiting+,+ready+&limit=5", 200, []lobby.State{lobby.StateWaiting, lobby.StateReady}},
+		{"state=%20in_game", 200, []lobby.State{lobby.StateInGame}},
+		{"state=waiting,%20bogus", 422, nil},
+		{"state=waiting,,ready", 422, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			f := &fakeLobbies{}
+			r := send(t, lobbyServer(t, f), "GET", "/v1/lobbies?"+tt.query, "", nil)
+			if r.code != tt.code {
+				t.Fatalf("= %d %v, want %d", r.code, r.body, tt.code)
+			}
+			if tt.code == 200 && !slices.Equal(f.filter.States, tt.want) {
+				t.Errorf("states = %q, want %q", f.filter.States, tt.want)
+			}
+		})
+	}
+	f := &fakeLobbies{}
+	// Rewriting the query keeps the other parameters intact.
+	if r := send(t, lobbyServer(t, f), "GET", "/v1/lobbies?state=waiting,%20ready&external_ref=a%20b%2Bc%26d", "", nil); r.code != 200 || f.filter.ExternalRef != "a b+c&d" {
+		t.Errorf("external_ref = %d %q", r.code, f.filter.ExternalRef)
 	}
 }
 
@@ -359,20 +435,20 @@ func TestLobbyActions(t *testing.T) {
 			}
 		}},
 		{"invite missing", "POST", "/v1/lobbies/lob_x/invite", `{"missing":true}`, 200, nil},
-		{"invite neither", "POST", "/v1/lobbies/lob_x/invite", `{}`, 400, nil},
-		{"invite both", "POST", "/v1/lobbies/lob_x/invite", `{"players":[1],"missing":true}`, 400, nil},
+		{"invite neither", "POST", "/v1/lobbies/lob_x/invite", `{}`, 422, nil},
+		{"invite both", "POST", "/v1/lobbies/lob_x/invite", `{"players":[1],"missing":true}`, 422, nil},
 		{"kick", "POST", "/v1/lobbies/lob_x/kick", `{"account_id":99999999}`, 202, func(t *testing.T, f *fakeLobbies) {
 			if f.kicked != [2]any{uint32(99999999), "team"} {
 				t.Errorf("kick %v", f.kicked)
 			}
 		}},
-		{"kick needs an account", "POST", "/v1/lobbies/lob_x/kick", `{"from":"lobby"}`, 400, nil},
+		{"kick needs an account", "POST", "/v1/lobbies/lob_x/kick", `{"from":"lobby"}`, 422, nil},
 		{"roster", "POST", "/v1/lobbies/lob_x/roster", `{"teams":{"radiant":{"players":[{"account_id":5}]},"dire":{}}}`, 200, func(t *testing.T, f *fakeLobbies) {
 			if f.roster.Radiant.Players[0].AccountID != 5 {
 				t.Errorf("roster %+v", f.roster)
 			}
 		}},
-		{"roster needs teams", "POST", "/v1/lobbies/lob_x/roster", `{}`, 400, nil},
+		{"roster needs teams", "POST", "/v1/lobbies/lob_x/roster", `{}`, 422, nil},
 		{"launch without a body", "POST", "/v1/lobbies/lob_x/launch", "", 202, func(t *testing.T, f *fakeLobbies) {
 			if f.launch.Force || f.launch.Trigger != lobby.TriggerAPI {
 				t.Errorf("launch %+v", f.launch)
@@ -434,9 +510,9 @@ func TestLobbyEvents(t *testing.T) {
 		{"defaults", "", []lobby.Envelope{env(1, "lobby.state_changed"), env(2, "match.started")}, nil, 200, 0, 100, 2},
 		{"after and limit", "?after=2&limit=1", []lobby.Envelope{env(3, "match.ended")}, nil, 200, 2, 1, 3},
 		{"nothing new keeps after", "?after=9", nil, nil, 200, 9, 100, 9},
-		{"negative after", "?after=-1", nil, nil, 400, 0, 0, 0},
-		{"limit too large", "?limit=501", nil, nil, 400, 0, 0, 0},
-		{"limit zero", "?limit=0", nil, nil, 400, 0, 0, 0},
+		{"negative after", "?after=-1", nil, nil, 422, 0, 0, 0},
+		{"limit too large", "?limit=501", nil, nil, 422, 0, 0, 0},
+		{"limit zero", "?limit=0", nil, nil, 422, 0, 0, 0},
 		{"unknown lobby", "", nil, lobby.ErrNotFound, 404, 0, 100, 0},
 		{"store down", "", nil, lobby.ErrUnavailable, 503, 0, 100, 0},
 	}
