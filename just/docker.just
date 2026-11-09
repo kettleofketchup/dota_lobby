@@ -90,6 +90,38 @@ auth bot *args:
     {{DOCKER}} compose exec dota_lobby /usr/local/bin/dota_lobby auth --bot {{bot}} --force {{args}}
     echo "now: curl -X POST -H \"X-API-Key: \$KEY\" http://127.0.0.1:8080/v1/bots/{{bot}}/retry"
 
+# Snapshot the service database into a host directory (works while it runs)
+[group('docker')]
+backup dir="backups":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The image is distroless (no shell, no rm), so the binary names the file
+    # and prunes old manual snapshots in the volume itself.
+    args=(backup --out /app/state/backups/ --keep-manual 3)
+    if [[ "$({{DOCKER}} container inspect --format '{{{{.State.Running}}' dota_lobby 2>/dev/null)" == true ]]; then
+        ctr=dota_lobby
+        path=$({{DOCKER}} compose exec -T dota_lobby /usr/local/bin/dota_lobby "${args[@]}")
+        cleanup() { :; }
+    else
+        # Not running: a one-off container on the same volume, with the image
+        # DOTA_LOBBY_TAG names. backup takes no lock and migrates nothing, so
+        # this also works with a new tag before an upgrade. It reads no
+        # secrets, so an empty directory stands in for the decrypted ones.
+        ctr=dota_lobby-backup-$$
+        empty=$(mktemp -d)
+        mkdir "$empty/creds"
+        cleanup() { {{DOCKER}} rm -f "$ctr" >/dev/null 2>&1 || true; rm -rf "$empty"; }
+        trap cleanup EXIT
+        path=$(DOTA_LOBBY_SECRETS_HOST_DIR="$empty" {{DOCKER}} compose run -T --no-deps --name "$ctr" dota_lobby "${args[@]}")
+    fi
+    [[ "$path" == /app/state/backups/* ]] || { echo "unexpected output from dota_lobby backup: $path"; exit 1; }
+    mkdir -m 700 -p "{{dir}}"
+    out="{{dir}}/$(basename "$path")"
+    {{DOCKER}} cp "$ctr:$path" "$out"
+    chmod 600 "$out"
+    cleanup
+    echo "$out"
+
 # Build the image locally, tagged local by default (use with DOTA_LOBBY_TAG=local)
 [group('docker')]
 build tag="local":

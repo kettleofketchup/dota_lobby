@@ -12,6 +12,7 @@ config.yaml
 secrets.yaml
 **/config.yaml
 config/
+backups/
 **/secrets*.yaml
 **/secrets.*
 **/config.yml

@@ -8,6 +8,18 @@ set working-directory := ".."
 KEYS := env_var_or_default("SOPS_AGE_KEY_FILE", env_var_or_default("XDG_CONFIG_HOME", env_var("HOME") / ".config") / "sops" / "age" / "keys.txt")
 LABEL := "# dota_lobby bot credentials key"
 BOTS_DIR := "secrets/bots"
+SERVICE_SECRETS := "secrets/service.sops.yaml"
+
+# Shared by the webhook recipes: check the URL and work out the secrets-file
+# key. The service looks webhook secrets and tokens up by the lowercased URL.
+# jq escapes the key for a sops path, so any URL is safe.
+WEBHOOK_KEY := '''
+    [[ -f .sops.yaml ]] || { echo "run: just secrets init"; exit 1; }
+    [[ "$url" =~ ^https?:// ]] || { echo "webhook URL must start with http:// or https://: $url"; exit 1; }
+    [[ "$url" != *[\"\\[:space:]]* ]] || { echo "webhook URL must not contain quotes, backslashes or spaces (percent-encode them): $url"; exit 1; }
+    key=${url,,}
+    jkey=$(jq -rn --arg u "$key" '$u | tojson')
+'''
 
 # Add a labelled dota_lobby key to the main sops key file if missing, and write .sops.yaml
 [group('secrets')]
@@ -46,20 +58,27 @@ new-bot name:
 edit name:
     sops edit {{BOTS_DIR}}/{{name}}.sops.yaml
 
-# List bots and which keys are set (values are never printed)
+# List bots and which keys are set, and the webhook URLs with a secret or token (values are never printed)
 [group('secrets')]
 list:
     #!/usr/bin/env bash
     set -euo pipefail
     shopt -s nullglob
     files=({{BOTS_DIR}}/*.sops.yaml)
-    (( ${#files[@]} )) || { echo "no bots; run: just secrets new-bot <name>"; exit 0; }
+    (( ${#files[@]} )) || echo "no bots; run: just secrets new-bot <name>"
     for f in "${files[@]}"; do
         bot=$(basename "$f" .sops.yaml)
         sops exec-env "$f" 'for k in STEAM_USER STEAM_PASS STEAM_SHARED_SECRET STEAM_REFRESH_TOKEN; do
             eval "v=\${$k:-}"; [ -n "$v" ] && printf "  %s set\n" "$k" || printf "  %s -\n" "$k"; done' \
             | sed "1i $bot:"
     done
+    [[ -f "{{SERVICE_SECRETS}}" ]] || exit 0
+    echo "{{SERVICE_SECRETS}}:"
+    sops decrypt --output-type json "{{SERVICE_SECRETS}}" | jq -r '
+        .secrets // {} as $s
+        | "  api_key \(if ($s.api_key // "") != "" then "set" else "-" end)",
+          (["webhook_secrets", "webhook_tokens"][] as $m
+           | "  \($m):", ($s[$m] // {} | keys[] | "    \(.)"))'
 
 # Store a value read from stdin (JSON-encoded string) under KEY in a bot's file
 [group('secrets')]
@@ -92,3 +111,81 @@ import-mafile name mafile:
     done
     jq -c '(.steam_id // .Session.SteamID // "") | tostring' "{{mafile}}" | sops set --value-stdin "$guard" '["STEAM_ID"]'
     echo "imported into $bot (STEAM_SHARED_SECRET) and $guard; now run: steamguard encrypt (or delete the maFile)"
+
+# Generate a webhook signing secret for URL into secrets/service.sops.yaml (never printed)
+[group('secrets')]
+webhook-secret url force="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    url={{quote(url)}}
+    {{WEBHOOK_KEY}}
+    f="{{SERVICE_SECRETS}}"
+    p='["secrets"]["webhook_secrets"]['"$jkey"']'
+    if [[ ! -f "$f" ]]; then
+        mkdir -p "$(dirname "$f")" && chmod 700 "$(dirname "$f")"
+        printf 'secrets: {}\n' | sops encrypt --filename-override "$f" --input-type yaml --output-type yaml /dev/stdin > "$f.tmp"
+        chmod 600 "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+    if sops decrypt --extract "$p" "$f" >/dev/null 2>&1 && [[ {{quote(force)}} != true ]]; then
+        echo "secrets.webhook_secrets[$key] is already set; to replace it (the receiver must get the new one too): just secrets webhook-secret $url true"
+        exit 1
+    fi
+    openssl rand -hex 32 | jq -Rc . | sops set --value-stdin "$f" "$p"
+    echo "set secrets.webhook_secrets[$key]; add the same URL to webhooks[] in config/config.yaml, share the secret with the receiver (just secrets webhook-secret-env), then: just docker restart"
+
+# Write URL's webhook secret into an env file as VAR=<secret>, for the receiver (never printed)
+[group('secrets')]
+webhook-secret-env url env_file var="DOTA_LOBBY_WEBHOOK_SECRET":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    url={{quote(url)}}
+    {{WEBHOOK_KEY}}
+    f="{{SERVICE_SECRETS}}"
+    env_file={{quote(env_file)}}
+    var={{quote(var)}}
+    [[ "$var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "not a variable name: $var"; exit 1; }
+    p='["secrets"]["webhook_secrets"]['"$jkey"']'
+    sops decrypt --extract "$p" "$f" >/dev/null 2>&1 \
+        || { echo "no secrets.webhook_secrets[$key] in $f; run: just secrets webhook-secret $url"; exit 1; }
+    dir=$(dirname "$env_file")
+    [[ -d "$dir" ]] || { echo "$dir does not exist"; exit 1; }
+    src="$env_file"
+    [[ -f "$src" ]] || src=/dev/null
+    tmp=$(mktemp "$dir/.webhook-secret-env.XXXXXX")  # mode 0600
+    trap 'rm -f "$tmp"' EXIT
+    # The secret goes from sops to awk through a pipe, never through argv or
+    # stdout. An existing VAR= (or export VAR=) line is replaced in place.
+    sops decrypt --extract "$p" "$f" | awk -v var="$var" '
+        FILENAME == "-" { val = $0; next }
+        index($0, var "=") == 1 || index($0, "export " var "=") == 1 {
+            if (!done) { sub(/=.*/, "", $0); print $0 "=" val }
+            done = 1; next
+        }
+        { print }
+        END { if (!done) print var "=" val }
+    ' - "$src" > "$tmp"
+    mv "$tmp" "$env_file"
+    trap - EXIT
+    echo "wrote $var for $key into $env_file (mode 0600)"
+
+# Store the receiver's token for URL (for token_header) from stdin into secrets/service.sops.yaml
+[group('secrets')]
+webhook-token url:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    url={{quote(url)}}
+    {{WEBHOOK_KEY}}
+    f="{{SERVICE_SECRETS}}"
+    [[ -f "$f" ]] || { echo "no $f; run first: just secrets webhook-secret $url"; exit 1; }
+    tok=
+    if [[ -t 0 ]]; then
+        IFS= read -rs -p "token for $key: " tok || true
+        echo
+    else
+        IFS= read -r tok || true
+    fi
+    tok=${tok%$'\r'}
+    [[ -n "$tok" ]] || { echo "no token on stdin"; exit 1; }
+    p='["secrets"]["webhook_tokens"]['"$jkey"']'
+    printf '%s' "$tok" | jq -Rc . | sops set --value-stdin "$f" "$p"
+    echo "set secrets.webhook_tokens[$key]; the webhook needs token_header (for DraftForge: X-Internal-Token), then: just docker restart"
