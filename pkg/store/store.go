@@ -9,7 +9,9 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,6 +43,7 @@ const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 type Store struct {
 	db   *sql.DB
 	path string
+	log  *slog.Logger
 }
 
 // Option configures Open.
@@ -48,11 +51,33 @@ type Option func(*options)
 
 type options struct {
 	migrations fs.FS
+	backup     *backupOptions
+	log        *slog.Logger
+}
+
+type backupOptions struct {
+	dir  string
+	keep int
 }
 
 // withMigrations replaces the embedded migrations, for tests.
 func withMigrations(fsys fs.FS) Option {
 	return func(o *options) { o.migrations = fsys }
+}
+
+// WithPreMigrateBackup makes Open copy an existing database into dir
+// before it applies any pending migration, and keep the newest keep of
+// those copies. A fresh database, or one with nothing to migrate, is not
+// copied. When the copy fails, Open fails with ErrBackupFailed and applies
+// nothing.
+func WithPreMigrateBackup(dir string, keep int) Option {
+	return func(o *options) { o.backup = &backupOptions{dir: dir, keep: keep} }
+}
+
+// WithLogger sets the logger for what Open does on its own, such as a
+// pre-migration backup. Nil discards.
+func WithLogger(log *slog.Logger) Option {
+	return func(o *options) { o.log = log }
 }
 
 // Open opens or creates the database at path, owner-only (0600), and
@@ -65,6 +90,12 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	}
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if o.log == nil {
+		o.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if o.backup != nil && (o.backup.dir == "" || o.backup.keep < 1) {
+		return nil, fmt.Errorf("open store: pre-migration backup needs a directory and keep >= 1 (got %q, %d)", o.backup.dir, o.backup.keep)
 	}
 	if path == "" {
 		return nil, errors.New("open store: empty path")
@@ -90,15 +121,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Set("_txlock", "immediate")
-	// SQLite reads the DSN as a URI: escape the path so '?', '#' and '%'
-	// in it name the file created above, not a different one. A URI path
-	// must be absolute.
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("open store: %w", err)
-	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs), RawQuery: q.Encode()}).String()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := openDSN(path, q)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
@@ -106,16 +129,28 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	// limits the database to one process, and the load is a handful of
 	// writes a minute.
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, path: path}
+	s := &Store{db: db, path: path, log: o.log}
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("open store %s: %w", path, err)
 	}
-	if err := s.migrate(ctx, o.migrations); err != nil {
+	if err := s.migrate(ctx, o.migrations, o.backup); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("open store %s: %w", path, err)
 	}
 	return s, nil
+}
+
+// openDSN opens path with the given URI query. SQLite reads the DSN as a
+// URI: the path is escaped so '?', '#' and '%' in it name that file, not a
+// different one. A URI path must be absolute.
+func openDSN(path string, q url.Values) (*sql.DB, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs), RawQuery: q.Encode()}).String()
+	return sql.Open("sqlite", dsn)
 }
 
 // Close closes the database.
@@ -176,8 +211,9 @@ func loadMigrations(fsys fs.FS) ([]migration, error) {
 }
 
 // migrate applies every migration newer than the database, each in its own
-// transaction together with its schema_migrations row.
-func (s *Store) migrate(ctx context.Context, fsys fs.FS) error {
+// transaction together with its schema_migrations row. With backup set, an
+// existing database is copied first.
+func (s *Store) migrate(ctx context.Context, fsys fs.FS, backup *backupOptions) error {
 	ms, err := loadMigrations(fsys)
 	if err != nil {
 		return err
@@ -192,6 +228,11 @@ func (s *Store) migrate(ctx context.Context, fsys fs.FS) error {
 	}
 	if current > len(ms) {
 		return fmt.Errorf("%w: database at version %d, binary knows %d", ErrSchemaTooNew, current, len(ms))
+	}
+	if backup != nil && current > 0 && current < len(ms) {
+		if err := s.preMigrateBackup(ctx, *backup, current, len(ms)); err != nil {
+			return err
+		}
 	}
 	for _, m := range ms[current:] {
 		if err := s.apply(ctx, m); err != nil {

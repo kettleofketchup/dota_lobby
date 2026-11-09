@@ -92,6 +92,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Store.Retention != 720*time.Hour {
 		t.Errorf("store.retention = %s", cfg.Store.Retention)
 	}
+	if b := cfg.Store.Backup; !b.Enabled || b.Dir != "/var/lib/dota_lobby/backups" || b.Keep != 5 {
+		t.Errorf("store.backup defaults: %+v", b)
+	}
 	if c := l.Chat; c.Enabled || c.Prefix != "!" || c.SendInterval != time.Second || c.StartCountdown != 10*time.Second {
 		t.Errorf("lobby.chat defaults: %+v", c)
 	}
@@ -417,8 +420,8 @@ lobby:
   pending_timeout: 0s
   host_seat_confirm_timeout: -1s
   admins: [0]
-store: { retention: 0s }
-`, "", []string{"\"caster\" listed twice", "unknown value \"sideways\"", "max_launch_attempts 11", "lobby.pending_timeout", "lobby.host_seat_confirm_timeout", "lobby.admins", "store.retention"}},
+store: { retention: 0s, backup: { keep: 0 } }
+`, "", []string{"\"caster\" listed twice", "unknown value \"sideways\"", "max_launch_attempts 11", "lobby.pending_timeout", "lobby.host_seat_confirm_timeout", "lobby.admins", "store.retention", "store.backup.keep 0"}},
 		{"webhook problems", `
 webhooks:
   - { url: "https://a.example/hook", events: ["lobby.[" ], token_header: "Bad Header" }
@@ -595,5 +598,42 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 	if fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[caster self_kick]" || cfg.Store.Retention != 720*time.Hour || cfg.Lobby.MaxLaunchAttempts != 3 {
 		t.Errorf("example values: %v %s %d", cfg.Lobby.HostSeatStrategy, cfg.Store.Retention, cfg.Lobby.MaxLaunchAttempts)
+	}
+}
+
+// LoadStore reads state_dir and the store section only: an unreadable
+// secrets file or an invalid bot list must not stop a backup.
+func TestLoadStore(t *testing.T) {
+	isolate(t)
+	t.Setenv("DOTA_LOBBY_SECRETS_FILE", "/nonexistent/secrets.yaml")
+	dir := t.TempDir()
+	tests := []struct {
+		name, config string
+		env          map[string]string
+		want         StoreConfig
+	}{
+		{"defaults", "", nil, StoreConfig{Path: "/var/lib/dota_lobby/dota_lobby.db",
+			Backup: BackupConfig{Enabled: true, Dir: "/var/lib/dota_lobby/backups", Keep: 5}}},
+		{"state_dir from the file", "state_dir: /srv/s\nbots: [{ name: ../bad }]\n", nil, StoreConfig{Path: "/srv/s/dota_lobby.db",
+			Backup: BackupConfig{Enabled: true, Dir: "/srv/s/backups", Keep: 5}}},
+		{"explicit paths", "store: { path: /db/x.db, backup: { enabled: false, dir: /bk, keep: 2 } }\n", nil, StoreConfig{Path: "/db/x.db",
+			Backup: BackupConfig{Enabled: false, Dir: "/bk", Keep: 2}}},
+		{"env state_dir", "", map[string]string{"DOTA_LOBBY_STATE_DIR": "/app/state"}, StoreConfig{Path: "/app/state/dota_lobby.db",
+			Backup: BackupConfig{Enabled: true, Dir: "/app/state/backups", Keep: 5}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			opts := Options{SearchPaths: []string{}}
+			if tt.config != "" {
+				opts.ConfigFile = write(t, dir, tt.name+".yaml", tt.config)
+			}
+			got, err := LoadStore(opts)
+			if err != nil || got != tt.want {
+				t.Errorf("LoadStore() = %+v, %v; want %+v", got, err, tt.want)
+			}
+		})
 	}
 }

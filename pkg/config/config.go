@@ -177,6 +177,17 @@ type StoreConfig struct {
 	Path string `mapstructure:"path"`
 	// Retention is how long finished lobbies and their events are kept.
 	Retention time.Duration `mapstructure:"retention"`
+	Backup    BackupConfig  `mapstructure:"backup"`
+}
+
+// BackupConfig is the copy of the database taken before migrations run.
+// An empty Dir resolves to <state_dir>/backups.
+type BackupConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	Dir     string `mapstructure:"dir"`
+	// Keep is how many automatic backups are kept; older ones are deleted
+	// after a new one is written. On-demand backups are never deleted.
+	Keep int `mapstructure:"keep"`
 }
 
 // WebhookConfig is one event receiver. Its signing secret is looked up with
@@ -340,8 +351,11 @@ func defaults() map[string]any {
 		"match::webapi::enabled":    true,
 		"match::webapi::rps":        1.0,
 
-		"store::path":      "",
-		"store::retention": "720h",
+		"store::path":            "",
+		"store::retention":       "720h",
+		"store::backup::enabled": true,
+		"store::backup::dir":     "",
+		"store::backup::keep":    5,
 
 		"webhook_delivery::timeout": "10s",
 		"webhook_delivery::max_age": "24h",

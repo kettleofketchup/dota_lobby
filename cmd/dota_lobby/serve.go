@@ -58,7 +58,13 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	}
 	// The database opens under the state-dir lock that Start took, so only
 	// one process ever migrates or writes it.
-	db, err := store.Open(ctx, cfg.Store.Path)
+	storeOpts := []store.Option{store.WithLogger(log)}
+	if b := cfg.Store.Backup; b.Enabled {
+		storeOpts = append(storeOpts, store.WithPreMigrateBackup(b.Dir, b.Keep))
+	} else {
+		log.Warn("pre-migration backups are disabled (store.backup.enabled: false)")
+	}
+	db, err := store.Open(ctx, cfg.Store.Path, storeOpts...)
 	if err != nil {
 		_ = ln.Close()
 		return errors.Join(err, stopBots(mgr, log))
