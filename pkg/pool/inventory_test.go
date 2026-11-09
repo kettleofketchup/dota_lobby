@@ -36,7 +36,8 @@ func newTicketEnv(t *testing.T, names ...string) *ticketEnv {
 	}
 	src := bottest.NewSource(list...)
 	lc := config.LeagueConfig{Sources: []string{league.SourceGC, league.SourceConfig}}
-	e.reg = league.New(nil, src, lc, cfgs, league.Options{})
+	// Each grant is a refresh the tests must see, however close together.
+	e.reg = league.New(nil, src, lc, cfgs, league.Options{MinRefreshInterval: -1})
 	e.pool = New(src, e.reg, Options{})
 	return e
 }

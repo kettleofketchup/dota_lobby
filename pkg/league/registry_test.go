@@ -221,6 +221,7 @@ func TestRefreshErrorKeepsPreviousList(t *testing.T) {
 	if err := r.Refresh(ctx, "bot1"); err != nil {
 		t.Fatal(err)
 	}
+	e.clk.Advance(time.Minute) // past the minimum refresh interval
 	e.fcs["bot1"].FailNext("ListAdminLeagues", errors.New("gc timeout"))
 	if err := r.Refresh(ctx, "bot1"); err == nil {
 		t.Fatal("failed refresh returned nil")
@@ -294,6 +295,7 @@ func TestPersistedListsReload(t *testing.T) {
 	}
 
 	// A refresh error is stored too, and the list kept.
+	e2.clk.Advance(time.Minute)
 	e2.fcs["bot1"].FailNext("ListAdminLeagues", errors.New("boom"))
 	_ = r2.Refresh(ctx, "bot1")
 	sets, _ = st.Leagues().BotLeagues(ctx)

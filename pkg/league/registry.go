@@ -34,7 +34,15 @@ const (
 const (
 	DefaultPollInterval  = 2 * time.Second
 	DefaultRetryInterval = time.Minute
+	// DefaultMinRefreshInterval is how recent a bot's last successful
+	// fetch may be before Refresh and RefreshAll skip asking the GC again.
+	DefaultMinRefreshInterval = 15 * time.Second
 )
+
+// persistTimeout bounds the database write after a refresh. The write
+// does not use the caller's ctx: a request that times out or goes away
+// after the GC answered must not leave memory and the database apart.
+const persistTimeout = 5 * time.Second
 
 var (
 	// ErrUnknownLeague means no configured bot holds the league, ready or
@@ -45,6 +53,10 @@ var (
 	// ErrGCSourceDisabled means league.sources does not include "gc", so
 	// there is no GC list to refresh.
 	ErrGCSourceDisabled = errors.New(`league: the "gc" source is not enabled`)
+	// ErrNotAsked means ctx ended before the bot's turn came, so the GC
+	// was not asked and the bot's previous list stays. It is wrapped
+	// together with ctx's error.
+	ErrNotAsked = errors.New("league: the game coordinator was not asked")
 )
 
 // MaxRecentChanges is how many of a bot's league changes the registry
@@ -148,6 +160,11 @@ type Options struct {
 	// RetryInterval is the wait after a failed refresh, capped at the
 	// refresh interval; 0 means DefaultRetryInterval.
 	RetryInterval time.Duration
+	// MinRefreshInterval is how recent a bot's last successful fetch, in
+	// the same GC session, may be before Refresh and RefreshAll return it
+	// instead of asking the GC again. Run does not use it. 0 means
+	// DefaultMinRefreshInterval; negative disables it.
+	MinRefreshInterval time.Duration
 }
 
 // Registry tracks every bot's leagues. Its methods are safe for concurrent
@@ -202,6 +219,9 @@ func New(st Store, bots bot.Source, cfg config.LeagueConfig, botCfgs []config.Bo
 	}
 	if opts.RetryInterval <= 0 {
 		opts.RetryInterval = DefaultRetryInterval
+	}
+	if opts.MinRefreshInterval == 0 {
+		opts.MinRefreshInterval = DefaultMinRefreshInterval
 	}
 	if cfg.RefreshInterval > 0 && opts.RetryInterval > cfg.RefreshInterval {
 		opts.RetryInterval = cfg.RefreshInterval
@@ -337,15 +357,19 @@ func (r *Registry) poll(ctx context.Context) {
 		r.mu.Unlock()
 		if due {
 			// refresh logs and records its own failures.
-			_ = r.refresh(ctx, h, st.ReadySince)
+			_ = r.refresh(ctx, h, st.ReadySince, 0)
 		}
 	}
 }
 
-// Refresh fetches one bot's GC list now, as Run does for a due bot. It
-// fails with bot.ErrUnknownBot, with ErrGCSourceDisabled, or with
-// bot.ErrNotReady when the bot is not gc_ready; those are not recorded as
-// refresh failures.
+// Refresh fetches one bot's GC list now, as Run does for a due bot,
+// unless the last successful fetch in the bot's current GC session is
+// newer than Options.MinRefreshInterval; then it keeps that list and asks
+// nothing. Concurrent calls for one bot run one after another, so the
+// later ones find the fresh list. It fails with bot.ErrUnknownBot, with
+// ErrGCSourceDisabled, or with bot.ErrNotReady when the bot is not
+// gc_ready; those are not recorded as refresh failures. Neither is ctx
+// being cancelled; ctx's deadline passing during the GC request is.
 func (r *Registry) Refresh(ctx context.Context, name string) error {
 	h, ok := r.bots.Bot(name)
 	if !ok {
@@ -358,12 +382,13 @@ func (r *Registry) Refresh(ctx context.Context, name string) error {
 	if !st.Ready {
 		return fmt.Errorf("refresh leagues of %s: %w", h.Name(), bot.ErrNotReady)
 	}
-	return r.refresh(ctx, h, st.ReadySince)
+	return r.refresh(ctx, h, st.ReadySince, r.opts.MinRefreshInterval)
 }
 
-// RefreshAll refreshes every gc_ready bot, a few at a time, and reports
-// each enabled bot's outcome in config order. A bot that is not ready is
-// reported as NotReady and not asked.
+// RefreshAll refreshes every gc_ready bot as Refresh does, a few at a
+// time, and reports each enabled bot's outcome in config order. A bot
+// that is not ready is reported as NotReady and not asked. A bot whose
+// turn had not come when ctx ended fails with ErrNotAsked.
 func (r *Registry) RefreshAll(ctx context.Context) ([]RefreshResult, error) {
 	if !r.useGC {
 		return nil, fmt.Errorf("refresh leagues: %w", ErrGCSourceDisabled)
@@ -388,9 +413,9 @@ func (r *Registry) RefreshAll(ctx context.Context) ([]RefreshResult, error) {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
-				out[i].Err = r.refresh(ctx, h, st.ReadySince)
+				out[i].Err = r.refresh(ctx, h, st.ReadySince, r.opts.MinRefreshInterval)
 			case <-ctx.Done():
-				out[i].Err = fmt.Errorf("refresh leagues of %s: %w", name, ctx.Err())
+				out[i].Err = notAsked(name, ctx.Err())
 			}
 		})
 	}
@@ -417,13 +442,27 @@ func (r *Registry) lockRefresh(ctx context.Context, name string) (func(), error)
 	}
 }
 
-func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Time) error {
+func notAsked(name string, err error) error {
+	return fmt.Errorf("refresh leagues of %s: %w: %w", name, ErrNotAsked, err)
+}
+
+// refresh fetches name's GC list and records the outcome. With minAge > 0
+// it keeps a list fetched successfully less than minAge ago in the same
+// GC session instead of asking the GC.
+func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Time, minAge time.Duration) error {
 	name := h.Name()
 	unlock, err := r.lockRefresh(ctx, name)
 	if err != nil {
-		return fmt.Errorf("refresh leagues of %s: %w", name, err)
+		return notAsked(name, err)
 	}
 	defer unlock()
+	if minAge > 0 && r.fresh(name, readySince, minAge) {
+		r.log.Debug("league list is fresh; not asking the game coordinator again", "bot", name)
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return notAsked(name, err)
+	}
 	var infos []gc.LeagueInfo
 	err = h.Do(ctx, "list admin leagues", func(ctx context.Context, c gc.Client) error {
 		var err error
@@ -431,8 +470,9 @@ func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Ti
 		return err
 	})
 	now := r.opts.Now()
-	if err != nil && ctx.Err() != nil {
-		// Shutting down; not the bot's fault.
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		// Shutting down, or the caller went away; not the bot's fault. A
+		// passed deadline is recorded below: the GC did not answer in time.
 		return fmt.Errorf("refresh leagues of %s: %w", name, err)
 	}
 
@@ -446,7 +486,9 @@ func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Ti
 		r.log.Warn("league list refresh failed", "bot", name, "err", err, "retry_in", r.opts.RetryInterval,
 			"fallback", r.fallbackNote(name))
 		if r.store != nil {
-			if serr := r.store.RecordRefreshError(ctx, name, err, now); serr != nil {
+			pctx, cancel := persistContext(ctx)
+			defer cancel()
+			if serr := r.store.RecordRefreshError(pctx, name, err, now); serr != nil {
 				r.log.Warn("could not store league refresh error", "bot", name, "err", serr)
 			}
 		}
@@ -507,11 +549,30 @@ func (r *Registry) refresh(ctx context.Context, h bot.Handle, readySince time.Ti
 		}
 	}
 	if r.store != nil {
-		if serr := r.store.ReplaceBotLeagues(ctx, name, SourceGC, ids, now); serr != nil {
+		pctx, cancel := persistContext(ctx)
+		defer cancel()
+		if serr := r.store.ReplaceBotLeagues(pctx, name, SourceGC, ids, now); serr != nil {
 			r.log.Warn("could not store league list", "bot", name, "err", serr)
 		}
 	}
 	return nil
+}
+
+// fresh reports whether name's GC list was fetched successfully less
+// than minAge ago in the GC session that became ready at readySince.
+func (r *Registry) fresh(name string, readySince time.Time, minAge time.Duration) bool {
+	now := r.opts.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	bs := r.botLocked(name)
+	return bs.gcKnown && !bs.stale && bs.lastErr == "" && bs.seenReadySince.Equal(readySince) &&
+		now.Sub(bs.refreshedAt) < minAge
+}
+
+// persistContext is ctx's values without its cancellation or deadline,
+// bounded by persistTimeout.
+func persistContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
 }
 
 func (r *Registry) fallbackNote(name string) string {
