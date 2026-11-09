@@ -226,13 +226,16 @@ just secrets list   # shows which URLs have a secret and a token
 ```
 
 - `webhook-secret` stores the secret under the lowercased URL, the way the service looks it
-  up. It refuses to replace an existing secret; pass `true` as a second argument to rotate it,
-  then run `webhook-secret-env` again and restart both sides.
+  up. It refuses to replace an existing secret; pass `true` as a second argument to rotate it
+  (see [Rotating the secret](#rotating-the-secret)).
 - `webhook-secret-env URL ENV_FILE [VAR]` writes `VAR=<secret>` (default
   `DOTA_LOBBY_WEBHOOK_SECRET`) into `ENV_FILE`, replacing an existing `VAR=` line and leaving
   the rest. The file ends up mode `0600`. The value travels from sops to the file through a
   pipe, so it never shows up on the terminal or in `ps`. For a DraftForge deployed with Helm,
   write to a scratch file and move the value into its secret from there.
+- `webhook-secret-env-add URL ENV_FILE [VAR]` does the same, but puts the secret in front of
+  the existing comma-separated `VAR=` list instead of replacing it, for rotation. Run twice,
+  it adds the secret once.
 - `webhook-token URL` reads one line from stdin. Keep the token out of your shell history:
   redirect it from a file or type it at the prompt.
 
@@ -257,3 +260,33 @@ just secrets list   # shows which URLs have a secret and a token
   `GET /v1/lobbies?external_ref=game-<pk>` for every game whose lobby has not ended covers
   anything a webhook missed. When the lobby's `seq` is ahead of the last applied event, read
   `GET /v1/lobbies/{id}/events?after=<last seq>`.
+
+### Rotating the secret
+
+`dota_lobby` signs with one secret per webhook, and a `401` or `403` from the receiver is not
+retried. If both sides switch to a new secret at once, every delivery between the two restarts
+fails the signature check and is given up; DraftForge then only catches those events up
+through its reconcile task. DraftForge accepts a comma-separated list in
+`DOTA_LOBBY_WEBHOOK_SECRET`, so rotate in two phases, with the receiver accepting both secrets
+while the sender switches:
+
+```bash
+url=https://draftforge.example/api/internal/lobbies/events/
+env=../draftforge/backend/.env
+
+# 1. A new secret in secrets/service.sops.yaml. The running service keeps signing
+#    with the old one until it is restarted.
+just secrets webhook-secret "$url" true
+
+# 2. DraftForge accepts the new and the old secret. Restart DraftForge.
+just secrets webhook-secret-env-add "$url" "$env"
+
+# 3. dota_lobby re-decrypts its secrets and signs with the new one.
+just docker restart
+
+# 4. Drop the old secret from DraftForge. Restart DraftForge again.
+just secrets webhook-secret-env "$url" "$env"
+```
+
+Do not run `just docker restart` (or `just docker up`) between steps 1 and 2: it would make
+`dota_lobby` sign with the new secret before DraftForge accepts it.

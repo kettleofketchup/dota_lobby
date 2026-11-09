@@ -133,9 +133,15 @@ webhook-secret url force="false":
     openssl rand -hex 32 | jq -Rc . | sops set --value-stdin "$f" "$p"
     echo "set secrets.webhook_secrets[$key]; add the same URL to webhooks[] in config/config.yaml, share the secret with the receiver (just secrets webhook-secret-env), then: just docker restart"
 
-# Write URL's webhook secret into an env file as VAR=<secret>, for the receiver (never printed)
+# Write URL's webhook secret into an env file as VAR=<secret>, replacing the old one (never printed)
 [group('secrets')]
-webhook-secret-env url env_file var="DOTA_LOBBY_WEBHOOK_SECRET":
+webhook-secret-env url env_file var="DOTA_LOBBY_WEBHOOK_SECRET": (_webhook-secret-env url env_file var "false")
+
+# Put URL's webhook secret in front of the env file's VAR=<old>,... list, keeping the old ones (rotation)
+[group('secrets')]
+webhook-secret-env-add url env_file var="DOTA_LOBBY_WEBHOOK_SECRET": (_webhook-secret-env url env_file var "true")
+
+_webhook-secret-env url env_file var keep_old:
     #!/usr/bin/env bash
     set -euo pipefail
     url={{quote(url)}}
@@ -155,10 +161,29 @@ webhook-secret-env url env_file var="DOTA_LOBBY_WEBHOOK_SECRET":
     trap 'rm -f "$tmp"' EXIT
     # The secret goes from sops to awk through a pipe, never through argv or
     # stdout. An existing VAR= (or export VAR=) line is replaced in place.
-    sops decrypt --extract "$p" "$f" | awk -v var="$var" '
+    # With keep_old, the secret goes in front of that line's comma-separated
+    # list instead, unless the list already holds it, so the receiver accepts
+    # the old and the new secret while the sender switches.
+    sops decrypt --extract "$p" "$f" | awk -v var="$var" -v keep_old={{quote(keep_old)}} '
         FILENAME == "-" { val = $0; next }
         index($0, var "=") == 1 || index($0, "export " var "=") == 1 {
-            if (!done) { sub(/=.*/, "", $0); print $0 "=" val }
+            if (!done) {
+                new = val
+                if (keep_old == "true") {
+                    old = substr($0, index($0, "=") + 1)
+                    gsub(/^[ \t]+|[ \t]+$/, "", old)
+                    if (old ~ /^".*"$/ || old ~ /^\047.*\047$/) old = substr(old, 2, length(old) - 2)
+                    n = split(old, parts, ",")
+                    have = 0
+                    for (i = 1; i <= n; i++) {
+                        gsub(/^[ \t]+|[ \t]+$/, "", parts[i])
+                        if (parts[i] == val) have = 1
+                    }
+                    if (have) new = old
+                    else if (old != "") new = val "," old
+                }
+                sub(/=.*/, "", $0); print $0 "=" new
+            }
             done = 1; next
         }
         { print }
@@ -166,7 +191,11 @@ webhook-secret-env url env_file var="DOTA_LOBBY_WEBHOOK_SECRET":
     ' - "$src" > "$tmp"
     mv "$tmp" "$env_file"
     trap - EXIT
-    echo "wrote $var for $key into $env_file (mode 0600)"
+    if [[ {{quote(keep_old)}} == true ]]; then
+        echo "added $var for $key to $env_file, keeping the old secret(s) (mode 0600)"
+    else
+        echo "wrote $var for $key into $env_file (mode 0600)"
+    fi
 
 # Store the receiver's token for URL (for token_header) from stdin into secrets/service.sops.yaml
 [group('secrets')]

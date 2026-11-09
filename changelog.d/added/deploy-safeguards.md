@@ -14,6 +14,7 @@
   directory (`backups/` by default).
 - `just secrets webhook-secret <url>` generates a webhook signing secret into
   `secrets/service.sops.yaml` without printing it. `just secrets webhook-secret-env <url>
-  <env_file>` hands the same secret to the receiver's env file, `just secrets webhook-token
-  <url>` stores a receiver token read from stdin, and `just secrets list` shows which webhook
-  URLs have a secret or token.
+  <env_file>` hands the same secret to the receiver's env file, and `webhook-secret-env-add`
+  adds it next to the old one there, for a rotation without failed deliveries.
+  `just secrets webhook-token <url>` stores a receiver token read from stdin, and
+  `just secrets list` shows which webhook URLs have a secret or token.
