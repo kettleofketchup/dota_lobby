@@ -197,7 +197,7 @@ type createLobbyOutput struct {
 }
 
 type listLobbiesInput struct {
-	State       []string `query:"state" enum:"pending,creating,waiting,ready,launching,in_game,post_game,finished,failed,closing,closed,timed_out" doc:"Only lobbies in these states, comma-separated"`
+	State       []string `query:"state" enum:"pending,creating,waiting,ready,launching,in_game,post_game,finished,failed,closing,closed,timed_out" doc:"Only lobbies in these states, comma-separated; spaces around the commas are ignored"`
 	ExternalRef string   `query:"external_ref" doc:"Only lobbies with this external_ref, ended ones included"`
 	Active      bool     `query:"active" doc:"Only lobbies that have not ended"`
 	Limit       int      `query:"limit" minimum:"1" maximum:"200" doc:"Page size, default 50"`
@@ -350,6 +350,43 @@ func (s *Server) createLobby(ctx context.Context, in *createLobbyInput) (*create
 		status = http.StatusAccepted
 	}
 	return &createLobbyOutput{Status: status, Location: "/v1/lobbies/" + l.ID, Body: s.lobbyWithPassword(l)}, nil
+}
+
+// trimStateFilter drops the spaces around each comma-separated value of
+// GET /v1/lobbies?state=, so "waiting, ready" filters as it did before
+// huma, which checks each raw value against the state enum.
+func trimStateFilter(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/lobbies" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		q := r.URL.Query()
+		states, ok := q["state"]
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		changed := false
+		for i, v := range states {
+			parts := strings.Split(v, ",")
+			for j, p := range parts {
+				parts[j] = strings.TrimSpace(p)
+			}
+			if t := strings.Join(parts, ","); t != v {
+				states[i], changed = t, true
+			}
+		}
+		if !changed {
+			next.ServeHTTP(w, r)
+			return
+		}
+		u := *r.URL
+		u.RawQuery = q.Encode()
+		r = r.WithContext(r.Context())
+		r.URL = &u
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) listLobbies(ctx context.Context, in *listLobbiesInput) (*lobbyListOutput, error) {

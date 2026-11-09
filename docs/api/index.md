@@ -519,7 +519,7 @@ Newest first. Query parameters, all optional:
 
 | Parameter | Meaning |
 |---|---|
-| `state` | Comma-separated states, for example `waiting,ready` |
+| `state` | Comma-separated states, for example `waiting,ready`; spaces around the commas are ignored |
 | `external_ref` | Only lobbies with this `external_ref` (ended ones included) |
 | `active` | `true` for lobbies that have not ended |
 | `limit` | 1-200, default 50 |

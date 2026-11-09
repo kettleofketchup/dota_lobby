@@ -383,6 +383,39 @@ func TestLobbyListNeverHasPassword(t *testing.T) {
 	}
 }
 
+// The state filter takes spaces around the commas, as it always has.
+func TestLobbyListStateFilter(t *testing.T) {
+	tests := []struct {
+		query string
+		code  int
+		want  []lobby.State
+	}{
+		{"state=waiting,ready", 200, []lobby.State{lobby.StateWaiting, lobby.StateReady}},
+		{"state=waiting,%20ready", 200, []lobby.State{lobby.StateWaiting, lobby.StateReady}},
+		{"state=+waiting+,+ready+&limit=5", 200, []lobby.State{lobby.StateWaiting, lobby.StateReady}},
+		{"state=%20in_game", 200, []lobby.State{lobby.StateInGame}},
+		{"state=waiting,%20bogus", 422, nil},
+		{"state=waiting,,ready", 422, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			f := &fakeLobbies{}
+			r := send(t, lobbyServer(t, f), "GET", "/v1/lobbies?"+tt.query, "", nil)
+			if r.code != tt.code {
+				t.Fatalf("= %d %v, want %d", r.code, r.body, tt.code)
+			}
+			if tt.code == 200 && !slices.Equal(f.filter.States, tt.want) {
+				t.Errorf("states = %q, want %q", f.filter.States, tt.want)
+			}
+		})
+	}
+	f := &fakeLobbies{}
+	// Rewriting the query keeps the other parameters intact.
+	if r := send(t, lobbyServer(t, f), "GET", "/v1/lobbies?state=waiting,%20ready&external_ref=a%20b%2Bc%26d", "", nil); r.code != 200 || f.filter.ExternalRef != "a b+c&d" {
+		t.Errorf("external_ref = %d %q", r.code, f.filter.ExternalRef)
+	}
+}
+
 func TestLobbyActions(t *testing.T) {
 	tests := []struct {
 		name, method, path, body string

@@ -220,7 +220,7 @@ func (s *Server) routes() http.Handler {
 		writeProblem(w, http.StatusNotFound, "not_found", "no such endpoint")
 	})
 	r.addMethodFallbacks()
-	return s.wrap(r.mux)
+	return s.wrap(trimStateFilter(r.mux))
 }
 
 const (

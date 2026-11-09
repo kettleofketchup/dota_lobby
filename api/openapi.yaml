@@ -1413,12 +1413,12 @@ paths:
       description: Newest first, without passwords.
       operationId: list-lobbies
       parameters:
-        - description: Only lobbies in these states, comma-separated
+        - description: Only lobbies in these states, comma-separated; spaces around the commas are ignored
           explode: false
           in: query
           name: state
           schema:
-            description: Only lobbies in these states, comma-separated
+            description: Only lobbies in these states, comma-separated; spaces around the commas are ignored
             items:
               enum:
                 - pending
