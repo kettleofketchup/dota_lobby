@@ -45,6 +45,7 @@ just release::upgrade      # Cut a release (repo admin); also hotfix, major, cur
 ### Project Patterns
 - **Configuration**: Use Viper for config loading, separate `config.yaml` (settings) from `secrets.yaml` (credentials)
 - **API Authentication**: Optional API key auth via `X-API-Key` or `Authorization: Bearer` headers
+- **REST API (huma v2)**: Follow the `huma-v2` skill: `.claude/skills/huma-v2/SKILL.md`
 - **Security**: Use `Secret` type for sensitive fields - they redact automatically in logs/JSON
 
 ## Configuration Files
