@@ -44,6 +44,7 @@ the reason is the last log line, prefixed with `dota_lobby serve:`.
 | `bots "a" and "b" use the same Steam account` | Two bots point at one account | One bot per account |
 | `start bots: auth: lock ...: state dir is locked by another process` | Another `serve` is running on the same state directory | Stop the other copy. Only one instance per set of accounts |
 | `start bots: auth: open lock: ... permission denied` | The state directory is not writable | With Compose, use the named volume from `compose.yaml`; do not bind-mount a host directory there unless UID 65532 owns it |
+| `webhooks[0]: secrets.webhook_secrets has no signing secret for "..."` | A webhook without a signing secret, or a secrets key that is not the exact URL. The message shows the URL without its query or user info | Add `secrets.webhook_secrets["<url>"]`; see [Webhooks](webhooks.md#configure-a-receiver) |
 | `listen: ... address already in use` | Port taken | Free the port or change the host side of the mapping |
 | `read config /app/config/config.yaml: ... permission denied` | `config.yaml` is not readable by UID 65532 | `chmod 644 config/config.yaml` (it holds no secrets) |
 
@@ -269,6 +270,33 @@ its bot was not back within `lobby.readopt_timeout`) could not be destroyed then
 `gc_ready` again and hosts no lobby, it destroys that lobby if it is still in the lobby screen,
 or only leaves it if the match launched, so the game goes on. It tries again every 30 s while
 the lobby is still there.
+
+### Webhooks do not arrive
+
+Look for `webhook delivery failed; will retry` (warn) and `webhook delivery given up` (error)
+in the logs; both name the event, the lobby, the receiver URL without its query, and the last
+status or error.
+
+- `401`, `403` or `404`, given up at once: the receiver refuses the request. Check the URL,
+  the `token_header` token and, for DraftForge, that the service's address is in
+  `INTERNAL_SERVICE_ALLOWED_IPS`.
+- `the receiver redirected`: redirects are not followed. Put the final URL (often with a
+  trailing `/`) in `webhooks[].url`.
+- `timed out (webhook_delivery.timeout)` or `connection refused`: retried with backoff up to
+  `webhook_delivery.max_age`. The receiver should answer quickly and do slow work afterwards.
+- The receiver rejects the signature: it must sign the raw body, before parsing it, with the
+  same secret, and both clocks must be within 5 minutes of each other.
+- `webhook delivered but not recorded`, `cannot reschedule a webhook delivery` or `cannot
+  give up a webhook delivery`: the database refused the write (a full disk or a read-only
+  volume). The delivery stays queued and is tried again every 30 s until the write works, so
+  a receiver may see an event twice. Free the disk.
+- Nothing logged: the event type does not match the webhook's `events`, or the event happened
+  before the webhook was configured. Events are queued when they are stored.
+- Events of one lobby arrive in `seq` order, so one failing event holds the lobby's later ones
+  back until it is delivered or given up. Other lobbies are not held back.
+
+`GET /v1/lobbies/{id}/events?after=<seq>` lists every event of a lobby, whatever happened to
+its deliveries.
 
 ## Other symptoms
 

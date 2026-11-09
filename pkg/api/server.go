@@ -210,6 +210,7 @@ func (s *Server) routes() http.Handler {
 	r.handleAuthed("POST /v1/lobbies/{id}/launch", s.handleLobbyLaunch)
 	r.handleAuthed("POST /v1/lobbies/{id}/teams/flip", s.handleLobbyFlip)
 	r.handleAuthed("POST /v1/lobbies/{id}/teams/shuffle", s.handleLobbyShuffle)
+	r.handleAuthed("GET /v1/lobbies/{id}/events", s.handleLobbyEvents)
 
 	// The pre-v1 placeholders; nothing depends on them.
 	r.handle("/bots", s.authed(gone("/v1/bots")))

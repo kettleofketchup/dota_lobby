@@ -237,6 +237,10 @@ func TestServeZeroBotsStartsAndStops(t *testing.T) {
 	if drained < 0 || drained > stopped {
 		t.Errorf("lobby drain missing or out of order:\n%s", stderr.String())
 	}
+	// Webhook delivery stops after the drain, whose events it must queue.
+	if hooks := strings.Index(stderr.String(), "webhook delivery stopped"); hooks < drained || hooks > stopped {
+		t.Errorf("webhook stop missing or out of order:\n%s", stderr.String())
+	}
 	lock, err := auth.AcquireLock(stateDir)
 	if err != nil {
 		t.Fatalf("lock not released: %v", err)

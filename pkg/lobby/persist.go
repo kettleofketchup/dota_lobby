@@ -156,10 +156,16 @@ func fromRow(row store.LobbyRow, players []store.PlayerRow) (Lobby, error) {
 	return l, nil
 }
 
-func eventRow(ev Event) (store.EventRow, error) {
+// eventRow is the stored form of an event of l, with l's summary as it
+// was right after the change.
+func eventRow(l Lobby, ev Event) (store.EventRow, error) {
 	data, err := json.Marshal(ev.Data)
 	if err != nil {
 		return store.EventRow{}, fmt.Errorf("encode event %s: %w", ev.Type, err)
 	}
-	return store.EventRow{ID: ev.ID, LobbyID: ev.LobbyID, Seq: ev.Seq, Type: ev.Type, OccurredAt: ev.OccurredAt, Data: data}, nil
+	summary, err := json.Marshal(l.Summary())
+	if err != nil {
+		return store.EventRow{}, fmt.Errorf("encode event %s: %w", ev.Type, err)
+	}
+	return store.EventRow{ID: ev.ID, LobbyID: ev.LobbyID, Seq: ev.Seq, Type: ev.Type, OccurredAt: ev.OccurredAt, Data: data, Lobby: summary}, nil
 }

@@ -74,6 +74,7 @@ nav:
   - Operations:
       - Troubleshooting: operations/troubleshooting.md
       - Lobby chat: operations/lobby-chat.md
+      - Webhooks: operations/webhooks.md
       - Known limitations: known-limitations.md
   - Development:
       - Overview: development/index.md

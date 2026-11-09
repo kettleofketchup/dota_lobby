@@ -38,6 +38,10 @@ type fakeLobbies struct {
 	roster  lobby.Roster
 	launch  lobby.LaunchRequest
 	calls   []string
+
+	events      []lobby.Envelope
+	eventsAfter int64
+	eventsLimit int
 }
 
 func (f *fakeLobbies) call(name string) {
@@ -96,6 +100,11 @@ func (f *fakeLobbies) FlipTeams(context.Context, string) (lobby.Lobby, error) {
 func (f *fakeLobbies) Shuffle(context.Context, string) (lobby.Lobby, error) {
 	f.call("shuffle")
 	return f.lobby, f.err
+}
+func (f *fakeLobbies) Events(_ context.Context, _ string, after int64, limit int) ([]lobby.Envelope, error) {
+	f.call("events")
+	f.eventsAfter, f.eventsLimit = after, limit
+	return f.events, f.err
 }
 
 func sampleLobby() lobby.Lobby {
@@ -397,9 +406,68 @@ func TestLobbyActions(t *testing.T) {
 
 func TestLobbyRoutesNeedKey(t *testing.T) {
 	s := lobbyServer(t, &fakeLobbies{lobby: sampleLobby()})
-	for _, p := range []string{"/v1/lobbies", "/v1/lobbies/lob_x", "/v1/lobbies/lob_x/launch"} {
+	for _, p := range []string{"/v1/lobbies", "/v1/lobbies/lob_x", "/v1/lobbies/lob_x/launch", "/v1/lobbies/lob_x/events"} {
 		if r := do(t, s, http.MethodGet, p, nil); r.code != 401 {
 			t.Errorf("GET %s without key = %d", p, r.code)
 		}
+	}
+}
+
+func TestLobbyEvents(t *testing.T) {
+	at := time.Date(2026, 11, 8, 18, 5, 0, 0, time.UTC)
+	env := func(seq int64, typ string) lobby.Envelope {
+		return lobby.Envelope{
+			ID: fmt.Sprintf("evt_%d", seq), Type: typ, Seq: seq, OccurredAt: at,
+			Lobby: sampleLobby().Summary(), Data: json.RawMessage(`{"match_id":"8123456789"}`),
+		}
+	}
+	tests := []struct {
+		name      string
+		query     string
+		events    []lobby.Envelope
+		err       error
+		code      int
+		after     int64
+		limit     int
+		nextAfter float64
+	}{
+		{"defaults", "", []lobby.Envelope{env(1, "lobby.state_changed"), env(2, "match.started")}, nil, 200, 0, 100, 2},
+		{"after and limit", "?after=2&limit=1", []lobby.Envelope{env(3, "match.ended")}, nil, 200, 2, 1, 3},
+		{"nothing new keeps after", "?after=9", nil, nil, 200, 9, 100, 9},
+		{"negative after", "?after=-1", nil, nil, 400, 0, 0, 0},
+		{"limit too large", "?limit=501", nil, nil, 400, 0, 0, 0},
+		{"limit zero", "?limit=0", nil, nil, 400, 0, 0, 0},
+		{"unknown lobby", "", nil, lobby.ErrNotFound, 404, 0, 100, 0},
+		{"store down", "", nil, lobby.ErrUnavailable, 503, 0, 100, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeLobbies{events: tc.events, err: tc.err}
+			r := send(t, lobbyServer(t, f), "GET", "/v1/lobbies/lob_x/events"+tc.query, "", nil)
+			if r.code != tc.code {
+				t.Fatalf("code = %d, want %d: %s", r.code, tc.code, r.raw)
+			}
+			if tc.code != 200 {
+				return
+			}
+			if f.eventsAfter != tc.after || f.eventsLimit != tc.limit {
+				t.Errorf("asked after=%d limit=%d", f.eventsAfter, f.eventsLimit)
+			}
+			evs, _ := r.body["events"].([]any)
+			if len(evs) != len(tc.events) || r.body["next_after"] != tc.nextAfter {
+				t.Errorf("body = %s", r.raw)
+			}
+			if strings.Contains(r.raw, "k3tt1e") {
+				t.Errorf("events carry the password: %s", r.raw)
+			}
+			if len(evs) > 0 {
+				e := evs[0].(map[string]any)
+				l := e["lobby"].(map[string]any)
+				if e["id"] == nil || e["occurred_at"] != "2026-11-08T18:05:00Z" || l["external_ref"] != "game-42" ||
+					l["gc_lobby_id"] != "27110012345678901" || l["league_id"] != float64(17929) {
+					t.Errorf("envelope = %v", e)
+				}
+			}
+		})
 	}
 }

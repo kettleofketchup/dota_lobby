@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -144,12 +145,38 @@ func (c *Config) Validate() error {
 	if c.Match.WebAPI.Enabled && c.Match.WebAPI.RPS <= 0 {
 		add("match.webapi.rps must be positive")
 	}
+	positive("webhook_delivery.timeout", c.WebhookDelivery.Timeout)
+	positive("webhook_delivery.max_age", c.WebhookDelivery.MaxAge)
+	hookURLs := map[string]int{}
 	for i, w := range c.Webhooks {
+		// Messages name the URL by RedactURL only: its query or user info
+		// may hold the receiver's credentials.
 		if err := checkHTTPURL(w.URL); err != nil {
 			add("webhooks[%d].url: %w", i, err)
 		}
-		if len(w.Events) == 0 {
-			add("webhooks[%d].events must not be empty", i)
+		if prev, dup := hookURLs[strings.ToLower(w.URL)]; dup {
+			add("webhooks[%d].url is the same as webhooks[%d].url (URLs are compared case-insensitively)", i, prev)
+		}
+		hookURLs[strings.ToLower(w.URL)] = i
+		for _, p := range w.Events {
+			if _, err := path.Match(p, ""); err != nil {
+				add("webhooks[%d].events: %q is not a valid pattern", i, p)
+			}
+		}
+		if !c.Secrets.WebhookSecret(w.URL).IsSet() {
+			add("webhooks[%d]: secrets.webhook_secrets has no signing secret for %q (keys are the exact webhooks[%d].url)", i, RedactURL(w.URL), i)
+		}
+		switch h := w.TokenHeader; {
+		case h == "":
+			if c.Secrets.WebhookToken(w.URL).IsSet() {
+				add("webhooks[%d]: secrets.webhook_tokens has a token but webhooks[%d].token_header is empty", i, i)
+			}
+		case !headerToken.MatchString(h):
+			add("webhooks[%d].token_header %q is not a valid header name", i, h)
+		case reservedHeader(h):
+			add("webhooks[%d].token_header %q is set by the service itself", i, h)
+		case !c.Secrets.WebhookToken(w.URL).IsSet():
+			add("webhooks[%d].token_header is set but secrets.webhook_tokens has no token for %q", i, RedactURL(w.URL))
 		}
 	}
 
@@ -185,15 +212,44 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
+// headerToken is an HTTP header name (RFC 9110 token).
+var headerToken = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+// reservedHeader reports whether the webhook sender sets header h itself.
+func reservedHeader(h string) bool {
+	switch strings.ToLower(h) {
+	case "content-type", "content-length", "host", "user-agent", "transfer-encoding", "connection":
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(h), "x-dota-lobby-")
+}
+
+// checkHTTPURL reports whether raw is an absolute http(s) URL. Its errors
+// never hold the query or user info of raw.
 func checkHTTPURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
+		// A *url.Error repeats the whole input; keep only the reason.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		return fmt.Errorf("parse: %w", err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("%q is not an absolute http(s) URL", raw)
+		return fmt.Errorf("%q is not an absolute http(s) URL", RedactURL(raw))
 	}
 	return nil
+}
+
+// RedactURL returns raw without user info, query or fragment, which may
+// hold credentials, for logs and error messages.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(unparsable URL)"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
 
 // MaxTOTPSkew bounds steam.totp_skew. A larger offset means a broken host

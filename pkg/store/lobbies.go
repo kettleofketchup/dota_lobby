@@ -66,7 +66,9 @@ type PlayerRow struct {
 	InviteConfirmed bool
 }
 
-// EventRow is one lobby event. Data is a JSON object.
+// EventRow is one lobby event. Data is a JSON object. Lobby is the JSON
+// summary of the lobby when the event happened; nil for events stored
+// before it was recorded.
 type EventRow struct {
 	ID         string
 	LobbyID    string
@@ -74,6 +76,7 @@ type EventRow struct {
 	Type       string
 	OccurredAt time.Time
 	Data       []byte
+	Lobby      []byte
 }
 
 // LobbyFilter selects lobbies for List. Empty fields match everything.
@@ -90,10 +93,20 @@ type LobbyFilter struct {
 }
 
 // Lobbies stores lobbies, their rosters and their events.
-type Lobbies struct{ db *sql.DB }
+type Lobbies struct {
+	db    *sql.DB
+	route func(eventType string) []string
+}
 
 // Lobbies returns the lobby repository.
 func (s *Store) Lobbies() *Lobbies { return &Lobbies{db: s.db} }
+
+// WithWebhooks returns a copy of the repository that queues a webhook
+// delivery for every URL route returns for an event's type, in the
+// transaction that stores the event. A nil route queues nothing.
+func (l *Lobbies) WithWebhooks(route func(eventType string) []string) *Lobbies {
+	return &Lobbies{db: l.db, route: route}
+}
 
 const lobbyColumns = `id, external_ref, state, state_reason, state_since, bot, gc_lobby_id, league_id,
 	league_verified, spec, pass_key, details, host_seat, launch_attempts, match_id, outcome, match,
@@ -119,7 +132,7 @@ func (l *Lobbies) Insert(ctx context.Context, row LobbyRow, players []PlayerRow,
 	if err := writePlayers(ctx, tx, row.ID, players); err != nil {
 		return fmt.Errorf("insert lobby %s: %w", row.ID, err)
 	}
-	if err := writeEvents(ctx, tx, events); err != nil {
+	if err := l.writeEvents(ctx, tx, events); err != nil {
 		return fmt.Errorf("insert lobby %s: %w", row.ID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -170,7 +183,7 @@ func (l *Lobbies) Transition(ctx context.Context, expected int64, row LobbyRow, 
 			return fmt.Errorf("update lobby %s: %w", row.ID, err)
 		}
 	}
-	if err := writeEvents(ctx, tx, events); err != nil {
+	if err := l.writeEvents(ctx, tx, events); err != nil {
 		return fmt.Errorf("update lobby %s: %w", row.ID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -292,7 +305,7 @@ func (l *Lobbies) Events(ctx context.Context, lobbyID string, after int64, limit
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := l.db.QueryContext(ctx, `SELECT id, lobby_id, seq, type, occurred_at, data FROM lobby_events
+	rows, err := l.db.QueryContext(ctx, `SELECT id, lobby_id, seq, type, occurred_at, data, lobby FROM lobby_events
 		WHERE lobby_id = ? AND seq > ? ORDER BY seq LIMIT ?`, lobbyID, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("events of %s: %w", lobbyID, err)
@@ -300,18 +313,10 @@ func (l *Lobbies) Events(ctx context.Context, lobbyID string, after int64, limit
 	defer func() { _ = rows.Close() }()
 	var out []EventRow
 	for rows.Next() {
-		var (
-			e  EventRow
-			at sql.NullString
-			d  string
-		)
-		if err := rows.Scan(&e.ID, &e.LobbyID, &e.Seq, &e.Type, &at, &d); err != nil {
+		var e EventRow
+		if err := scanEvent(rows, &e); err != nil {
 			return nil, fmt.Errorf("events of %s: %w", lobbyID, err)
 		}
-		if e.OccurredAt, err = parseTime(at); err != nil {
-			return nil, fmt.Errorf("events of %s: %w", lobbyID, err)
-		}
-		e.Data = []byte(d)
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -330,7 +335,7 @@ func (l *Lobbies) Sweep(ctx context.Context, cutoff time.Time) (int, error) {
 	defer func() { _ = tx.Rollback() }()
 	sel := `SELECT id FROM lobbies WHERE state IN ` + terminalList() + ` AND ended_at IS NOT NULL AND ended_at < ?`
 	ts := formatTime(cutoff)
-	for _, table := range []string{"lobby_events", "lobby_players"} {
+	for _, table := range []string{"webhook_deliveries", "lobby_events", "lobby_players"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE lobby_id IN (`+sel+`)`, ts); err != nil {
 			return 0, fmt.Errorf("sweep lobbies: %w", err)
 		}
@@ -433,13 +438,42 @@ func writePlayers(ctx context.Context, tx *sql.Tx, lobbyID string, players []Pla
 	return nil
 }
 
-func writeEvents(ctx context.Context, tx *sql.Tx, events []EventRow) error {
+func (l *Lobbies) writeEvents(ctx context.Context, tx *sql.Tx, events []EventRow) error {
 	for _, e := range events {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO lobby_events (id, lobby_id, seq, type, occurred_at, data)
-			VALUES (?, ?, ?, ?, ?, ?)`, e.ID, e.LobbyID, e.Seq, e.Type, formatTime(e.OccurredAt), string(e.Data)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO lobby_events (id, lobby_id, seq, type, occurred_at, data, lobby)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, e.ID, e.LobbyID, e.Seq, e.Type, formatTime(e.OccurredAt), string(e.Data),
+			nullBytes(e.Lobby)); err != nil {
 			return fmt.Errorf("write event %s #%d: %w", e.Type, e.Seq, err)
 		}
+		if l.route == nil {
+			continue
+		}
+		for _, url := range l.route(e.Type) {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO webhook_deliveries (event_id, url, lobby_id, seq, status, next_at)
+				VALUES (?, ?, ?, ?, ?, ?)`, e.ID, url, e.LobbyID, e.Seq, DeliveryPending, formatTime(e.OccurredAt)); err != nil {
+				return fmt.Errorf("queue event %s #%d for a webhook: %w", e.Type, e.Seq, err)
+			}
+		}
 	}
+	return nil
+}
+
+// scanEvent reads the columns id, lobby_id, seq, type, occurred_at, data,
+// lobby, in that order, into e, and any further columns into extra.
+func scanEvent(row interface{ Scan(...any) error }, e *EventRow, extra ...any) error {
+	var (
+		at, lobby sql.NullString
+		d         string
+	)
+	dest := append([]any{&e.ID, &e.LobbyID, &e.Seq, &e.Type, &at, &d, &lobby}, extra...)
+	if err := row.Scan(dest...); err != nil {
+		return err
+	}
+	var err error
+	if e.OccurredAt, err = parseTime(at); err != nil {
+		return err
+	}
+	e.Data, e.Lobby = []byte(d), rawJSON(lobby)
 	return nil
 }
 

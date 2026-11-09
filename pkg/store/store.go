@@ -30,9 +30,12 @@ var migrationFS embed.FS
 // refuses.
 var ErrSchemaTooNew = errors.New("store: database schema is newer than this binary")
 
-// timeLayout is how timestamps are stored: RFC 3339 in UTC with nanoseconds,
-// which sorts correctly as text.
-const timeLayout = time.RFC3339Nano
+// timeLayout is how timestamps are stored: RFC 3339 in UTC with all nine
+// fraction digits. The fixed width makes text order time order, which the
+// queries rely on; time.RFC3339Nano drops trailing zeros, so "10.1Z" would
+// sort after "10.12Z". Reads accept any RFC 3339 time, so rows written
+// before the fixed width still parse.
+const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 // Store is an open database. It is safe for concurrent use.
 type Store struct {
@@ -232,7 +235,7 @@ func parseTime(s sql.NullString) (time.Time, error) {
 	if !s.Valid || s.String == "" {
 		return time.Time{}, nil
 	}
-	t, err := time.Parse(timeLayout, s.String)
+	t, err := time.Parse(time.RFC3339Nano, s.String)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse time %q: %w", s.String, err)
 	}
