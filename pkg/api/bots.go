@@ -36,6 +36,12 @@ type botView struct {
 	RenewBlocked    *string `json:"renew_blocked"`
 	Attempt         int     `json:"attempt"`
 	GCQueuePosition *int32  `json:"gc_queue_position"`
+	// ReadySince is when the bot entered gc_ready, or null.
+	ReadySince *time.Time `json:"ready_since"`
+	// Leagues are the league IDs the bot may host, never null.
+	Leagues []uint32 `json:"leagues"`
+	// Lobby is the ID of the lobby the bot hosts, or null.
+	Lobby *string `json:"lobby"`
 }
 
 func newBotView(st bot.Status) botView {
@@ -65,6 +71,26 @@ func newBotView(st bot.Status) botView {
 		q := st.QueuePosition
 		v.GCQueuePosition = &q
 	}
+	if !st.ReadySince.IsZero() {
+		t := st.ReadySince.UTC()
+		v.ReadySince = &t
+	}
+	return v
+}
+
+// botView builds one bot's view with its leagues and lobby.
+func (s *Server) botView(st bot.Status, leases map[string]string) botView {
+	v := newBotView(st)
+	v.Leagues = s.opts.Leagues.BotLeagues(st.Name)
+	if v.Leagues == nil {
+		v.Leagues = []uint32{}
+	}
+	for name, owner := range leases {
+		if strings.EqualFold(name, st.Name) {
+			v.Lobby = &owner
+			break
+		}
+	}
 	return v
 }
 
@@ -77,9 +103,10 @@ func nonEmpty(s string) *string {
 
 func (s *Server) handleBots(w http.ResponseWriter, _ *http.Request) {
 	sts := s.opts.Bots.Statuses()
+	leases := s.opts.Leases.Leases()
 	out := make([]botView, len(sts))
 	for i, st := range sts {
-		out[i] = newBotView(st)
+		out[i] = s.botView(st, leases)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"bots": out})
 }
@@ -88,7 +115,7 @@ func (s *Server) handleBot(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	for _, st := range s.opts.Bots.Statuses() {
 		if strings.EqualFold(st.Name, name) {
-			writeJSON(w, http.StatusOK, newBotView(st))
+			writeJSON(w, http.StatusOK, s.botView(st, s.opts.Leases.Leases()))
 			return
 		}
 	}

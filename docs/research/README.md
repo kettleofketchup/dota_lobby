@@ -65,6 +65,10 @@ One bot account, one test league. Answers Q1, Q2, Q18, Q21, Q7 (with a source jo
 
 Account creation (the human part, once per bot), adding a mobile authenticator with steamguard-cli and no phone, zero-touch TOTP login on go-steam master (VERIFIED live), never running Dota 2 (VERIFIED live), limited accounts, ToS risk, rate limits and a from-scratch runbook.
 
+### [11 - DraftForge integration](11-draftforge-integration.md)
+
+How the service should host lobbies for DraftForge, the owner's tournament app (read at `02a46fd9`, nothing in it changed). DraftForge stores lobby settings but creates no lobbies today; a `Game` is one bo1 match whose bracket slots are not in-game sides. Recommended contract: DraftForge creates a lobby with `external_ref = "game-<pk>"` as the idempotency key and 32-bit account IDs, the service invites, seats, runs the ready check and launches, and pushes signed, ordered webhooks to a DraftForge internal endpoint. `match.started` gives DraftForge the `gameid` so its league match sync stays the final authority for the winner. Also the host seat before launch (caster slot REPORTED to fail at load), launch failure detection and the live tests still needed.
+
 ### Gap follow-ups
 
 - **[gap-01 - Upstream master build and auth](gap-01-upstream-master-build-auth.md).** The masters build together; every research snippet compiles after mechanical porting (protobuf-go-lite, `LogOn(ctx, ...)`). Master `MakeRequest` matches by GC job ID, which the GC echoes on 7634 and 7055 but not 7010 (VERIFIED live). Register handlers before connect, `Dota2.Close()` is terminal, `Emit` blocks. No renewal helper; a CM `GenerateAccessTokenForApp` sketch compiles (Q12).

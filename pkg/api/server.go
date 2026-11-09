@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
+	"github.com/kettleofketchup/dota_lobby/pkg/gc"
+	"github.com/kettleofketchup/dota_lobby/pkg/league"
 )
 
 // Defaults for Options.
@@ -39,6 +42,24 @@ type Bots interface {
 	Retry(ctx context.Context, name string) error
 }
 
+// Leagues is what the API reads from the league registry.
+// *league.Registry implements it.
+type Leagues interface {
+	// All lists every held league with its holders.
+	All() []league.League
+	// BotLeagues lists the leagues one bot holds, sorted.
+	BotLeagues(bot string) []uint32
+	// Nodes fetches a league's lobby nodes through a ready holder. It fails
+	// with league.ErrUnknownLeague or league.ErrNoReadyHolder.
+	Nodes(ctx context.Context, leagueID uint32) (string, []gc.LeagueNode, error)
+}
+
+// Leases reports which lobby each bot hosts. *pool.Pool implements it.
+type Leases interface {
+	// Leases maps a leased bot's name to its lobby ID.
+	Leases() map[string]string
+}
+
 // Options configures a Server.
 type Options struct {
 	// Addr is the listen address for ListenAndServe, e.g. "0.0.0.0:8080".
@@ -46,6 +67,14 @@ type Options struct {
 	// APIKey guards /v1/*; empty leaves them open.
 	APIKey config.Secret
 	Bots   Bots
+	// Leagues is the league registry; nil lists no leagues.
+	Leagues Leagues
+	// Leases is the bot pool; nil reports no lobbies.
+	Leases Leases
+	// GCRequestTimeout bounds a synchronous GC call made for a request,
+	// queue wait included (gc.request_timeout). 0 means
+	// bot.DefaultRequestTimeout; it is capped at MaxSyncGCWait.
+	GCRequestTimeout time.Duration
 	// MinReadyBots is how many bots must be gc_ready for /readyz.
 	MinReadyBots int
 	// MaxBodyBytes caps request bodies; 0 means DefaultMaxBodyBytes.
@@ -59,6 +88,10 @@ type Options struct {
 	// Now defaults to time.Now.
 	Now func() time.Time
 }
+
+// MaxSyncGCWait caps GCRequestTimeout so a synchronous GC call answers
+// 504 before the server's 15 s write timeout drops the connection.
+const MaxSyncGCWait = 12 * time.Second
 
 // Server serves the API. Create it with New.
 type Server struct {
@@ -84,8 +117,18 @@ func New(opts Options) *Server {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.GCRequestTimeout <= 0 {
+		opts.GCRequestTimeout = bot.DefaultRequestTimeout
+	}
+	opts.GCRequestTimeout = min(opts.GCRequestTimeout, MaxSyncGCWait)
 	if opts.Bots == nil {
 		opts.Bots = noBots{}
+	}
+	if opts.Leagues == nil {
+		opts.Leagues = noLeagues{}
+	}
+	if opts.Leases == nil {
+		opts.Leases = noLeases{}
 	}
 	s := &Server{opts: opts, log: opts.Logger, started: opts.Now()}
 	s.handler = s.routes()
@@ -147,6 +190,9 @@ func (s *Server) routes() http.Handler {
 	r.handleAuthed("GET /v1/bots", s.handleBots)
 	r.handleAuthed("GET /v1/bots/{name}", s.handleBot)
 	r.handleAuthed("POST /v1/bots/{name}/retry", s.handleBotRetry)
+
+	r.handleAuthed("GET /v1/leagues", s.handleLeagues)
+	r.handleAuthed("GET /v1/leagues/{id}/nodes", s.handleLeagueNodes)
 
 	// Lobby endpoints are not implemented yet.
 	r.handle("/v1/lobbies", s.authed(notImplemented))
@@ -305,3 +351,17 @@ func (noBots) Stalled(time.Duration) []string { return nil }
 func (noBots) Retry(context.Context, string) error {
 	return bot.ErrUnknownBot
 }
+
+// noLeagues stands in when no registry is wired.
+type noLeagues struct{}
+
+func (noLeagues) All() []league.League       { return nil }
+func (noLeagues) BotLeagues(string) []uint32 { return nil }
+func (noLeagues) Nodes(_ context.Context, id uint32) (string, []gc.LeagueNode, error) {
+	return "", nil, fmt.Errorf("league %d: %w", id, league.ErrUnknownLeague)
+}
+
+// noLeases stands in when no pool is wired.
+type noLeases struct{}
+
+func (noLeases) Leases() map[string]string { return nil }

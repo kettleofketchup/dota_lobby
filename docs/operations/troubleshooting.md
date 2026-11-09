@@ -128,6 +128,35 @@ tolerates about a minute of difference. When the code is refused (`TwoFactorCode
 
 Then [retry](#recovering-a-bot-in-needs_attention) the bot.
 
+## A bot does not list my league
+
+`GET /v1/leagues` and the `leagues` field of `/v1/bots` show which leagues each bot may host.
+When a league is missing for a bot:
+
+1. Is the bot `gc_ready`? The game coordinator list is fetched when the bot reaches `gc_ready`
+   and every `league.refresh_interval` (30 min) after. Before the first fetch, the list saved by
+   the last run is used (`"stale": true`), or `bots[].leagues` if there is none.
+2. Look for the bot's last refresh in the logs:
+
+    ```bash
+    docker compose logs | grep -E 'league list refresh|configured leagues are not'
+    ```
+
+    - `league list refreshed` with `leagues` names what the game coordinator returned.
+    - `league list refresh failed` means the request failed (`err` says why); the service tries
+      again after a minute and keeps the last good list meanwhile.
+    - `configured leagues are not in the bot's GC admin list` names leagues from
+      `bots[].leagues` that the game coordinator does not list. They are ignored.
+
+3. If the game coordinator does not list the league, the bot's Steam account is not one of the
+   league's admins. Add it on [dota2.com/league](https://www.dota2.com/league), under the
+   league's **Admins**, using the account's Steam ID from `/v1/bots`. Then wait for the next
+   refresh, or make the bot reconnect (a restart of the service fetches every list again).
+
+Configured leagues are only a fallback, because a lobby created for a league the account does
+not administer is refused by the game coordinator. `league.allow_unverified: true` keeps them in
+use anyway; only set it when you know the game coordinator list is wrong.
+
 ## Other symptoms
 
 | Symptom | Cause | Fix |
@@ -148,3 +177,7 @@ Then [retry](#recovering-a-bot-in-needs_attention) the bot.
 | `unauthorized` (or `denied`) on pull | The image package is private. This happens with a fork whose repository is private, or before a maintainer has made the package public | [Build the image locally](../deployment/docker.md#build-the-image-locally) |
 | `401` with `missing or invalid API key` | Key header missing or wrong | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` |
 | `410 gone` on `/bots` or `/lobby/...` | The old endpoints were removed | Use `/v1/bots` |
+| `503 unavailable` from `/v1/leagues/{id}/nodes` | Bots hold the league, but none is `gc_ready` | Check `/v1/bots`, then retry |
+| `404 not_found` from `/v1/leagues/{id}/nodes` | No enabled bot holds that league | See [A bot does not list my league](#a-bot-does-not-list-my-league) |
+| Startup fails with `open store ...` | `store.path` (default `<state_dir>/dota_lobby.db`) cannot be created or opened, for example a read-only state volume | Make the state volume writable by the service user |
+| Startup fails with `database schema is newer than this binary` | The database was used by a newer release | Run that release again, or restore a backup taken before the upgrade |

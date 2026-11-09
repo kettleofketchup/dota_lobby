@@ -79,6 +79,16 @@ func TestManager(t *testing.T) {
 	if _, ok := m.Supervisor("BOT-B"); !ok {
 		t.Error("Supervisor lookup is not case-insensitive")
 	}
+	if got := m.Names(); len(got) != 2 || got[0] != "bot-a" || got[1] != "bot-b" {
+		t.Errorf("Names = %v, want the enabled bots in config order", got)
+	}
+	if h, ok := m.Bot("BOT-A"); !ok || h.Name() != "bot-a" {
+		t.Errorf("Bot(BOT-A) = %v, %t", h, ok)
+	}
+	if _, ok := m.Bot("bot-c"); ok {
+		t.Error("Bot found a disabled bot")
+	}
+	var _ Source = m
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}

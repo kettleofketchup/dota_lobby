@@ -60,9 +60,9 @@ gc:
   create_timeout: 2m
 
 league:
-  sources: [gc, config]
+  sources: [gc, config]    # gc = the account's admin leagues; config = bots[].leagues
   refresh_interval: 30m
-  allow_unverified: false
+  allow_unverified: false  # true keeps configured leagues the GC does not list
   webapi_enrichment: true
 
 lobby:

@@ -10,8 +10,9 @@ yet. Read this list before you use real accounts.
    [live probe results](https://github.com/kettleofketchup/dota_lobby/blob/main/docs/research/09-live-probe.md)), but the bot manager as a whole is only tested against
    fakes. The remaining open questions are listed under
    [What is still unverified](configuration/bot-accounts.md#what-is-still-unverified).
-2. **Lobbies are not created.** Everything under `/v1/lobbies` answers `501`. League discovery,
-   lobby hosting and match results come in later phases.
+2. **Lobbies are not created.** Everything under `/v1/lobbies` answers `501`. The service does
+   find which leagues each bot may host (`GET /v1/leagues`), but lobby hosting and match results
+   come in later phases.
 3. **Account setup is manual.** Creating a Steam account and linking its authenticator with
    steamguard-cli is done by a person, once per bot (about 15 to 20 minutes); see
    [Bot accounts](configuration/bot-accounts.md). Creating accounts automatically is against the
@@ -35,8 +36,8 @@ yet. Read this list before you use real accounts.
    its time.
 10. **No metrics yet.** `metrics.addr` is accepted but no metrics listener runs. Token expiry is
     shown in `/v1/bots` and renewals are logged.
-11. **Several config sections are accepted but unused**: `league`, `lobby`, `match`, `store`,
-    `webhooks` and `metrics`. They are validated so configs keep working once the features
+11. **Several config sections are accepted but unused**: `lobby`, `match`, `webhooks`,
+    `metrics` and `league.webapi_enrichment`. They are validated so configs keep working once the features
     arrive.
 12. **No TLS.** Put a reverse proxy in front of the API before exposing it beyond localhost.
 
@@ -45,7 +46,6 @@ yet. Read this list before you use real accounts.
 Planned work, in order. No dates are promised.
 
 - Run the Phase 0 probe against real bot accounts and fix whatever it finds.
-- League discovery per bot and bot leasing, with state in SQLite.
 - Lobby creation, invites and lobby lifecycle through `/v1/lobbies`.
 - Match results from the game coordinator, the Steam Web API and OpenDota, with webhooks.
 - Prometheus metrics.

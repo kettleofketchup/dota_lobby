@@ -1007,3 +1007,59 @@ func TestStopWithoutDisconnected(t *testing.T) {
 		}
 	}
 }
+
+// ReadySince is set on entering gc_ready, cleared on leaving it, and moves
+// forward with each new GC session, which is what the league registry
+// watches for.
+func TestReadySinceTracksSessions(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.ScriptEvery("Connect", logonOK()...)
+		welcomeOnHello(h)
+	})
+	if st := h.sup.Status(); !st.ReadySince.IsZero() {
+		t.Fatalf("ReadySince before start = %s", st.ReadySince)
+	}
+	h.start()
+	first := h.untilState(StateGCReady, time.Minute).ReadySince
+	if first.IsZero() {
+		t.Fatal("ReadySince not set in gc_ready")
+	}
+	if again := h.sup.Status().ReadySince; !again.Equal(first) {
+		t.Errorf("ReadySince moved without a new session: %s -> %s", first, again)
+	}
+
+	h.fc.Emit(gc.Disconnected{})
+	st := h.until("not ready", time.Millisecond, time.Second, func(s Status) bool { return !s.Ready })
+	if !st.ReadySince.IsZero() {
+		t.Errorf("ReadySince while not ready = %s", st.ReadySince)
+	}
+	second := h.untilState(StateGCReady, 10*time.Minute).ReadySince
+	if !second.After(first) {
+		t.Errorf("ReadySince after reconnect = %s, want after %s", second, first)
+	}
+}
+
+func TestSupervisorDo(t *testing.T) {
+	b := headlessBot()
+	b.Credentials.RefreshToken = config.Secret(jwt(t, "1", newFakeClock().Now().Add(180*24*time.Hour)))
+	h := newHarness(t, b, func(h *harness) {
+		h.fc.ScriptEvery("Connect", logonOK()...)
+		welcomeOnHello(h)
+	})
+	ctx := context.Background()
+	call := func(context.Context, gc.Client) error { return nil }
+	if err := h.sup.Do(ctx, "op", call); !errors.Is(err, ErrNotReady) {
+		t.Errorf("Do before ready = %v, want ErrNotReady", err)
+	}
+	h.start()
+	h.untilState(StateGCReady, time.Minute)
+	ran := false
+	if err := h.sup.Do(ctx, "op", func(_ context.Context, c gc.Client) error {
+		ran = c == gc.Client(h.fc)
+		return nil
+	}); err != nil || !ran {
+		t.Errorf("Do when ready = %v, ran on the bot's client %t", err, ran)
+	}
+}

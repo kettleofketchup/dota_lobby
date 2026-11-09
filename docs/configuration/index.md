@@ -87,7 +87,11 @@ fatal error. A secrets file that is still sops-encrypted is refused with
 | `steam.cooldown_elsewhere` | duration | `10m` | Pause after `LoggedInElsewhere` (6) or `LogonSessionReplaced` (34) |
 | `steam.totp_skew` | duration | `0s` | Steam's clock minus the host clock, added before computing Steam Guard codes. At most ±10m. Keep the host on NTP instead whenever you can |
 | `gc.hello_interval` | duration | `10s` | How often the game coordinator hello is repeated until the welcome |
-| `gc.request_timeout` | duration | `10s` | Default timeout of a game coordinator request |
+| `gc.request_timeout` | duration | `10s` | Default timeout of a game coordinator request. For a request an API call waits on, such as `/v1/leagues/{id}/nodes`, it includes the time queued behind the bot's other requests and is capped at `12s` so the answer arrives before the 15 s write timeout |
+| `league.sources` | list | `[gc, config]` | Where a bot's leagues come from: `gc` asks the game coordinator which leagues the account administers, `config` uses `bots[].leagues`. `web` is accepted but not used yet |
+| `league.refresh_interval` | duration | `30m` | How often each ready bot's league list is fetched again. It is also fetched every time the bot reaches `gc_ready` |
+| `league.allow_unverified` | bool | `false` | Keep using a bot's configured leagues after the game coordinator list is known, even those the game coordinator does not list. Leave it off unless the game coordinator list is wrong |
+| `store.path` | path | empty | The SQLite database. Empty means `<state_dir>/dota_lobby.db`. Created mode `0600`; keep it on the persistent state volume |
 | `bots` | list | empty | The bots, see below |
 
 ### `bots[]`
@@ -98,7 +102,7 @@ fatal error. A secrets file that is still sops-encrypted is refused with
 | `username` | string | `STEAM_USER` from the credentials file, then `name` | The Steam account name. It names the token store directory |
 | `enabled` | bool | `true` | A disabled bot is not started |
 | `credentials_file` | path | `<credentials_dir>/<name>.yaml` | This bot's credentials file, if it is not in `credentials_dir` |
-| `leagues` | list of int | empty | Static league fallback; used from Phase 2 |
+| `leagues` | list of int | empty | Leagues this bot may host, used until the game coordinator list has been fetched once (unverified). See [`GET /v1/leagues`](../api/index.md#get-v1leagues) |
 | `tags` | list of string | empty | Free-form labels |
 
 With no `bots:` list, every file in `credentials_dir` becomes an enabled bot named after the
@@ -107,8 +111,8 @@ file. Two bots may not use the same Steam account.
 ### Accepted, not used yet
 
 These keys are validated so a config written now keeps working, but nothing reads them in this
-version: `metrics.addr` (no metrics listener yet), `gc.create_timeout`, `league.*`, `lobby.*`,
-`match.*`, `store.path` and `webhooks`. Their defaults are in
+version: `metrics.addr` (no metrics listener yet), `gc.create_timeout`,
+`league.webapi_enrichment`, `lobby.*`, `match.*` and `webhooks`. Their defaults are in
 [`config.yaml.example`](https://github.com/kettleofketchup/dota_lobby/blob/main/config.yaml.example).
 
 ## Secrets
