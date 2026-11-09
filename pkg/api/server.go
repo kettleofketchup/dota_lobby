@@ -51,8 +51,19 @@ type Bots interface {
 type Leagues interface {
 	// All lists every held league with its holders.
 	All() []league.League
+	// League returns one league, or false when no bot holds it.
+	League(id uint32) (league.League, bool)
 	// BotLeagues lists the leagues one bot holds, sorted.
 	BotLeagues(bot string) []uint32
+	// Inventory returns one bot's leagues, refresh status and recent
+	// changes, or false for no such bot.
+	Inventory(bot string) (league.Inventory, bool)
+	// Refresh fetches one bot's GC league list now. It fails with
+	// bot.ErrUnknownBot, bot.ErrNotReady or league.ErrGCSourceDisabled
+	// without asking the GC.
+	Refresh(ctx context.Context, bot string) error
+	// RefreshAll refreshes every ready bot and reports each bot's outcome.
+	RefreshAll(ctx context.Context) ([]league.RefreshResult, error)
 	// Nodes fetches a league's lobby nodes through a ready holder. It fails
 	// with league.ErrUnknownLeague or league.ErrNoReadyHolder.
 	Nodes(ctx context.Context, leagueID uint32) (string, []gc.LeagueNode, error)
@@ -299,12 +310,56 @@ func (r *router) addMethodFallbacks() {
 			w.Header().Set("Allow", allow)
 			writeProblem(w, http.StatusMethodNotAllowed, "method_not_allowed", "allowed: "+allow)
 		}
+		var fallback http.Handler = h
 		if r.protected[path] {
-			r.mux.Handle(path, r.auth(h))
+			fallback = r.auth(h)
+		}
+		if !r.overlapsAnother(path) {
+			r.mux.Handle(path, fallback)
 			continue
 		}
-		r.mux.Handle(path, h)
+		// A path-only pattern would conflict with a method pattern on an
+		// overlapping path (POST /v1/leagues/refresh and GET
+		// /v1/leagues/{id}): the mux cannot rank them. Name each other
+		// standard method instead; nonstandard ones get the 404.
+		for _, m := range standardMethods {
+			if !slices.Contains(methods, m) {
+				r.mux.Handle(m+" "+path, fallback)
+			}
+		}
 	}
+}
+
+var standardMethods = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+	http.MethodDelete, http.MethodOptions, http.MethodConnect, http.MethodTrace,
+}
+
+// overlapsAnother reports whether some other learned path matches a
+// request path that path matches too, e.g. /v1/leagues/{id} and
+// /v1/leagues/refresh.
+func (r *router) overlapsAnother(path string) bool {
+	segs := strings.Split(path, "/")
+	for _, other := range r.order {
+		if other == path {
+			continue
+		}
+		oseg := strings.Split(other, "/")
+		if len(oseg) != len(segs) {
+			continue
+		}
+		overlap := true
+		for i := range segs {
+			if segs[i] != oseg[i] && !strings.HasPrefix(segs[i], "{") && !strings.HasPrefix(oseg[i], "{") {
+				overlap = false
+				break
+			}
+		}
+		if overlap {
+			return true
+		}
+	}
+	return false
 }
 
 // wrap applies what every response shares: the body limit and no caching.
@@ -401,8 +456,14 @@ func (noBots) Retry(context.Context, string) error {
 // noLeagues stands in when no registry is wired.
 type noLeagues struct{}
 
-func (noLeagues) All() []league.League       { return nil }
-func (noLeagues) BotLeagues(string) []uint32 { return nil }
+func (noLeagues) All() []league.League                      { return nil }
+func (noLeagues) League(uint32) (league.League, bool)       { return league.League{}, false }
+func (noLeagues) BotLeagues(string) []uint32                { return nil }
+func (noLeagues) Inventory(string) (league.Inventory, bool) { return league.Inventory{}, false }
+func (noLeagues) Refresh(_ context.Context, name string) error {
+	return fmt.Errorf("refresh leagues: %w: %q", bot.ErrUnknownBot, name)
+}
+func (noLeagues) RefreshAll(context.Context) ([]league.RefreshResult, error) { return nil, nil }
 func (noLeagues) Nodes(_ context.Context, id uint32) (string, []gc.LeagueNode, error) {
 	return "", nil, fmt.Errorf("league %d: %w", id, league.ErrUnknownLeague)
 }

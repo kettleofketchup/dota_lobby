@@ -200,10 +200,10 @@ func TestHoldersAndAll(t *testing.T) {
 	all := r.All()
 	wantAll := []League{
 		{LeagueID: 100, Name: "Spring Cup", Bots: []LeagueBot{
-			{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0},
+			{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0, FirstSeenAt: t0},
 			{Name: "bot2", Source: SourceConfig},
 		}},
-		{LeagueID: 200, Bots: []LeagueBot{{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0}}},
+		{LeagueID: 200, Bots: []LeagueBot{{Name: "bot1", Source: SourceGC, Verified: true, RefreshedAt: t0, FirstSeenAt: t0}}},
 		{LeagueID: 300, Bots: []LeagueBot{{Name: "bot2", Source: SourceConfig}}},
 	}
 	if !reflect.DeepEqual(all, wantAll) {
@@ -221,6 +221,7 @@ func TestRefreshErrorKeepsPreviousList(t *testing.T) {
 	if err := r.Refresh(ctx, "bot1"); err != nil {
 		t.Fatal(err)
 	}
+	e.clk.Advance(time.Minute) // past the minimum refresh interval
 	e.fcs["bot1"].FailNext("ListAdminLeagues", errors.New("gc timeout"))
 	if err := r.Refresh(ctx, "bot1"); err == nil {
 		t.Fatal("failed refresh returned nil")
@@ -294,6 +295,7 @@ func TestPersistedListsReload(t *testing.T) {
 	}
 
 	// A refresh error is stored too, and the list kept.
+	e2.clk.Advance(time.Minute)
 	e2.fcs["bot1"].FailNext("ListAdminLeagues", errors.New("boom"))
 	_ = r2.Refresh(ctx, "bot1")
 	sets, _ = st.Leagues().BotLeagues(ctx)

@@ -1,5 +1,78 @@
 components:
   schemas:
+    BotLeagueView:
+      additionalProperties: false
+      properties:
+        first_seen_at:
+          description: When the league first appeared in the bot's GC list; null for the config source
+          format: date-time
+          type:
+            - string
+            - "null"
+        league_id:
+          format: int32
+          minimum: 0
+          type: integer
+        name:
+          description: The league's name from the game coordinator, or null when unknown
+          type:
+            - string
+            - "null"
+        refreshed_at:
+          description: When the bot's GC list was last fetched; null for the config source
+          format: date-time
+          type:
+            - string
+            - "null"
+        source:
+          description: "gc: the game coordinator's admin league list; config: the bot's configured leagues, unverified"
+          enum:
+            - gc
+            - config
+          type: string
+        stale:
+          description: True when the GC list comes from the database and has not been fetched since the service started
+          type: boolean
+        verified:
+          description: True when the game coordinator's list names the league
+          type: boolean
+      required:
+        - league_id
+        - name
+        - source
+        - verified
+        - first_seen_at
+        - refreshed_at
+        - stale
+      type: object
+    BotLeagues:
+      additionalProperties: false
+      properties:
+        bot:
+          type: string
+        changes:
+          description: The most recent league changes, newest first
+          items:
+            $ref: "#/components/schemas/LeagueChangeView"
+          type:
+            - array
+            - "null"
+        leagues:
+          description: The leagues the bot may host, by league ID
+          items:
+            $ref: "#/components/schemas/BotLeagueView"
+          type:
+            - array
+            - "null"
+        refresh:
+          $ref: "#/components/schemas/LeagueRefreshStatus"
+          description: The outcome of the bot's last league list refresh
+      required:
+        - bot
+        - leagues
+        - refresh
+        - changes
+      type: object
     BotList:
       additionalProperties: false
       properties:
@@ -330,6 +403,76 @@ components:
         - refreshed_at
         - stale
       type: object
+    LeagueChangeView:
+      additionalProperties: false
+      properties:
+        at:
+          description: The refresh that saw the change
+          format: date-time
+          type: string
+        change:
+          description: "added: the league appeared in the bot's GC list; removed: it disappeared"
+          enum:
+            - added
+            - removed
+          type: string
+        league_id:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - league_id
+        - change
+        - at
+      type: object
+    LeagueHolderView:
+      additionalProperties: false
+      properties:
+        bot:
+          description: The bot's name from the config
+          type: string
+        bot_state:
+          description: The bot's connection state, as in GET /v1/bots
+          type: string
+        first_seen_at:
+          description: When the league first appeared in the bot's GC list; null for the config source
+          format: date-time
+          type:
+            - string
+            - "null"
+        lobby_id:
+          description: The lobby the bot is hosting, or null when it is not leased
+          type:
+            - string
+            - "null"
+        ready:
+          description: True when the bot is gc_ready
+          type: boolean
+        refreshed_at:
+          description: When the bot's GC list was last fetched; null for the config source
+          format: date-time
+          type:
+            - string
+            - "null"
+        source:
+          description: "gc: the game coordinator's admin league list; config: the bot's configured leagues, unverified"
+          enum:
+            - gc
+            - config
+          type: string
+        verified:
+          description: True when the game coordinator's list names the league
+          type: boolean
+      required:
+        - bot
+        - source
+        - verified
+        - first_seen_at
+        - refreshed_at
+        - bot_state
+        - ready
+        - lobby_id
+      type: object
     LeagueList:
       additionalProperties: false
       properties:
@@ -398,15 +541,56 @@ components:
         - bot
         - nodes
       type: object
+    LeagueRefreshStatus:
+      additionalProperties: false
+      properties:
+        error:
+          description: Why the last fetch failed, or null when none failed since ok_at
+          type:
+            - string
+            - "null"
+        error_at:
+          description: When that fetch failed
+          format: date-time
+          type:
+            - string
+            - "null"
+        ok_at:
+          description: The last successful fetch of the bot's GC league list, or null if none
+          format: date-time
+          type:
+            - string
+            - "null"
+      required:
+        - ok_at
+        - error
+        - error_at
+      type: object
     LeagueView:
       additionalProperties: false
       properties:
         bots:
+          description: The holders in the original shape; prefer holders
           items:
             $ref: "#/components/schemas/LeagueBotView"
           type:
             - array
             - "null"
+        holders:
+          description: Every enabled bot that may host the league, in config order
+          items:
+            $ref: "#/components/schemas/LeagueHolderView"
+          type:
+            - array
+            - "null"
+        holders_free:
+          description: "How many holders could take a new lobby now: gc_ready, lobby cache current and not hosting a lobby"
+          format: int64
+          type: integer
+        holders_total:
+          description: How many bots hold the league
+          format: int64
+          type: integer
         league_id:
           format: int32
           minimum: 0
@@ -419,6 +603,9 @@ components:
         - league_id
         - name
         - bots
+        - holders
+        - holders_total
+        - holders_free
       type: object
     LobbyCreateFailedData:
       additionalProperties: false
@@ -2137,6 +2324,51 @@ components:
         - code
         - retryable
       type: object
+    RefreshResultView:
+      additionalProperties: false
+      properties:
+        bot:
+          type: string
+        error:
+          description: Why the refresh failed; null unless status is failed
+          type:
+            - string
+            - "null"
+        leagues:
+          description: The leagues the bot holds after the refresh
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        status:
+          description: "ok: the list was fetched, or was fetched successfully moments ago and kept; failed: the list was not fetched (the request failed, or time ran out before the bot was asked) and the previous list stays; not_ready: the bot was not gc_ready and was not asked"
+          enum:
+            - ok
+            - failed
+            - not_ready
+          type: string
+      required:
+        - bot
+        - status
+        - error
+        - leagues
+      type: object
+    RefreshResults:
+      additionalProperties: false
+      properties:
+        results:
+          description: Every enabled bot, in config order
+          items:
+            $ref: "#/components/schemas/RefreshResultView"
+          type:
+            - array
+            - "null"
+      required:
+        - results
+      type: object
     RetryAccepted:
       additionalProperties: false
       properties:
@@ -2357,6 +2589,126 @@ paths:
       summary: Get a bot
       tags:
         - Bots
+  /v1/bots/{name}/leagues:
+    get:
+      description: The leagues the bot may host, where each came from and when it first appeared, the outcome of the bot's last league list refresh, and its recent league changes.
+      operationId: get-bot-leagues
+      parameters:
+        - description: The bot's name from the config, matched case-insensitively
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The bot's name from the config, matched case-insensitively
+            examples:
+              - league_bot_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotLeagues"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Get a bot's leagues
+      tags:
+        - Leagues
+  /v1/bots/{name}/leagues/refresh:
+    post:
+      description: Fetches the bot's admin league list from the game coordinator now, through its GC worker and bounded by gc.request_timeout, and answers the updated leagues as GET /v1/bots/{name}/leagues does. Use it after an organisation admin added the bot to a league, instead of waiting for league.refresh_interval. A list fetched successfully less than 15 seconds ago is answered without asking the game coordinator again. 503 when the bot is not gc_ready or the request failed (the previous list stays), 504 when the game coordinator did not answer in time, 409 when league.sources does not include gc.
+      operationId: refresh-bot-leagues
+      parameters:
+        - description: The bot's name from the config, matched case-insensitively
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The bot's name from the config, matched case-insensitively
+            examples:
+              - league_bot_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotLeagues"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Gateway Timeout
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Refresh a bot's leagues now
+      tags:
+        - Leagues
   /v1/bots/{name}/retry:
     post:
       description: The way out of needs_attention, e.g. after `dota_lobby auth --bot <name> --force` stored a new token or a password was fixed; also cuts a backoff or cooldown short. A no-op for a bot that is not waiting. 503 when the bot's run loop is too backed up to take the request.
@@ -2416,7 +2768,7 @@ paths:
         - Bots
   /v1/leagues:
     get:
-      description: Every league a bot may host, and which bots hold it.
+      description: Every league a bot may host, which bots hold it, and how many of them could take a lobby now. A bot holds a league when the game coordinator's admin league list names it (an organisation admin added the bot's account to the league), or, until that list is first fetched or with league.allow_unverified, when the bot's configured leagues name it.
       operationId: list-leagues
       responses:
         "200":
@@ -2441,6 +2793,94 @@ paths:
         - apiKey: []
         - bearer: []
       summary: List the leagues
+      tags:
+        - Leagues
+  /v1/leagues/refresh:
+    post:
+      description: Fetches the game coordinator's admin league list of every gc_ready bot now, a few bots at a time, bounded as a whole by gc.request_timeout, and reports each enabled bot's outcome. A bot whose list was fetched successfully less than 15 seconds ago is not asked again and keeps that list. A failed bot keeps its previous list. 409 invalid_state when league.sources does not include gc.
+      operationId: refresh-leagues
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResults"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Refresh every ready bot's leagues
+      tags:
+        - Leagues
+  /v1/leagues/{id}:
+    get:
+      description: One league in the shape GET /v1/leagues lists. 404 when no enabled bot holds it.
+      operationId: get-league
+      parameters:
+        - description: The league ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The league ID
+            examples:
+              - 17929
+            format: int32
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeagueView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Get a league
       tags:
         - Leagues
   /v1/leagues/{id}/nodes:

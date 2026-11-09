@@ -220,6 +220,39 @@ Renewed tokens are written only to the token store, never back to the sops file,
 | password only | Logs in once a token exists. When the token dies it goes to `needs_attention`; see [Recovering a bot](../operations/troubleshooting.md#recovering-a-bot-in-needs_attention) |
 | refresh token only | Runs until the token dies (about 200 days), then needs an operator |
 
+## Adding a league ticket
+
+A bot can host lobbies for a league only when its Steam account administers that league, the
+"ticket". Tickets are granted by hand, per account, by an admin of the organisation that owns
+the league, so different bots usually hold different leagues:
+
+1. Read the bot's `steam_id` from `GET /v1/bots/<name>`.
+2. On [dota2.com/league](https://www.dota2.com/league), open the league and add that Steam ID
+   under **Admins**.
+3. Make the service fetch the bot's list now instead of at the next
+   `league.refresh_interval` (30 min):
+
+    ```bash
+    curl -fsS -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/<name>/leagues/refresh
+    ```
+
+    The answer lists the bot's leagues; the new one has `"source": "gc"`, `"verified": true`
+    and a `first_seen_at` of this refresh, and `changes` starts with an `added` entry for it.
+    `POST /v1/leagues/refresh` does the same for every ready bot at once. A bot that is not
+    `gc_ready` answers `503`; its list is fetched when it gets there.
+
+4. Check the league's holders with `GET /v1/leagues/<league_id>`: the bot is listed, and
+   `holders_free` counts it while it hosts no lobby.
+
+The next lobby for that league can go to the bot as soon as the refresh has answered. Taking a
+ticket away works the same way: after the refresh the league is gone from the bot's list, a
+`removed` change is recorded, and no new lobby for that league goes to the bot; a lobby it
+already hosts carries on. Every change is also logged at info as `bot league tickets changed`.
+
+`bots[].leagues` in `config.yaml` is not a ticket. It is an unverified fallback, used only until
+the bot's list has been fetched once (or always with `league.allow_unverified`); see
+[`GET /v1/leagues`](../api/index.md#get-v1leagues).
+
 ## One instance per account
 
 Steam allows one session per account. If the same account is logged in by two instances of

@@ -40,9 +40,10 @@ func specOps(t *testing.T, s *Server) []specOp {
 // Operation IDs are public API: client generators key on them.
 func TestOperationIDs(t *testing.T) {
 	want := []string{
-		"close-lobby", "create-lobby", "flip-lobby-teams", "get-bot", "get-lobby", "invite-lobby-players",
-		"kick-lobby-member", "launch-lobby", "list-bots", "list-league-nodes", "list-leagues", "list-lobbies",
-		"list-lobby-events", "retry-bot", "set-lobby-roster", "shuffle-lobby-teams", "update-lobby",
+		"close-lobby", "create-lobby", "flip-lobby-teams", "get-bot", "get-bot-leagues", "get-league", "get-lobby",
+		"invite-lobby-players", "kick-lobby-member", "launch-lobby", "list-bots", "list-league-nodes", "list-leagues",
+		"list-lobbies", "list-lobby-events", "refresh-bot-leagues", "refresh-leagues", "retry-bot", "set-lobby-roster",
+		"shuffle-lobby-teams", "update-lobby",
 	}
 	var got []string
 	for _, o := range specOps(t, New(Options{})) {
