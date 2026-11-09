@@ -1,19 +1,16 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
-	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
 	"github.com/kettleofketchup/dota_lobby/pkg/lobby"
 )
@@ -35,168 +32,84 @@ type Lobbies interface {
 	Events(ctx context.Context, id string, after int64, limit int) ([]lobby.Envelope, error)
 }
 
-// maxListLimit caps GET /v1/lobbies?limit=.
-const maxListLimit = 200
-
 // --- requests ---
 
-// nameOrNumber is a game mode or region: a configured name or a wire
-// number, given as a JSON string or number.
-type nameOrNumber string
-
-func (n *nameOrNumber) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		*n = nameOrNumber(s)
-		return nil
-	}
-	var v uint32
-	if err := json.Unmarshal(b, &v); err != nil {
-		return errors.New("must be a name or a non-negative 32-bit number")
-	}
-	*n = nameOrNumber(strconv.FormatUint(uint64(v), 10))
-	return nil
-}
-
 type playerReq struct {
-	AccountID *uint32 `json:"account_id"`
-	SteamID   *string `json:"steam_id"`
-	Captain   bool    `json:"captain"`
+	AccountID *uint32 `json:"account_id,omitempty" doc:"The 32-bit account ID; give this or steam_id" example:"11111111"`
+	SteamID   *string `json:"steam_id,omitempty" doc:"An individual account's SteamID64 as a string; give this or account_id" example:"76561197971376839"`
+	Captain   bool    `json:"captain,omitempty"`
 }
 
 type teamReq struct {
-	TeamRef string      `json:"team_ref"`
-	Name    string      `json:"name"`
-	Players []playerReq `json:"players"`
+	TeamRef string      `json:"team_ref,omitempty" doc:"Your reference for the team"`
+	Name    string      `json:"name,omitempty"`
+	Players []playerReq `json:"players,omitempty" doc:"Up to 5 players; empty for an open lobby"`
 }
 
 type teamsReq struct {
-	Radiant teamReq `json:"radiant"`
-	Dire    teamReq `json:"dire"`
+	Radiant teamReq `json:"radiant,omitempty"`
+	Dire    teamReq `json:"dire,omitempty"`
 }
 
-type createReq struct {
-	ExternalRef      string            `json:"external_ref"`
-	Name             string            `json:"name"`
-	Password         string            `json:"password"`
-	LeagueID         uint32            `json:"league_id"`
-	LeagueNodeID     uint32            `json:"league_node_id"`
-	GameMode         nameOrNumber      `json:"game_mode"`
-	Region           nameOrNumber      `json:"region"`
-	TVDelaySeconds   uint32            `json:"tv_delay_seconds"`
-	AllowCheats      bool              `json:"allow_cheats"`
-	Visibility       string            `json:"visibility"`
-	Launch           string            `json:"launch"`
-	ReadyCheck       bool              `json:"ready_check"`
-	AllowShortHanded bool              `json:"allow_short_handed"`
-	KickStrangers    bool              `json:"kick_strangers"`
-	Admins           []uint32          `json:"admins"`
-	Teams            *teamsReq         `json:"teams"`
-	Metadata         map[string]string `json:"metadata"`
+type createLobbyRequest struct {
+	ExternalRef      string            `json:"external_ref" doc:"Your key for the lobby, 1-128 letters, digits, '.', '_', ':' or '-'; unique among lobbies that have not ended" example:"game-42"`
+	Name             string            `json:"name" doc:"The lobby name, 1-64 characters" example:"Spring Cup R2 Ravens vs Owls"`
+	Password         string            `json:"password,omitempty" doc:"Up to 32 characters; empty means none"`
+	LeagueID         uint32            `json:"league_id,omitempty" doc:"A league one of the bots administers; 0 for none"`
+	LeagueNodeID     uint32            `json:"league_node_id,omitempty"`
+	GameMode         nameOrNumber      `json:"game_mode,omitempty"`
+	Region           nameOrNumber      `json:"region,omitempty"`
+	TVDelaySeconds   uint32            `json:"tv_delay_seconds,omitempty" doc:"10, 60, 120, 300 or 900"`
+	AllowCheats      bool              `json:"allow_cheats,omitempty"`
+	Visibility       string            `json:"visibility,omitempty" doc:"public (default), friends or unlisted"`
+	Launch           string            `json:"launch,omitempty" doc:"manual (default) or auto"`
+	ReadyCheck       bool              `json:"ready_check,omitempty"`
+	AllowShortHanded bool              `json:"allow_short_handed,omitempty"`
+	KickStrangers    bool              `json:"kick_strangers,omitempty"`
+	Admins           []uint32          `json:"admins,omitempty" doc:"Account IDs allowed admin commands in this lobby's chat"`
+	Teams            teamsReq          `json:"teams"`
+	Metadata         map[string]string `json:"metadata,omitempty" doc:"Up to 16 string pairs, returned in every response"`
 }
 
-type patchReq struct {
-	Name             *string            `json:"name"`
-	Password         *string            `json:"password"`
-	GameMode         *nameOrNumber      `json:"game_mode"`
-	Region           *nameOrNumber      `json:"region"`
-	TVDelaySeconds   *uint32            `json:"tv_delay_seconds"`
-	Visibility       *string            `json:"visibility"`
-	AllowCheats      *bool              `json:"allow_cheats"`
-	Launch           *string            `json:"launch"`
-	ReadyCheck       *bool              `json:"ready_check"`
-	AllowShortHanded *bool              `json:"allow_short_handed"`
-	KickStrangers    *bool              `json:"kick_strangers"`
-	Admins           *[]uint32          `json:"admins"`
-	Metadata         *map[string]string `json:"metadata"`
+type updateLobbyRequest struct {
+	Name             *string            `json:"name,omitempty"`
+	Password         *string            `json:"password,omitempty" doc:"Empty removes the password"`
+	GameMode         *nameOrNumber      `json:"game_mode,omitempty"`
+	Region           *nameOrNumber      `json:"region,omitempty"`
+	TVDelaySeconds   *uint32            `json:"tv_delay_seconds,omitempty"`
+	Visibility       *string            `json:"visibility,omitempty"`
+	AllowCheats      *bool              `json:"allow_cheats,omitempty"`
+	Launch           *string            `json:"launch,omitempty"`
+	ReadyCheck       *bool              `json:"ready_check,omitempty"`
+	AllowShortHanded *bool              `json:"allow_short_handed,omitempty"`
+	KickStrangers    *bool              `json:"kick_strangers,omitempty"`
+	Admins           *[]uint32          `json:"admins,omitempty"`
+	Metadata         *map[string]string `json:"metadata,omitempty"`
 }
 
-type inviteReq struct {
-	Players []uint32 `json:"players"`
-	Missing bool     `json:"missing"`
+type inviteRequest struct {
+	Players []uint32 `json:"players,omitempty" doc:"Rostered players to invite again; give this or missing"`
+	Missing bool     `json:"missing,omitempty" doc:"Invite every rostered player not in the lobby"`
 }
 
-type kickReq struct {
-	AccountID uint32 `json:"account_id"`
-	From      string `json:"from"`
+type kickRequest struct {
+	AccountID uint32 `json:"account_id" minimum:"1" example:"99999999"`
+	From      string `json:"from,omitempty" enum:"team,lobby" doc:"team (default): back to the unassigned pool; lobby: out of the lobby"`
 }
 
-type rosterReq struct {
-	Teams *teamsReq `json:"teams"`
+type rosterRequest struct {
+	Teams teamsReq `json:"teams"`
 }
 
-type launchReq struct {
-	Force bool `json:"force"`
-}
-
-// requestError is a 4xx found while reading a request.
-type requestError struct {
-	status int
-	code   string
-	msg    string
-}
-
-func (e *requestError) Error() string { return e.msg }
-
-func badRequest(format string, args ...any) error {
-	return &requestError{http.StatusBadRequest, "invalid_request", fmt.Sprintf(format, args...)}
-}
-
-// decodeBody reads a JSON body into v: application/json only, no unknown
-// fields, one value. With optional, an empty body leaves v as it is.
-func decodeBody(r *http.Request, v any, optional bool) error {
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			return &requestError{http.StatusRequestEntityTooLarge, "payload_too_large", fmt.Sprintf("the body is larger than %d bytes", tooBig.Limit)}
-		}
-		return badRequest("could not read the body")
-	}
-	if optional && len(bytes.TrimSpace(raw)) == 0 {
-		return nil
-	}
-	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mt != "application/json" {
-		return &requestError{http.StatusUnsupportedMediaType, "unsupported_media_type", "send the body as Content-Type: application/json"}
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return badRequest("invalid JSON: %s", jsonProblem(err))
-	}
-	if dec.More() {
-		return badRequest("invalid JSON: more than one value")
-	}
-	return nil
-}
-
-// jsonProblem describes a decode error without echoing the body.
-func jsonProblem(err error) string {
-	var typeErr *json.UnmarshalTypeError
-	var syntaxErr *json.SyntaxError
-	switch {
-	case errors.As(err, &typeErr):
-		return fmt.Sprintf("%s has the wrong type (want %s)", typeErr.Field, typeErr.Type)
-	case errors.As(err, &syntaxErr):
-		return fmt.Sprintf("syntax error at byte %d", syntaxErr.Offset)
-	case strings.HasPrefix(err.Error(), "json: unknown field "):
-		return "unknown field " + strings.TrimPrefix(err.Error(), "json: unknown field ")
-	case errors.Is(err, io.EOF):
-		return "empty body"
-	}
-	// Errors from nameOrNumber come without a field name.
-	msg := err.Error()
-	if i := strings.LastIndex(msg, ": "); i >= 0 && strings.HasPrefix(msg, "json: ") {
-		msg = msg[i+2:]
-	}
-	return msg
+type launchRequest struct {
+	Force bool `json:"force,omitempty" doc:"Launch from waiting, past the roster check and the attempt limit; never past the host seat check"`
 }
 
 // individualSteamID reports whether a SteamID64 is an individual account
 // in the public universe, the only kind a player can be.
 func individualSteamID(id uint64) bool { return id>>32 == gc.SteamID64(0)>>32 }
 
+// roster converts the request's teams; a bad player is a 422 naming it.
 func (t teamsReq) roster() (lobby.Roster, error) {
 	var r lobby.Roster
 	for _, side := range []lobby.Side{lobby.Radiant, lobby.Dire} {
@@ -207,24 +120,24 @@ func (t teamsReq) roster() (lobby.Roster, error) {
 		out := r.Team(side)
 		out.TeamRef, out.Name = in.TeamRef, in.Name
 		for i, p := range in.Players {
-			field := fmt.Sprintf("teams.%s.players[%d]", side, i)
+			field := fmt.Sprintf("body.teams.%s.players[%d]", side, i)
 			var account uint32
 			switch {
 			case p.AccountID != nil && p.SteamID != nil:
-				return r, badRequest("%s: give account_id or steam_id, not both", field)
+				return r, invalid(field, "give account_id or steam_id, not both")
 			case p.AccountID != nil:
 				account = *p.AccountID
 			case p.SteamID != nil:
 				id, err := strconv.ParseUint(*p.SteamID, 10, 64)
 				if err != nil || !individualSteamID(id) {
-					return r, badRequest("%s.steam_id must be an individual account's SteamID64 as a string", field)
+					return r, invalid(field+".steam_id", "must be an individual account's SteamID64 as a string")
 				}
 				account = gc.AccountID(id)
 			default:
-				return r, badRequest("%s: account_id or steam_id is required", field)
+				return r, invalid(field, "account_id or steam_id is required")
 			}
 			if account == 0 {
-				return r, badRequest("%s: account 0 is not a player", field)
+				return r, invalid(field, "account 0 is not a player")
 			}
 			out.Players = append(out.Players, lobby.Player{AccountID: account, Captain: p.Captain})
 		}
@@ -232,10 +145,7 @@ func (t teamsReq) roster() (lobby.Roster, error) {
 	return r, nil
 }
 
-func (c createReq) spec() (lobby.Spec, error) {
-	if c.Teams == nil {
-		return lobby.Spec{}, badRequest("teams is required (players may be empty for an open lobby)")
-	}
+func (c createLobbyRequest) spec() (lobby.Spec, error) {
 	roster, err := c.Teams.roster()
 	if err != nil {
 		return lobby.Spec{}, err
@@ -249,7 +159,7 @@ func (c createReq) spec() (lobby.Spec, error) {
 	}, nil
 }
 
-func (p patchReq) patch() lobby.Patch {
+func (p updateLobbyRequest) patch() lobby.Patch {
 	out := lobby.Patch{
 		Name: p.Name, TVDelaySeconds: p.TVDelaySeconds, Visibility: p.Visibility, AllowCheats: p.AllowCheats,
 		Launch: p.Launch, ReadyCheck: p.ReadyCheck, AllowShortHanded: p.AllowShortHanded,
@@ -270,503 +180,358 @@ func (p patchReq) patch() lobby.Patch {
 	return out
 }
 
-// --- responses ---
+// --- inputs and outputs ---
 
-type hostSeatView struct {
-	Strategy  *string `json:"strategy"`
-	Confirmed bool    `json:"confirmed"`
-	Team      *string `json:"team"`
+type lobbyIDInput struct {
+	ID string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
 }
 
-type playerView struct {
-	AccountID       uint32     `json:"account_id"`
-	SteamID         string     `json:"steam_id"`
-	Captain         bool       `json:"captain"`
-	Status          string     `json:"status"`
-	Seat            *string    `json:"seat"`
-	Ready           bool       `json:"ready"`
-	InvitesSent     int        `json:"invites_sent"`
-	LastInviteAt    *time.Time `json:"last_invite_at"`
-	InviteConfirmed bool       `json:"invite_confirmed"`
+type createLobbyInput struct {
+	Body createLobbyRequest
 }
 
-type teamView struct {
-	TeamRef *string      `json:"team_ref"`
-	Name    *string      `json:"name"`
-	Players []playerView `json:"players"`
+type createLobbyOutput struct {
+	Status   int
+	Location string `header:"Location" doc:"The lobby's URL"`
+	Body     LobbyWithPassword
 }
 
-type memberView struct {
+type listLobbiesInput struct {
+	State       []string `query:"state" enum:"pending,creating,waiting,ready,launching,in_game,post_game,finished,failed,closing,closed,timed_out" doc:"Only lobbies in these states, comma-separated"`
+	ExternalRef string   `query:"external_ref" doc:"Only lobbies with this external_ref, ended ones included"`
+	Active      bool     `query:"active" doc:"Only lobbies that have not ended"`
+	Limit       int      `query:"limit" minimum:"1" maximum:"200" doc:"Page size, default 50"`
+	Cursor      string   `query:"cursor" doc:"The next_cursor of the previous page"`
+}
+
+type lobbyList struct {
+	Lobbies    []LobbyView `json:"lobbies" doc:"Newest first"`
+	NextCursor *string     `json:"next_cursor" nullable:"true" doc:"Pass as cursor for the next page; null on the last page"`
+}
+
+type lobbyListOutput struct{ Body lobbyList }
+
+type lobbyOutput struct{ Body LobbyView }
+
+type lobbyWithPasswordOutput struct{ Body LobbyWithPassword }
+
+type lobbyStatusOutput struct {
+	Status int
+	Body   LobbyView
+}
+
+type updateLobbyInput struct {
+	ID   string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	Body updateLobbyRequest
+}
+
+type inviteInput struct {
+	ID   string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	Body inviteRequest
+}
+
+type inviteSkip struct {
 	AccountID uint32 `json:"account_id"`
-	Seat      string `json:"seat"`
+	Reason    string `json:"reason" doc:"in_lobby, pending_cooldown, cap or not_rostered"`
 }
 
-type matchView struct {
-	MatchID         *string    `json:"match_id"`
-	Outcome         *int32     `json:"outcome"`
-	OutcomeName     *string    `json:"outcome_name"`
-	WinnerSide      *string    `json:"winner_side"`
-	WinnerTeamRef   *string    `json:"winner_team_ref"`
-	Scored          *bool      `json:"scored"`
-	DurationSeconds *uint32    `json:"duration_seconds"`
-	StartedAt       *time.Time `json:"started_at"`
-	EndedAt         *time.Time `json:"ended_at"`
+type inviteResult struct {
+	Invited []uint32     `json:"invited"`
+	Skipped []inviteSkip `json:"skipped"`
 }
 
-type lobbyView struct {
-	ID             string          `json:"id"`
-	ExternalRef    string          `json:"external_ref"`
-	State          lobby.State     `json:"state"`
-	StateReason    *string         `json:"state_reason"`
-	Seq            int64           `json:"seq"`
-	Bot            *string         `json:"bot"`
-	GCLobbyID      *string         `json:"gc_lobby_id"`
-	LeagueID       *uint32         `json:"league_id"`
-	LeagueNodeID   *uint32         `json:"league_node_id"`
-	LeagueVerified *bool           `json:"league_verified"`
-	Name           string          `json:"name"`
-	Password       json.RawMessage `json:"password,omitempty"`
-	GameMode       json.RawMessage `json:"game_mode"`
-	Region         json.RawMessage `json:"region"`
-	TVDelaySeconds *uint32         `json:"tv_delay_seconds"`
-	Visibility     string          `json:"visibility"`
-	AllowCheats    bool            `json:"allow_cheats"`
-	Launch         string          `json:"launch"`
-	ReadyCheck     bool            `json:"ready_check"`
-	ShortHanded    bool            `json:"allow_short_handed"`
-	KickStrangers  bool            `json:"kick_strangers"`
-	Admins         []uint32        `json:"admins"`
-	HostSeat       hostSeatView    `json:"host_seat"`
-	Teams          struct {
-		Radiant teamView `json:"radiant"`
-		Dire    teamView `json:"dire"`
-	} `json:"teams"`
-	Strangers      []memberView      `json:"strangers"`
-	PendingInvites []string          `json:"pending_invites"`
-	Match          matchView         `json:"match"`
-	LaunchAttempts int               `json:"launch_attempts"`
-	Metadata       map[string]string `json:"metadata"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-	ExpiresAt      *time.Time        `json:"expires_at"`
-	EndedAt        *time.Time        `json:"ended_at"`
+type inviteOutput struct{ Body inviteResult }
+
+type kickInput struct {
+	ID   string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	Body kickRequest
 }
 
-func timePtr(t time.Time) *time.Time {
-	if t.IsZero() {
-		return nil
-	}
-	u := t.UTC()
-	return &u
+type rosterInput struct {
+	ID   string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	Body rosterRequest
 }
 
-func idString(v uint64) *string {
-	if v == 0 {
-		return nil
-	}
-	s := strconv.FormatUint(v, 10)
-	return &s
+type launchInput struct {
+	ID   string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	Body *launchRequest
 }
 
-// nameJSON shows a game mode or region as given: a number stays a number.
-func nameJSON(s string) json.RawMessage {
-	if s == "" {
-		return json.RawMessage("null")
-	}
-	if _, err := strconv.ParseUint(s, 10, 32); err == nil {
-		return json.RawMessage(s)
-	}
-	b, _ := json.Marshal(s)
-	return b
+type eventsInput struct {
+	ID    string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	After int64  `query:"after" minimum:"0" doc:"Only events with a higher seq"`
+	Limit int    `query:"limit" default:"100" minimum:"1" maximum:"500" doc:"Page size"`
 }
 
-// hostAccount is the account ID of the bot hosting l, or 0.
-func (s *Server) hostAccount(l lobby.Lobby) uint32 {
-	if l.Bot == "" {
-		return 0
-	}
-	for _, st := range s.opts.Bots.Statuses() {
-		if strings.EqualFold(st.Name, l.Bot) {
-			return gc.AccountID(st.SteamID)
-		}
-	}
-	return 0
+type eventList struct {
+	Events    []LobbyEvent `json:"events" doc:"Oldest first"`
+	NextAfter int64        `json:"next_after" doc:"The last seq returned, or after when there is nothing new"`
 }
 
-// lobbyView builds the API form of a lobby. withPassword is set only for
-// the create and GET responses; no other response carries the password.
-func (s *Server) lobbyView(l lobby.Lobby, withPassword bool) lobbyView {
-	sp := l.Spec
-	v := lobbyView{
-		ID: l.ID, ExternalRef: sp.ExternalRef, State: l.State, StateReason: nonEmpty(l.StateReason), Seq: l.Seq,
-		Bot: nonEmpty(l.Bot), GCLobbyID: idString(l.GCLobbyID), LeagueID: nonZero(sp.LeagueID),
-		LeagueNodeID: nonZero(sp.LeagueNodeID), LeagueVerified: l.LeagueVerified, Name: sp.Name,
-		GameMode: nameJSON(sp.GameMode), Region: nameJSON(sp.Region), TVDelaySeconds: nonZero(sp.TVDelaySeconds),
-		Visibility: sp.Visibility, AllowCheats: sp.AllowCheats, Launch: sp.Launch, ReadyCheck: sp.ReadyCheck,
-		ShortHanded: sp.AllowShortHanded, KickStrangers: sp.KickStrangers, Admins: sp.Admins,
-		HostSeat:       hostSeatView{Strategy: nonEmpty(l.HostSeat.Strategy), Confirmed: l.HostSeat.Confirmed, Team: nonEmpty(l.HostSeat.Team)},
-		Strangers:      []memberView{},
-		PendingInvites: []string{},
-		LaunchAttempts: l.LaunchAttempts, Metadata: sp.Metadata,
-		CreatedAt: l.CreatedAt.UTC(), UpdatedAt: l.UpdatedAt.UTC(), ExpiresAt: timePtr(l.ExpiresAt), EndedAt: timePtr(l.EndedAt),
-	}
-	if v.TVDelaySeconds == nil && l.Details.TVDelaySeconds != 0 {
-		v.TVDelaySeconds = nonZero(l.Details.TVDelaySeconds)
-	}
-	if v.Admins == nil {
-		v.Admins = []uint32{}
-	}
-	if v.Metadata == nil {
-		v.Metadata = map[string]string{}
-	}
-	if withPassword {
-		v.Password = json.RawMessage("null")
-		if sp.Password.IsSet() {
-			v.Password, _ = json.Marshal(sp.Password.Reveal())
-		}
-	}
-	for _, side := range []lobby.Side{lobby.Radiant, lobby.Dire} {
-		t := sp.Teams.Team(side)
-		tv := teamView{TeamRef: nonEmpty(t.TeamRef), Name: nonEmpty(t.Name), Players: []playerView{}}
-		for _, p := range t.Players {
-			status, seat := l.PlayerStatus(lobby.RosterEntry{Side: side, Player: p})
-			tv.Players = append(tv.Players, playerView{
-				AccountID: p.AccountID, SteamID: strconv.FormatUint(gc.SteamID64(p.AccountID), 10), Captain: p.Captain,
-				Status: status, Seat: nonEmpty(seat), Ready: p.Ready, InvitesSent: p.InvitesSent,
-				LastInviteAt: timePtr(p.LastInviteAt), InviteConfirmed: p.InviteConfirmed,
-			})
-		}
-		if side == lobby.Radiant {
-			v.Teams.Radiant = tv
-		} else {
-			v.Teams.Dire = tv
-		}
-	}
-	if l.Live != nil {
-		for _, m := range l.Strangers(s.hostAccount(l)) {
-			v.Strangers = append(v.Strangers, memberView{AccountID: m.AccountID, Seat: m.Seat})
-		}
-		for _, id := range l.Live.Pending {
-			v.PendingInvites = append(v.PendingInvites, strconv.FormatUint(id, 10))
-		}
-	}
-	m := l.Match
-	v.Match = matchView{
-		MatchID: idString(m.MatchID), Outcome: m.Outcome, WinnerSide: nonEmpty(string(m.WinnerSide())),
-		WinnerTeamRef: nonEmpty(m.WinnerTeamRef()), Scored: m.Scored(), DurationSeconds: m.DurationSeconds(),
-		StartedAt: timePtr(m.StartedAt), EndedAt: timePtr(m.EndedAt),
-	}
-	if m.Outcome != nil {
-		name := lobby.OutcomeName(*m.Outcome)
-		v.Match.OutcomeName = &name
-	}
-	return v
-}
+type eventsOutput struct{ Body eventList }
 
-// --- errors ---
+// --- operations ---
 
-// writeLobbyError maps lobby errors to the error envelope. Messages of
-// 5xx errors are generic: the cause goes to the log.
-func (s *Server) writeLobbyError(w http.ResponseWriter, r *http.Request, err error) {
-	var reqErr *requestError
-	var unknown *lobby.UnknownNameError
-	var limited *lobby.InviteLimitedError
-	msg := strings.TrimPrefix(err.Error(), "lobby: ")
-	switch {
-	case errors.As(err, &reqErr):
-		writeError(w, reqErr.status, reqErr.code, reqErr.msg)
-	case errors.As(err, &unknown):
-		writeError(w, http.StatusUnprocessableEntity, "unknown_"+unknown.Field, fmt.Sprintf("%s %q is not configured (lobby.%ss) and is not a number", unknown.Field, unknown.Value, unknown.Field))
-	case errors.As(err, &limited):
-		if limited.RetryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(limited.RetryAfter.Seconds()))))
-		}
-		writeError(w, http.StatusTooManyRequests, "invite_limited", msg)
-	case errors.Is(err, lobby.ErrInvalid):
-		writeError(w, http.StatusBadRequest, "invalid_request", strings.TrimPrefix(msg, "invalid request: "))
-	case errors.Is(err, lobby.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "no lobby with that id")
-	case errors.Is(err, lobby.ErrConflict):
-		writeError(w, http.StatusConflict, "conflict", "external_ref is used by an active lobby with a different request")
-	case errors.Is(err, lobby.ErrInvalidState):
-		writeError(w, http.StatusConflict, "invalid_state", strings.TrimPrefix(msg, "not allowed in the lobby's current state: "))
-	case errors.Is(err, lobby.ErrNotReady):
-		writeError(w, http.StatusConflict, "not_ready", strings.TrimPrefix(msg, "roster not complete or not seated: "))
-	case errors.Is(err, lobby.ErrHostNotSeated):
-		writeError(w, http.StatusConflict, "host_not_seated", "the host seat could not be confirmed; the bot is still on a team")
-	case errors.Is(err, lobby.ErrLeagueNotHeld):
-		writeError(w, http.StatusUnprocessableEntity, "league_not_held", strings.TrimPrefix(msg, "no configured bot administers the league: "))
-	case errors.Is(err, lobby.ErrGCTimeout):
-		s.log.Warn("lobby request timed out", "path", r.URL.Path, "err", err)
-		writeError(w, http.StatusGatewayTimeout, "gc_timeout", "the game coordinator did not answer in time")
-	default:
-		s.log.Error("lobby request failed", "path", r.URL.Path, "err", err)
-		writeError(w, http.StatusServiceUnavailable, "unavailable", "the lobby service cannot do that right now; try again shortly")
+// Error statuses the lobby operations document, besides the 422 and 500
+// huma adds.
+var (
+	// lobbyErrors: an action on one lobby.
+	lobbyErrors = []int{
+		http.StatusUnauthorized, http.StatusNotFound, http.StatusConflict,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout,
+	}
+	// bodyErrors: a request body that cannot be read.
+	bodyErrors = []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnsupportedMediaType}
+)
+
+func lobbyOp(id, method, path, summary, desc string, status int, errs ...[]int) huma.Operation {
+	if len(errs) == 0 {
+		errs = [][]int{lobbyErrors}
+	}
+	return huma.Operation{
+		OperationID: id, Method: method, Path: path, Summary: summary, Description: desc,
+		Tags: []string{"Lobbies"}, Security: keyAuth, DefaultStatus: status, Errors: slices.Concat(errs...),
 	}
 }
 
-// --- handlers ---
+func (s *Server) registerLobbies(r *router) {
+	register(s, r, lobbyOp("create-lobby", http.MethodPost, "/v1/lobbies", "Ask for a lobby",
+		"Accepts the request (202) and creates the lobby in the background; follow it with get-lobby. "+
+			"Sending the same request again while the lobby is active returns it with 200. "+
+			"The response carries the password.", http.StatusAccepted,
+		[]int{http.StatusUnauthorized, http.StatusConflict, http.StatusServiceUnavailable}, bodyErrors), s.createLobby)
+	alsoAnswers(s.api, http.MethodPost, "/v1/lobbies", http.StatusOK,
+		"An active lobby with this external_ref and the same request exists; it is returned.")
+	register(s, r, lobbyOp("list-lobbies", http.MethodGet, "/v1/lobbies", "List lobbies",
+		"Newest first, without passwords.", http.StatusOK,
+		[]int{http.StatusUnauthorized, http.StatusServiceUnavailable}), s.listLobbies)
+	register(s, r, lobbyOp("get-lobby", http.MethodGet, "/v1/lobbies/{id}", "Get a lobby",
+		"The lobby with its password.", http.StatusOK), s.getLobby)
+	register(s, r, lobbyOp("update-lobby", http.MethodPatch, "/v1/lobbies/{id}", "Change a lobby's settings",
+		"Allowed in pending, waiting and ready.", http.StatusOK, lobbyErrors, bodyErrors), s.updateLobby)
+	register(s, r, lobbyOp("close-lobby", http.MethodDelete, "/v1/lobbies/{id}", "Close a lobby that has not launched",
+		"202 when the lobby closes or starts closing; 200 when it was already closing or ended.", http.StatusAccepted), s.closeLobby)
+	alsoAnswers(s.api, http.MethodDelete, "/v1/lobbies/{id}", http.StatusOK, "The lobby was already closing or ended; nothing changed.")
+	invite := lobbyOp("invite-lobby-players", http.MethodPost, "/v1/lobbies/{id}/invite", "Send invites again",
+		"Only rostered players, in waiting and ready. 429 when every requested invite is rate-limited.", http.StatusOK,
+		lobbyErrors, bodyErrors, []int{http.StatusTooManyRequests})
+	register(s, r, invite, s.inviteLobbyPlayers)
+	register(s, r, lobbyOp("kick-lobby-member", http.MethodPost, "/v1/lobbies/{id}/kick", "Move a member to the pool or out of the lobby",
+		"The lobby shows the result once the game coordinator applies it.", http.StatusAccepted, lobbyErrors, bodyErrors), s.kickLobbyMember)
+	register(s, r, lobbyOp("set-lobby-roster", http.MethodPost, "/v1/lobbies/{id}/roster", "Replace both rosters",
+		"In waiting and ready.", http.StatusOK, lobbyErrors, bodyErrors), s.setLobbyRoster)
+	register(s, r, lobbyOp("launch-lobby", http.MethodPost, "/v1/lobbies/{id}/launch", "Start the match",
+		"Allowed in ready, and in waiting with force. The body is optional.", http.StatusAccepted, lobbyErrors, bodyErrors), s.launchLobby)
+	register(s, r, lobbyOp("flip-lobby-teams", http.MethodPost, "/v1/lobbies/{id}/teams/flip", "Swap the sides",
+		"Swaps Radiant and Dire in the lobby and in the rosters, in waiting and ready.", http.StatusAccepted), s.flipLobbyTeams)
+	register(s, r, lobbyOp("shuffle-lobby-teams", http.MethodPost, "/v1/lobbies/{id}/teams/shuffle", "Balanced shuffle of an open lobby",
+		"Only when both rosters are empty.", http.StatusAccepted), s.shuffleLobbyTeams)
+	register(s, r, lobbyOp("list-lobby-events", http.MethodGet, "/v1/lobbies/{id}/events", "List a lobby's events",
+		"Events with a seq above after, oldest first, in the envelope webhooks deliver.", http.StatusOK), s.listLobbyEvents)
+}
 
 // gcContext bounds a request that waits on GC calls, so it answers before
 // the server's write timeout.
-func (s *Server) gcContext(r *http.Request) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(r.Context(), s.opts.GCRequestTimeout)
+func (s *Server) gcContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, s.opts.GCRequestTimeout)
 }
 
-// writeLobby answers with one lobby. Only the create and GET responses
-// carry the password.
-func (s *Server) writeLobby(w http.ResponseWriter, status int, l lobby.Lobby, withPassword bool) {
-	writeJSON(w, status, s.lobbyView(l, withPassword))
-}
-
-func (s *Server) handleLobbyCreate(w http.ResponseWriter, r *http.Request) {
-	var req createReq
-	if err := decodeBody(r, &req, false); err != nil {
-		s.writeLobbyError(w, r, err)
-		return
-	}
-	spec, err := req.spec()
+func (s *Server) createLobby(ctx context.Context, in *createLobbyInput) (*createLobbyOutput, error) {
+	spec, err := in.Body.spec()
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, err
 	}
-	l, created, err := s.opts.Lobbies.Create(r.Context(), spec)
+	l, created, err := s.opts.Lobbies.Create(ctx, spec)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "create-lobby", err)
 	}
-	w.Header().Set("Location", "/v1/lobbies/"+l.ID)
 	status := http.StatusOK
 	if created {
 		status = http.StatusAccepted
 	}
-	s.writeLobby(w, status, l, true)
+	return &createLobbyOutput{Status: status, Location: "/v1/lobbies/" + l.ID, Body: s.lobbyWithPassword(l)}, nil
 }
 
-func (s *Server) handleLobbyList(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	f := lobby.Filter{ExternalRef: q.Get("external_ref"), Cursor: q.Get("cursor")}
-	if raw := q.Get("state"); raw != "" {
-		for _, part := range strings.Split(raw, ",") {
-			st := lobby.State(strings.TrimSpace(part))
-			if !st.Valid() {
-				s.writeLobbyError(w, r, badRequest("state %q is not a lobby state", part))
-				return
-			}
-			f.States = append(f.States, st)
-		}
+func (s *Server) listLobbies(ctx context.Context, in *listLobbiesInput) (*lobbyListOutput, error) {
+	f := lobby.Filter{ExternalRef: in.ExternalRef, Cursor: in.Cursor, Active: in.Active, Limit: in.Limit}
+	for _, st := range in.State {
+		f.States = append(f.States, lobby.State(st))
 	}
-	if raw := q.Get("active"); raw != "" {
-		active, err := strconv.ParseBool(raw)
-		if err != nil {
-			s.writeLobbyError(w, r, badRequest("active must be true or false"))
-			return
-		}
-		f.Active = active
-	}
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > maxListLimit {
-			s.writeLobbyError(w, r, badRequest("limit must be 1-%d", maxListLimit))
-			return
-		}
-		f.Limit = n
-	}
-	ls, next, err := s.opts.Lobbies.List(r.Context(), f)
+	ls, next, err := s.opts.Lobbies.List(ctx, f)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "list-lobbies", err)
 	}
-	out := make([]lobbyView, len(ls))
+	out := make([]LobbyView, len(ls))
 	for i, l := range ls {
-		out[i] = s.lobbyView(l, false)
+		out[i] = s.lobbyView(l)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"lobbies": out, "next_cursor": nonEmpty(next)})
+	return &lobbyListOutput{Body: lobbyList{Lobbies: out, NextCursor: nonEmpty(next)}}, nil
 }
 
-func (s *Server) handleLobbyGet(w http.ResponseWriter, r *http.Request) {
-	l, err := s.opts.Lobbies.Get(r.Context(), r.PathValue("id"))
+func (s *Server) getLobby(ctx context.Context, in *lobbyIDInput) (*lobbyWithPasswordOutput, error) {
+	l, err := s.opts.Lobbies.Get(ctx, in.ID)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "get-lobby", err)
 	}
-	s.writeLobby(w, http.StatusOK, l, true)
+	return &lobbyWithPasswordOutput{Body: s.lobbyWithPassword(l)}, nil
 }
 
-func (s *Server) handleLobbyPatch(w http.ResponseWriter, r *http.Request) {
-	var req patchReq
-	if err := decodeBody(r, &req, false); err != nil {
-		s.writeLobbyError(w, r, err)
-		return
-	}
-	ctx, cancel := s.gcContext(r)
+func (s *Server) updateLobby(ctx context.Context, in *updateLobbyInput) (*lobbyOutput, error) {
+	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	l, err := s.opts.Lobbies.Update(ctx, r.PathValue("id"), req.patch())
+	l, err := s.opts.Lobbies.Update(ctx, in.ID, in.Body.patch())
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "update-lobby", err)
 	}
-	s.writeLobby(w, http.StatusOK, l, false)
+	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyDelete(w http.ResponseWriter, r *http.Request) {
-	l, changed, err := s.opts.Lobbies.Close(r.Context(), r.PathValue("id"))
+func (s *Server) closeLobby(ctx context.Context, in *lobbyIDInput) (*lobbyStatusOutput, error) {
+	l, changed, err := s.opts.Lobbies.Close(ctx, in.ID)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "close-lobby", err)
 	}
 	status := http.StatusOK
 	if changed {
 		status = http.StatusAccepted
 	}
-	s.writeLobby(w, status, l, false)
+	return &lobbyStatusOutput{Status: status, Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyInvite(w http.ResponseWriter, r *http.Request) {
-	var req inviteReq
-	if err := decodeBody(r, &req, false); err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+func (s *Server) inviteLobbyPlayers(ctx context.Context, in *inviteInput) (*inviteOutput, error) {
+	if in.Body.Missing == (len(in.Body.Players) > 0) {
+		return nil, invalid("body", `give either "players" or "missing": true`)
 	}
-	if req.Missing == (len(req.Players) > 0) {
-		s.writeLobbyError(w, r, badRequest(`give either "players" or "missing": true`))
-		return
-	}
-	ctx, cancel := s.gcContext(r)
+	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	res, err := s.opts.Lobbies.Invite(ctx, r.PathValue("id"), lobby.InviteRequest{Players: req.Players, Missing: req.Missing})
+	res, err := s.opts.Lobbies.Invite(ctx, in.ID, lobby.InviteRequest{Players: in.Body.Players, Missing: in.Body.Missing})
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "invite-lobby-players", err)
 	}
-	type skip struct {
-		AccountID uint32 `json:"account_id"`
-		Reason    string `json:"reason"`
+	out := inviteResult{Invited: res.Invited, Skipped: make([]inviteSkip, len(res.Skipped))}
+	if out.Invited == nil {
+		out.Invited = []uint32{}
 	}
-	skipped := make([]skip, len(res.Skipped))
 	for i, sk := range res.Skipped {
-		skipped[i] = skip{sk.AccountID, sk.Reason}
+		out.Skipped[i] = inviteSkip{AccountID: sk.AccountID, Reason: sk.Reason}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"invited": res.Invited, "skipped": skipped})
+	return &inviteOutput{Body: out}, nil
 }
 
-func (s *Server) handleLobbyKick(w http.ResponseWriter, r *http.Request) {
-	var req kickReq
-	if err := decodeBody(r, &req, false); err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+func (s *Server) kickLobbyMember(ctx context.Context, in *kickInput) (*lobbyOutput, error) {
+	from := in.Body.From
+	if from == "" {
+		from = "team"
 	}
-	if req.AccountID == 0 {
-		s.writeLobbyError(w, r, badRequest("account_id is required"))
-		return
-	}
-	if req.From == "" {
-		req.From = "team"
-	}
-	ctx, cancel := s.gcContext(r)
+	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	l, err := s.opts.Lobbies.Kick(ctx, r.PathValue("id"), req.AccountID, req.From)
+	l, err := s.opts.Lobbies.Kick(ctx, in.ID, in.Body.AccountID, from)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "kick-lobby-member", err)
 	}
-	s.writeLobby(w, http.StatusAccepted, l, false)
+	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyRoster(w http.ResponseWriter, r *http.Request) {
-	var req rosterReq
-	if err := decodeBody(r, &req, false); err != nil {
-		s.writeLobbyError(w, r, err)
-		return
-	}
-	if req.Teams == nil {
-		s.writeLobbyError(w, r, badRequest("teams is required"))
-		return
-	}
-	roster, err := req.Teams.roster()
+func (s *Server) setLobbyRoster(ctx context.Context, in *rosterInput) (*lobbyOutput, error) {
+	roster, err := in.Body.Teams.roster()
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, err
 	}
-	ctx, cancel := s.gcContext(r)
+	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	l, err := s.opts.Lobbies.SetRoster(ctx, r.PathValue("id"), roster)
+	l, err := s.opts.Lobbies.SetRoster(ctx, in.ID, roster)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "set-lobby-roster", err)
 	}
-	s.writeLobby(w, http.StatusOK, l, false)
+	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyLaunch(w http.ResponseWriter, r *http.Request) {
-	var req launchReq
-	if err := decodeBody(r, &req, true); err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+func (s *Server) launchLobby(ctx context.Context, in *launchInput) (*lobbyOutput, error) {
+	req := lobby.LaunchRequest{Trigger: lobby.TriggerAPI}
+	if in.Body != nil {
+		req.Force = in.Body.Force
 	}
-	l, err := s.opts.Lobbies.Launch(r.Context(), r.PathValue("id"), lobby.LaunchRequest{Force: req.Force, Trigger: lobby.TriggerAPI})
+	l, err := s.opts.Lobbies.Launch(ctx, in.ID, req)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "launch-lobby", err)
 	}
-	s.writeLobby(w, http.StatusAccepted, l, false)
+	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyFlip(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.gcContext(r)
+func (s *Server) flipLobbyTeams(ctx context.Context, in *lobbyIDInput) (*lobbyOutput, error) {
+	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	l, err := s.opts.Lobbies.FlipTeams(ctx, r.PathValue("id"))
+	l, err := s.opts.Lobbies.FlipTeams(ctx, in.ID)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "flip-lobby-teams", err)
 	}
-	s.writeLobby(w, http.StatusAccepted, l, false)
+	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyShuffle(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.gcContext(r)
+func (s *Server) shuffleLobbyTeams(ctx context.Context, in *lobbyIDInput) (*lobbyOutput, error) {
+	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	l, err := s.opts.Lobbies.Shuffle(ctx, r.PathValue("id"))
+	l, err := s.opts.Lobbies.Shuffle(ctx, in.ID)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "shuffle-lobby-teams", err)
 	}
-	s.writeLobby(w, http.StatusAccepted, l, false)
+	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) handleLobbyEvents(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	var after int64
-	if raw := q.Get("after"); raw != "" {
-		n, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || n < 0 {
-			s.writeLobbyError(w, r, badRequest("after must be a non-negative seq"))
-			return
-		}
-		after = n
-	}
-	limit := 100
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > lobby.MaxEventsPage {
-			s.writeLobbyError(w, r, badRequest("limit must be 1-%d", lobby.MaxEventsPage))
-			return
-		}
-		limit = n
-	}
-	evs, err := s.opts.Lobbies.Events(r.Context(), r.PathValue("id"), after, limit)
+func (s *Server) listLobbyEvents(ctx context.Context, in *eventsInput) (*eventsOutput, error) {
+	evs, err := s.opts.Lobbies.Events(ctx, in.ID, in.After, in.Limit)
 	if err != nil {
-		s.writeLobbyError(w, r, err)
-		return
+		return nil, s.lobbyProblem(ctx, "list-lobby-events", err)
 	}
-	if evs == nil {
-		evs = []lobby.Envelope{}
+	out := eventList{Events: make([]LobbyEvent, len(evs)), NextAfter: in.After}
+	for i, e := range evs {
+		out.Events[i] = newLobbyEvent(e)
 	}
-	next := after
 	if len(evs) > 0 {
-		next = evs[len(evs)-1].Seq
+		out.NextAfter = evs[len(evs)-1].Seq
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": evs, "next_after": next})
+	return &eventsOutput{Body: out}, nil
+}
+
+// --- errors ---
+
+// lobbyProblem maps a lobby error to a problem. The text of an unexpected
+// error goes to the log; the client gets a generic 503.
+func (s *Server) lobbyProblem(ctx context.Context, op string, err error) error {
+	var unknown *lobby.UnknownNameError
+	var limited *lobby.InviteLimitedError
+	msg := strings.TrimPrefix(err.Error(), "lobby: ")
+	switch {
+	case errors.As(err, &unknown):
+		return coded(http.StatusUnprocessableEntity, "unknown_"+unknown.Field,
+			fmt.Sprintf("%s %q is not configured (lobby.%ss) and is not a number", unknown.Field, unknown.Value, unknown.Field))
+	case errors.As(err, &limited):
+		p := coded(http.StatusTooManyRequests, "invite_limited", msg)
+		if limited.RetryAfter <= 0 {
+			return p
+		}
+		return huma.ErrorWithHeaders(p, http.Header{"Retry-After": {strconv.Itoa(int(math.Ceil(limited.RetryAfter.Seconds())))}})
+	case errors.Is(err, lobby.ErrInvalid):
+		return coded(http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(msg, "invalid request: "))
+	case errors.Is(err, lobby.ErrNotFound):
+		return coded(http.StatusNotFound, "not_found", "no lobby with that id")
+	case errors.Is(err, lobby.ErrConflict):
+		return coded(http.StatusConflict, "conflict", "external_ref is used by an active lobby with a different request")
+	case errors.Is(err, lobby.ErrInvalidState):
+		return coded(http.StatusConflict, "invalid_state", strings.TrimPrefix(msg, "not allowed in the lobby's current state: "))
+	case errors.Is(err, lobby.ErrNotReady):
+		return coded(http.StatusConflict, "not_ready", strings.TrimPrefix(msg, "roster not complete or not seated: "))
+	case errors.Is(err, lobby.ErrHostNotSeated):
+		return coded(http.StatusConflict, "host_not_seated", "the host seat could not be confirmed; the bot is still on a team")
+	case errors.Is(err, lobby.ErrLeagueNotHeld):
+		return coded(http.StatusUnprocessableEntity, "league_not_held", strings.TrimPrefix(msg, "no configured bot administers the league: "))
+	case errors.Is(err, lobby.ErrGCTimeout):
+		s.log.WarnContext(ctx, "lobby request timed out", "op", op, "err", err)
+		return coded(http.StatusGatewayTimeout, "gc_timeout", "the game coordinator did not answer in time")
+	default:
+		s.log.ErrorContext(ctx, "lobby request failed", "op", op, "err", err)
+		return coded(http.StatusServiceUnavailable, "unavailable", "the lobby service cannot do that right now; try again shortly")
+	}
 }
 
 // noLobbies stands in when no lobby manager is wired.

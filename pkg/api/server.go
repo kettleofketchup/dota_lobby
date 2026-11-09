@@ -1,5 +1,6 @@
-// Package api is the service's HTTP API. Health endpoints are
-// open; everything else needs the API key when one is configured.
+// Package api is the service's HTTP API: huma operations on the standard
+// mux, documented as OpenAPI 3.1. Health endpoints are open; everything
+// else needs the API key when one is configured.
 package api
 
 import (
@@ -17,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
@@ -101,6 +104,7 @@ type Server struct {
 	log      *slog.Logger
 	http     *http.Server
 	handler  http.Handler
+	api      huma.API
 	started  time.Time
 	draining atomic.Bool
 }
@@ -192,25 +196,17 @@ func (s *Server) routes() http.Handler {
 	r.handle("GET /readyz", http.HandlerFunc(s.handleReadyz))
 	r.handle("GET /health", http.HandlerFunc(s.handleHealth))
 
-	r.handleAuthed("GET /v1/bots", s.handleBots)
-	r.handleAuthed("GET /v1/bots/{name}", s.handleBot)
-	r.handleAuthed("POST /v1/bots/{name}/retry", s.handleBotRetry)
-
-	r.handleAuthed("GET /v1/leagues", s.handleLeagues)
-	r.handleAuthed("GET /v1/leagues/{id}/nodes", s.handleLeagueNodes)
-
-	r.handleAuthed("POST /v1/lobbies", s.handleLobbyCreate)
-	r.handleAuthed("GET /v1/lobbies", s.handleLobbyList)
-	r.handleAuthed("GET /v1/lobbies/{id}", s.handleLobbyGet)
-	r.handleAuthed("PATCH /v1/lobbies/{id}", s.handleLobbyPatch)
-	r.handleAuthed("DELETE /v1/lobbies/{id}", s.handleLobbyDelete)
-	r.handleAuthed("POST /v1/lobbies/{id}/invite", s.handleLobbyInvite)
-	r.handleAuthed("POST /v1/lobbies/{id}/kick", s.handleLobbyKick)
-	r.handleAuthed("POST /v1/lobbies/{id}/roster", s.handleLobbyRoster)
-	r.handleAuthed("POST /v1/lobbies/{id}/launch", s.handleLobbyLaunch)
-	r.handleAuthed("POST /v1/lobbies/{id}/teams/flip", s.handleLobbyFlip)
-	r.handleAuthed("POST /v1/lobbies/{id}/teams/shuffle", s.handleLobbyShuffle)
-	r.handleAuthed("GET /v1/lobbies/{id}/events", s.handleLobbyEvents)
+	s.api = humago.New(r.mux, apiConfig())
+	// Middleware must be in place before the first Register: huma captures
+	// the chain per operation.
+	s.api.UseMiddleware(s.withLogger, s.requireKey)
+	s.registerBots(r)
+	s.registerLeagues(r)
+	s.registerLobbies(r)
+	documentWebhook(s.api.OpenAPI())
+	for _, p := range []string{"/openapi.json", "/openapi.yaml", "/openapi-3.0.json", "/openapi-3.0.yaml"} {
+		r.learn(http.MethodGet, p, false)
+	}
 
 	// The pre-v1 placeholders; nothing depends on them.
 	r.handle("/bots", s.authed(gone("/v1/bots")))
@@ -218,14 +214,15 @@ func (s *Server) routes() http.Handler {
 	r.handle("/lobby/info", s.authed(gone("/v1/lobbies")))
 
 	r.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
+		writeProblem(w, http.StatusNotFound, "not_found", "no such endpoint")
 	})
 	r.addMethodFallbacks()
-	return s.limitBody(r.mux)
+	return s.wrap(r.mux)
 }
 
-// router registers method patterns and remembers their paths, so a wrong
-// method gets a JSON 405 instead of falling through to the 404 catch-all.
+// router remembers the method patterns registered on the mux, the plain
+// ones and huma's, so a wrong method gets a 405 problem instead of falling
+// through to the 404 catch-all.
 type router struct {
 	mux       *http.ServeMux
 	auth      func(http.HandlerFunc) http.Handler
@@ -234,32 +231,36 @@ type router struct {
 	order     []string
 }
 
-// handleAuthed registers an API-key protected handler. The path's 405
-// fallback is protected as well, so an unauthenticated caller cannot learn
-// which methods a protected path takes.
-func (r *router) handleAuthed(pattern string, h http.HandlerFunc) {
-	r.handle(pattern, r.auth(h))
-	if _, path, ok := strings.Cut(pattern, " "); ok {
-		if r.protected == nil {
-			r.protected = map[string]bool{}
-		}
-		r.protected[path] = true
+// register adds a huma operation and learns its route. An operation with
+// Security is protected, and so is its path's 405 fallback, so a caller
+// without the key cannot learn which methods a protected path takes.
+func register[I, O any](s *Server, r *router, op huma.Operation, h func(context.Context, *I) (*O, error)) {
+	if op.MaxBodyBytes == 0 {
+		op.MaxBodyBytes = s.opts.MaxBodyBytes
 	}
+	huma.Register(s.api, op, h)
+	r.learn(op.Method, op.Path, len(op.Security) > 0)
 }
 
 func (r *router) handle(pattern string, h http.Handler) {
 	r.mux.Handle(pattern, h)
-	method, path, ok := strings.Cut(pattern, " ")
-	if !ok {
-		return
+	if method, path, ok := strings.Cut(pattern, " "); ok {
+		r.learn(method, path, false)
 	}
+}
+
+func (r *router) learn(method, path string, protected bool) {
 	if r.allowed == nil {
 		r.allowed = map[string][]string{}
+		r.protected = map[string]bool{}
 	}
 	if _, seen := r.allowed[path]; !seen {
 		r.order = append(r.order, path)
 	}
 	r.allowed[path] = append(r.allowed[path], method)
+	if protected {
+		r.protected[path] = true
+	}
 }
 
 func (r *router) addMethodFallbacks() {
@@ -271,7 +272,7 @@ func (r *router) addMethodFallbacks() {
 		allow := strings.Join(methods, ", ")
 		var h http.HandlerFunc = func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Allow", allow)
-			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "allowed: "+allow)
+			writeProblem(w, http.StatusMethodNotAllowed, "method_not_allowed", "allowed: "+allow)
 		}
 		if r.protected[path] {
 			r.mux.Handle(path, r.auth(h))
@@ -281,31 +282,57 @@ func (r *router) addMethodFallbacks() {
 	}
 }
 
-func (s *Server) limitBody(next http.Handler) http.Handler {
+// wrap applies what every response shares: the body limit and no caching.
+func (s *Server) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, s.opts.MaxBodyBytes)
+		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
 }
 
-// authed requires the API key, from X-API-Key or "Authorization: Bearer"
-// (the scheme matched case-insensitively), when one is configured.
+// withLogger makes the server's logger available to the error hook.
+func (s *Server) withLogger(ctx huma.Context, next func(huma.Context)) {
+	next(huma.WithValue(ctx, loggerKey{}, s.log))
+}
+
+// requireKey enforces the API key on operations that declare Security,
+// when a key is configured.
+func (s *Server) requireKey(ctx huma.Context, next func(huma.Context)) {
+	if !s.opts.APIKey.IsSet() || len(ctx.Operation().Security) == 0 {
+		next(ctx)
+		return
+	}
+	if !s.validKey(presentedKey(ctx.Header)) {
+		ctx.SetHeader("WWW-Authenticate", authChallenge)
+		_ = huma.WriteErr(s.api, ctx, http.StatusUnauthorized, "missing or invalid API key")
+		return
+	}
+	next(ctx)
+}
+
+const authChallenge = `Bearer realm="dota_lobby"`
+
+// authed is requireKey for plain handlers: the removed endpoints and the
+// 405 fallbacks of protected paths.
 func (s *Server) authed(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.opts.APIKey.IsSet() && !s.validKey(requestKey(r)) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="dota_lobby"`)
-			writeError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid API key")
+		if s.opts.APIKey.IsSet() && !s.validKey(presentedKey(r.Header.Get)) {
+			w.Header().Set("WWW-Authenticate", authChallenge)
+			writeProblem(w, http.StatusUnauthorized, "unauthorized", "missing or invalid API key")
 			return
 		}
 		next(w, r)
 	})
 }
 
-func requestKey(r *http.Request) string {
-	if k := r.Header.Get("X-API-Key"); k != "" {
+// presentedKey is the key from X-API-Key or "Authorization: Bearer" (the
+// scheme matched case-insensitively).
+func presentedKey(header func(string) string) string {
+	if k := header("X-API-Key"); k != "" {
 		return k
 	}
-	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	scheme, token, ok := strings.Cut(header("Authorization"), " ")
 	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return ""
 	}
@@ -323,22 +350,6 @@ func (s *Server) validKey(got string) bool {
 	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
-// errorBody is the error envelope shared by every endpoint.
-type errorBody struct {
-	Error apiError `json:"error"`
-}
-
-type apiError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-}
-
-func writeError(w http.ResponseWriter, status int, code, msg string) {
-	retryable := status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
-	writeJSON(w, status, errorBody{Error: apiError{Code: code, Message: msg, Retryable: retryable}})
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -349,7 +360,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func gone(moved string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusGone, "gone", "this endpoint was removed; use "+moved)
+		writeProblem(w, http.StatusGone, "gone", "this endpoint was removed; use "+moved)
 	}
 }
 

@@ -93,9 +93,9 @@ func TestLeagueNodes(t *testing.T) {
 		askedFor uint32
 	}{
 		{"ok", "/v1/leagues/17929/nodes", nil, 200, "", 17929},
-		{"not a number", "/v1/leagues/abc/nodes", nil, 400, "invalid_request", 0},
-		{"zero", "/v1/leagues/0/nodes", nil, 400, "invalid_request", 0},
-		{"too big", "/v1/leagues/4294967296/nodes", nil, 400, "invalid_request", 0},
+		{"not a number", "/v1/leagues/abc/nodes", nil, 422, "invalid_request", 0},
+		{"zero", "/v1/leagues/0/nodes", nil, 422, "invalid_request", 0},
+		{"too big", "/v1/leagues/4294967296/nodes", nil, 422, "invalid_request", 0},
 		{"unknown", "/v1/leagues/5/nodes", fmt.Errorf("x: %w", league.ErrUnknownLeague), 404, "not_found", 5},
 		{"none ready", "/v1/leagues/5/nodes", fmt.Errorf("x: %w", league.ErrNoReadyHolder), 503, "unavailable", 5},
 		{"bot dropped", "/v1/leagues/5/nodes", fmt.Errorf("x: %w", bot.ErrNotReady), 503, "unavailable", 5},
@@ -114,8 +114,8 @@ func TestLeagueNodes(t *testing.T) {
 				t.Errorf("registry asked for %v on a bad id", lg.asked)
 			}
 			if tt.code != 200 {
-				if tt.code >= 503 && r.body["error"].(map[string]any)["retryable"] != true {
-					t.Errorf("%d not retryable", tt.code)
+				if r.body["retryable"] != (tt.code >= 503) {
+					t.Errorf("%d: retryable = %v", tt.code, r.body["retryable"])
 				}
 				return
 			}
