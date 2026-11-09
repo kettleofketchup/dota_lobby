@@ -108,6 +108,7 @@ func (s *Server) registerLeagues(r *router) {
 		Summary: "Refresh every ready bot's leagues",
 		Description: "Fetches the game coordinator's admin league list of every gc_ready bot now, a few bots at a time, " +
 			"bounded as a whole by gc.request_timeout, and reports each enabled bot's outcome. " +
+			"A bot whose list was fetched successfully less than 15 seconds ago is not asked again and keeps that list. " +
 			"A failed bot keeps its previous list. 409 invalid_state when league.sources does not include gc.",
 		Tags: []string{"Leagues"}, Security: keyAuth,
 		Errors: []int{http.StatusUnauthorized, http.StatusConflict},
@@ -192,7 +193,7 @@ func utcOrNil(t time.Time) *time.Time {
 
 type refreshResultView struct {
 	Bot     string   `json:"bot"`
-	Status  string   `json:"status" enum:"ok,failed,not_ready" doc:"ok: the list was fetched; failed: the request failed and the previous list stays; not_ready: the bot was not gc_ready and was not asked"`
+	Status  string   `json:"status" enum:"ok,failed,not_ready" doc:"ok: the list was fetched, or was fetched successfully moments ago and kept; failed: the list was not fetched (the request failed, or time ran out before the bot was asked) and the previous list stays; not_ready: the bot was not gc_ready and was not asked"`
 	Error   *string  `json:"error" nullable:"true" doc:"Why the refresh failed; null unless status is failed"`
 	Leagues []uint32 `json:"leagues" doc:"The leagues the bot holds after the refresh"`
 }
@@ -224,7 +225,10 @@ func (s *Server) refreshLeagues(ctx context.Context, _ *struct{}) (*refreshResul
 		case res.Err != nil:
 			v.Status = "failed"
 			msg := res.Err.Error()
-			if errors.Is(res.Err, context.DeadlineExceeded) {
+			switch {
+			case errors.Is(res.Err, league.ErrNotAsked):
+				msg = "not asked: gc.request_timeout ran out before this bot's turn"
+			case errors.Is(res.Err, context.DeadlineExceeded):
 				msg = "the game coordinator did not answer in time"
 			}
 			v.Error = &msg

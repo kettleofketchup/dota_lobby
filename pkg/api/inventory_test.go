@@ -222,6 +222,7 @@ func TestRefreshAllLeagues(t *testing.T) {
 			{Bot: "bot2", Err: fmt.Errorf("refresh leagues of bot2: %w", context.DeadlineExceeded)},
 			{Bot: "bot3", Err: errors.New("refresh leagues of bot3: gc said no")},
 			{Bot: "bot4", NotReady: true},
+			{Bot: "bot5", Err: fmt.Errorf("refresh leagues of bot5: %w: %w", league.ErrNotAsked, context.DeadlineExceeded)},
 		},
 	}
 	s := New(Options{Leagues: lg, GCRequestTimeout: 3 * time.Second})
@@ -237,6 +238,7 @@ func TestRefreshAllLeagues(t *testing.T) {
 		map[string]any{"bot": "bot2", "status": "failed", "error": "the game coordinator did not answer in time", "leagues": []any{float64(300)}},
 		map[string]any{"bot": "bot3", "status": "failed", "error": "refresh leagues of bot3: gc said no", "leagues": []any{}},
 		map[string]any{"bot": "bot4", "status": "not_ready", "error": nil, "leagues": []any{}},
+		map[string]any{"bot": "bot5", "status": "failed", "error": "not asked: gc.request_timeout ran out before this bot's turn", "leagues": []any{}},
 	}
 	if !reflect.DeepEqual(r.body["results"], any(want)) {
 		t.Errorf("results =\n%v\nwant\n%v", r.body["results"], want)

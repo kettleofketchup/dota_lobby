@@ -2344,7 +2344,7 @@ components:
             - array
             - "null"
         status:
-          description: "ok: the list was fetched; failed: the request failed and the previous list stays; not_ready: the bot was not gc_ready and was not asked"
+          description: "ok: the list was fetched, or was fetched successfully moments ago and kept; failed: the list was not fetched (the request failed, or time ran out before the bot was asked) and the previous list stays; not_ready: the bot was not gc_ready and was not asked"
           enum:
             - ok
             - failed
@@ -2642,7 +2642,7 @@ paths:
         - Leagues
   /v1/bots/{name}/leagues/refresh:
     post:
-      description: Fetches the bot's admin league list from the game coordinator now, through its GC worker and bounded by gc.request_timeout, and answers the updated leagues as GET /v1/bots/{name}/leagues does. Use it after an organisation admin added the bot to a league, instead of waiting for league.refresh_interval. 503 when the bot is not gc_ready or the request failed (the previous list stays), 504 when the game coordinator did not answer in time, 409 when league.sources does not include gc.
+      description: Fetches the bot's admin league list from the game coordinator now, through its GC worker and bounded by gc.request_timeout, and answers the updated leagues as GET /v1/bots/{name}/leagues does. Use it after an organisation admin added the bot to a league, instead of waiting for league.refresh_interval. A list fetched successfully less than 15 seconds ago is answered without asking the game coordinator again. 503 when the bot is not gc_ready or the request failed (the previous list stays), 504 when the game coordinator did not answer in time, 409 when league.sources does not include gc.
       operationId: refresh-bot-leagues
       parameters:
         - description: The bot's name from the config, matched case-insensitively
@@ -2797,7 +2797,7 @@ paths:
         - Leagues
   /v1/leagues/refresh:
     post:
-      description: Fetches the game coordinator's admin league list of every gc_ready bot now, a few bots at a time, bounded as a whole by gc.request_timeout, and reports each enabled bot's outcome. A failed bot keeps its previous list. 409 invalid_state when league.sources does not include gc.
+      description: Fetches the game coordinator's admin league list of every gc_ready bot now, a few bots at a time, bounded as a whole by gc.request_timeout, and reports each enabled bot's outcome. A bot whose list was fetched successfully less than 15 seconds ago is not asked again and keeps that list. A failed bot keeps its previous list. 409 invalid_state when league.sources does not include gc.
       operationId: refresh-leagues
       responses:
         "200":

@@ -155,7 +155,8 @@ func (s *Server) registerBots(r *router) {
 		Description: "Fetches the bot's admin league list from the game coordinator now, through its GC worker and " +
 			"bounded by gc.request_timeout, and answers the updated leagues as GET /v1/bots/{name}/leagues does. " +
 			"Use it after an organisation admin added the bot to a league, instead of waiting for " +
-			"league.refresh_interval. 503 when the bot is not gc_ready or the request failed (the previous list " +
+			"league.refresh_interval. A list fetched successfully less than 15 seconds ago is answered without asking " +
+			"the game coordinator again. 503 when the bot is not gc_ready or the request failed (the previous list " +
 			"stays), 504 when the game coordinator did not answer in time, 409 when league.sources does not include gc.",
 		Tags: []string{"Leagues"}, Security: keyAuth,
 		Errors: []int{http.StatusUnauthorized, http.StatusNotFound, http.StatusConflict,

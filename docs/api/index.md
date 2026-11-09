@@ -323,13 +323,18 @@ for `league.refresh_interval`, and answers the updated
 [`GET /v1/bots/{name}/leagues`](#get-v1botsnameleagues). Use it right after a ticket was added
 or taken away.
 
+To spare the game coordinator, a bot whose list was fetched successfully less than 15 seconds
+ago, since it last reached `gc_ready`, is not asked again: the call answers that list, and
+`refresh.ok_at` shows when it was fetched. Calls for the same bot that arrive together run one
+after another, so they share one fetch.
+
 | Status | When |
 |---|---|
-| `200` | The list was fetched |
+| `200` | The list was fetched, or was fetched less than 15 seconds ago |
 | `404 not_found` | No bot with that name |
 | `409 invalid_state` | `league.sources` does not include `gc` |
 | `503 unavailable` | The bot is not `gc_ready`, or the request failed; the previous list stays. Retry later |
-| `504 gc_timeout` | No answer within `gc.request_timeout` (10 s, capped at 12 s), time spent queued behind the bot's other GC requests included |
+| `504 gc_timeout` | No answer within `gc.request_timeout` (10 s, capped at 12 s), time spent queued behind the bot's other GC requests included. Recorded as the bot's last refresh failure in `refresh.error` |
 
 ```bash
 curl -fsS -X POST -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots/league_bot_1/leagues/refresh
@@ -421,13 +426,14 @@ curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/leagues/17929
 ```
 
 Fetches the game coordinator list of every `gc_ready` bot now, four bots at a time, the whole
-call bounded by `gc.request_timeout` (10 s, capped at 12 s). Every enabled bot gets a result, in
-config order:
+call bounded by `gc.request_timeout` (10 s, capped at 12 s). As with the single-bot refresh, a
+bot fetched successfully less than 15 seconds ago is not asked again. Every enabled bot gets a
+result, in config order:
 
 | `status` | Meaning |
 |---|---|
-| `ok` | The list was fetched; `leagues` is what the bot holds now |
-| `failed` | The request failed (`error` says why); the previous list stays |
+| `ok` | The list was fetched, or was fetched less than 15 seconds ago; `leagues` is what the bot holds now |
+| `failed` | The list was not fetched (`error` says why); the previous list stays. `the game coordinator did not answer in time` means the bot was asked and did not answer. `not asked: gc.request_timeout ran out before this bot's turn` means the time ran out while the bot waited for one of the four slots or for a refresh already running for it; that bot's game coordinator connection is not at fault |
 | `not_ready` | The bot was not `gc_ready` and was not asked |
 
 `200` whatever each bot's outcome; `409 invalid_state` when `league.sources` does not include

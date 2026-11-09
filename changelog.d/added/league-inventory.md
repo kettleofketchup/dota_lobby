@@ -8,6 +8,6 @@
 - `POST /v1/bots/{name}/leagues/refresh` fetches a bot's league list from the game coordinator
   now, within `gc.request_timeout`, so a newly granted ticket counts at once; `503` when the bot
   is not `gc_ready`. `POST /v1/leagues/refresh` does it for every ready bot and reports each
-  bot's outcome.
+  bot's outcome. A bot fetched successfully less than 15 seconds ago is not asked again.
 - The database records when each league first appeared for a bot and every league that
   appeared or disappeared; each change is also logged at info as `bot league tickets changed`.
