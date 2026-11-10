@@ -172,9 +172,7 @@ func Load(opts Options) (*Config, error) {
 		}
 		cfg.Server.APIKey = ""
 	}
-	if cfg.Store.Path == "" {
-		cfg.Store.Path = filepath.Join(cfg.StateDir, "dota_lobby.db")
-	}
+	cfg.Store.resolvePaths(cfg.StateDir)
 
 	used := map[string]bool{}
 	for _, p := range bots {
@@ -217,7 +215,7 @@ func Load(opts Options) (*Config, error) {
 }
 
 // strictDecode rejects unknown keys so a typo fails loudly instead of being
-// silently ignored (the pre-PR loader never read sentry_hash), and refuses
+// silently ignored (sentry_hash was once ignored this way), and refuses
 // secrets that YAML did not read as strings.
 func strictDecode(c *mapstructure.DecoderConfig) {
 	c.ErrorUnused = true
@@ -455,12 +453,58 @@ func applyFileEnv(v *viper.Viper) error {
 	return nil
 }
 
+// resolvePaths fills the empty store paths in from state_dir.
+func (sc *StoreConfig) resolvePaths(stateDir string) {
+	if sc.Path == "" {
+		sc.Path = filepath.Join(stateDir, "dota_lobby.db")
+	}
+	if sc.Backup.Dir == "" {
+		sc.Backup.Dir = filepath.Join(stateDir, "backups")
+	}
+}
+
 // LoadServer reads only the server section (host and port) from the same
 // defaults, config file and DOTA_LOBBY_SERVER_* env that Load uses. It never
 // opens the secrets file, bot credentials or state_dir, so a probe such as
 // the container healthcheck can find the listen address without depending on
 // them. It does not validate the rest of the config.
 func LoadServer(opts Options) (ServerConfig, error) {
+	v, err := readConfigOnly(opts)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	sc := ServerConfig{Host: v.GetString("server::host"), Port: v.GetInt("server::port")}
+	if sc.Port < 1 || sc.Port > 65535 {
+		return ServerConfig{}, fmt.Errorf("server.port %d out of range 1-65535", sc.Port)
+	}
+	return sc, nil
+}
+
+// LoadStore reads only state_dir and the store section, the way LoadServer
+// reads the server section, and resolves the empty paths from state_dir.
+// The backup command uses it, so a backup works without the secrets or bot
+// credentials and before a new release's config is in place. It does not
+// validate the rest of the config.
+func LoadStore(opts Options) (StoreConfig, error) {
+	v, err := readConfigOnly(opts)
+	if err != nil {
+		return StoreConfig{}, err
+	}
+	sc := StoreConfig{
+		Path: v.GetString("store::path"),
+		Backup: BackupConfig{
+			Enabled: v.GetBool("store::backup::enabled"),
+			Dir:     v.GetString("store::backup::dir"),
+			Keep:    v.GetInt("store::backup::keep"),
+		},
+	}
+	sc.resolvePaths(v.GetString("state_dir"))
+	return sc, nil
+}
+
+// readConfigOnly layers the defaults, the config file and DOTA_LOBBY_* env,
+// without the secrets file, credentials or *_FILE values.
+func readConfigOnly(opts Options) (*viper.Viper, error) {
 	v := viper.NewWithOptions(viper.KeyDelimiter(keyDelim))
 	for k, val := range defaults() {
 		v.SetDefault(k, val)
@@ -475,17 +519,13 @@ func LoadServer(opts Options) (ServerConfig, error) {
 	}
 	cfgPath, err := locate(opts.ConfigFile, "CONFIG_FILE", "config", search)
 	if err != nil {
-		return ServerConfig{}, err
+		return nil, err
 	}
 	if cfgPath != "" {
 		v.SetConfigFile(cfgPath)
 		if err := v.ReadInConfig(); err != nil {
-			return ServerConfig{}, fmt.Errorf("read config %s: %w", cfgPath, err)
+			return nil, fmt.Errorf("read config %s: %w", cfgPath, err)
 		}
 	}
-	sc := ServerConfig{Host: v.GetString("server::host"), Port: v.GetInt("server::port")}
-	if sc.Port < 1 || sc.Port > 65535 {
-		return ServerConfig{}, fmt.Errorf("server.port %d out of range 1-65535", sc.Port)
-	}
-	return sc, nil
+	return v, nil
 }

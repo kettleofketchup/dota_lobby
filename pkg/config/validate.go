@@ -108,6 +108,9 @@ func (c *Config) Validate() error {
 		add("lobby.chat.prefix %q must be 1-4 characters without spaces and must not start with \"/\" (the Dota client never sends those)", p)
 	}
 	positive("store.retention", c.Store.Retention)
+	if c.Store.Backup.Keep < 1 {
+		add("store.backup.keep %d must be at least 1", c.Store.Backup.Keep)
+	}
 	positive("match.settle_after", c.Match.SettleAfter)
 	if c.Lobby.Invite.MinResend < 0 {
 		add("lobby.invite.min_resend must not be negative")

@@ -170,6 +170,7 @@ secrets:
 | `just docker logs` | `docker compose logs -f` |
 | `just docker ps` | `docker compose ps`, including the health status |
 | `just docker auth <bot>` | Run `dota_lobby auth --bot <bot> --force` in the running container, see [Re-authenticating a bot](#re-authenticating-a-bot) |
+| `just docker backup [dir]` | Snapshot the database into `dir` on the host (`backups/` by default), see [Backups](#backups) |
 | `just docker build [tag]` | Build the image locally as `ghcr.io/kettleofketchup/dota_lobby:local` |
 
 The recipes call `docker`; set `DOCKER=podman` to use Podman directly. `DOTA_LOBBY_TAG` must
@@ -217,6 +218,8 @@ Do not pass passwords as plain `environment:` values: they show up in `docker in
 |---|---|
 | `LOCK` | `flock` lock, held while `serve` runs. A second process on the same volume refuses to start |
 | `bots/<username>/token.json` | The bot's refresh token, mode `0600`, written atomically |
+| `dota_lobby.db` (with `-wal` and `-shm`) | The SQLite database: lobbies, their events and passwords, queued webhook deliveries, league lists. Mode `0600` |
+| `backups/` | Database copies: automatic ones from before each migration, and manual ones from `just docker backup`. See [Backups](#backups) |
 
 The image ships `/app/state` empty and owned by UID 65532, and Docker and Podman copy that
 ownership into a new named volume, so no `chown` is needed.
@@ -231,13 +234,91 @@ replaces a stored token that expires earlier.
 -v` or `docker volume rm dota_lobby_state` delete every stored token; bots with a
 `shared_secret` then mint new ones, the others need [re-authenticating](#re-authenticating-a-bot).
 
-Back it up with any volume backup tool, for example:
+For the database, use `just docker backup` (see [Backups](#backups)): a file copy of a
+database that is being written can be inconsistent. To archive the whole volume, tokens
+included, stop the stack first and use any volume backup tool, for example:
 
 ```bash
+docker compose stop
 docker run --rm -v dota_lobby_state:/s:ro -v "$PWD:/b" busybox tar czf /b/state.tgz -C /s .
+docker compose start
 ```
 
 The archive holds live refresh tokens; protect it like the sops files.
+
+## Backups
+
+The database migrations cannot be undone, and a binary refuses a database that a newer one has
+migrated (`database schema is newer than this binary`). A copy taken before the upgrade is the
+only way back to the previous release.
+
+### Automatic, before every migration
+
+When a new release starts on a database that has migrations pending, it first writes a copy to
+`/app/state/backups/` (`store.backup.dir`), named after the schema versions and the UTC time:
+
+```text
+dota_lobby-0002-to-0004-20261109T120000Z.db
+```
+
+The copy is checked (SQLite's `quick_check`, and its schema version) before anything is
+migrated. If it cannot be written or does not check out, the service applies no migration and
+exits with `refusing to migrate: pre-migration backup failed`; see
+[Troubleshooting](../operations/troubleshooting.md#startup-failures). The newest 5 automatic
+copies are kept (`store.backup.keep`), by the time in their names. Older ones are deleted only
+after the migrations have succeeded: if a migration fails and the container keeps restarting,
+every start adds a copy and none is deleted, so the copy from before the upgrade survives. A new database, or one with nothing to migrate, is not
+copied. Each copy is as large as the database, so leave that much free space on the volume.
+
+Leave this on. `store.backup.enabled: false` turns it off and logs a warning at every start.
+
+### On demand: `just docker backup`
+
+```bash
+just docker backup            # into ./backups/
+just docker backup /srv/dl    # or any host directory
+```
+
+The recipe runs `dota_lobby backup` in a one-off container of the image that
+`DOTA_LOBBY_TAG` names, on the service's volume, and removes the container afterwards. The
+binary writes `/app/state/backups/dota_lobby-manual-<UTC time>.db`; the recipe copies that
+file to the host directory (created mode `0700`, the copy `0600`) and prints its host path.
+
+- It never runs in the service's own container, which before an upgrade still holds the old
+  binary. So it works whether the service is running or not, and with the new
+  `DOTA_LOBBY_TAG` already set and pulled.
+- The backup opens the database read-only and takes no lock, so a running service keeps
+  working; the copy is a consistent snapshot. It needs no decrypted secrets.
+- When the volume holds no database yet, it says so and writes nothing.
+- Only the 3 newest manual copies stay in the volume; the host directory keeps all of them.
+  The automatic copies are never touched.
+
+The copies hold the lobby passwords and webhook delivery queue. Keep them as private as the
+sops files.
+
+### Restoring a backup
+
+1. Stop the service: `just docker down`.
+2. Copy the backup over the database in the volume, delete the old `-wal` and `-shm` files and
+   hand the file back to the service user. The image has no shell, so use a throwaway
+   container. The copies still in the volume are under `/s/backups/`; one that is only on the
+   host is mounted in from there:
+
+    ```bash
+    docker run --rm -v dota_lobby_state:/s -v "$PWD/backups:/b:ro" busybox sh -c '
+      cp /b/dota_lobby-manual-20261109T120000Z.db /s/dota_lobby.db &&
+      rm -f /s/dota_lobby.db-wal /s/dota_lobby.db-shm &&
+      chown 65532:65532 /s/dota_lobby.db && chmod 600 /s/dota_lobby.db'
+    ```
+
+    The container runs as its root, which can read your `0700` backup directory and maps
+    UID 65532 the same way the service container does, on rootful Docker and rootless Podman
+    alike. On SELinux hosts add `:Z` to the bind mount.
+
+3. Set `DOTA_LOBBY_TAG` to a release whose schema matches the backup: the release that wrote
+   it, or for an automatic copy `dota_lobby-<from>-to-<to>-...`, the release you upgraded
+   from. A newer release migrates it again, after a fresh automatic copy.
+4. `just docker up`.
 
 ## Re-authenticating a bot
 
@@ -428,16 +509,33 @@ curl -s http://127.0.0.1:8080/readyz
 
 ## Upgrading
 
-Check out the new release so `compose.yaml` and the example files match the image, then pull
-and recreate:
+Before you start:
+
+- Read the release's **Upgrading** notes in the
+  [changelog](https://github.com/kettleofketchup/dota_lobby/blob/main/CHANGELOG.md). They
+  list renamed keys and API changes that clients must handle; for example, API errors became
+  `application/problem+json`, with `422` for validation errors.
+- Database migrations cannot be undone. The new release copies the database before it
+  migrates (see [Backups](#backups)), but take your own copy on the host too.
+- Every `webhooks[]` entry needs a secret in `secrets.webhook_secrets`, or the service does
+  not start. `just secrets list` shows which URLs have one; `just secrets webhook-secret
+  <url>` adds a missing one (see [Webhooks](../operations/webhooks.md#draftforge)).
+
+Check out the new release so `compose.yaml` and the example files match the image, take a
+backup, then pull and recreate:
 
 ```bash
 git fetch --depth 1 origin tag v1.2.4
 git checkout v1.2.4
 export DOTA_LOBBY_TAG=1.2.4   # and update your shell profile if you persisted it there
 docker compose pull
+just docker backup            # a host copy before anything is migrated
 just docker up
+just docker logs              # "pre-migration backup written" when there was something to migrate
 ```
+
+`just docker backup` runs in a one-off container of the new image, next to the old service if
+it is still up, and migrates nothing.
 
 - `docker compose pull` and `up` with an **unchanged** `DOTA_LOBBY_TAG` change nothing: a
   pinned full-version tag never moves.

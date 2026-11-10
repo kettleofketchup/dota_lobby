@@ -45,6 +45,7 @@ the reason is the last log line, prefixed with `dota_lobby serve:`.
 | `start bots: auth: lock ...: state dir is locked by another process` | Another `serve` is running on the same state directory | Stop the other copy. Only one instance per set of accounts |
 | `start bots: auth: open lock: ... permission denied` | The state directory is not writable | With Compose, use the named volume from `compose.yaml`; do not bind-mount a host directory there unless UID 65532 owns it |
 | `webhooks[0]: secrets.webhook_secrets has no signing secret for "..."` | A webhook without a signing secret, or a secrets key that is not the exact URL. The message shows the URL without its query or user info | Add `secrets.webhook_secrets["<url>"]`; see [Webhooks](webhooks.md#configure-a-receiver) |
+| `open store ...: refusing to migrate: pre-migration backup failed: ...` | A new release has migrations to apply, and the copy it takes first could not be written or did not verify. Nothing was migrated; the database is as the old release left it | Read the cause at the end of the message. Usually the disk is full (the copy is as large as the database), `store.backup.dir` is not writable, or a file sits where the directory should be. Fix it and start again. See [Backups](../deployment/docker-compose.md#backups) |
 | `listen: ... address already in use` | Port taken | Free the port or change the host side of the mapping |
 | `read config /app/config/config.yaml: ... permission denied` | `config.yaml` is not readable by UID 65532 | `chmod 644 config/config.yaml` (it holds no secrets) |
 
@@ -328,4 +329,4 @@ its deliveries.
 | `503 unavailable` from `/v1/leagues/{id}/nodes` | Bots hold the league, but none is `gc_ready` | Check `/v1/bots`, then retry |
 | `404 not_found` from `/v1/leagues/{id}/nodes` | No enabled bot holds that league | See [A bot does not list my league](#a-bot-does-not-list-my-league) |
 | Startup fails with `open store ...` | `store.path` (default `<state_dir>/dota_lobby.db`) cannot be created or opened, for example a read-only state volume | Make the state volume writable by the service user |
-| Startup fails with `database schema is newer than this binary` | The database was used by a newer release | Run that release again, or restore a backup taken before the upgrade |
+| Startup fails with `database schema is newer than this binary` | The database was used by a newer release | Run that release again, or [restore a backup](../deployment/docker-compose.md#restoring-a-backup) taken before the upgrade |

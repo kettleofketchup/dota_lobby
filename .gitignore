@@ -52,6 +52,9 @@ __pycache__/
 # Probe tokens, captures and reports
 probe-state/
 
+# Database snapshots from `just docker backup`; they hold lobby passwords
+/backups/
+
 # Local sops secrets: the generated .sops.yaml and encrypted files stay on this machine
 .sops.yaml
 secrets/

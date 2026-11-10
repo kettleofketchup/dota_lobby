@@ -103,6 +103,12 @@ match:
 store:
   path: ""                 # empty = <state_dir>/dota_lobby.db
   retention: 720h          # ended lobbies and their events
+  # A copy of the database is written before any migration runs; startup
+  # stops if it cannot be written. On-demand copies: dota_lobby backup.
+  # backup:
+  #   enabled: true
+  #   dir: ""                # empty = <state_dir>/backups
+  #   keep: 5                # automatic copies kept; older ones are deleted
 
 # Signed event deliveries; see docs/operations/webhooks.md. Each URL needs
 # a signing secret in secrets.webhook_secrets.
