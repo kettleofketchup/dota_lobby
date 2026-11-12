@@ -54,7 +54,7 @@ make lint         # golangci-lint run ./...
 ## Commands
 
 ```text
-dota_lobby [serve] [--config FILE] [--secrets FILE]
+dota_lobby [serve] [--config FILE] [--secrets FILE] [--simulate]
 dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
 dota_lobby healthcheck [--url URL] [--timeout 5s]
 dota_lobby version
@@ -62,7 +62,10 @@ dota_lobby version
 
 - **serve** (the default) runs the service until SIGINT/SIGTERM. Shutdown
   fails `/readyz`, stops the HTTP server (5 s), then disconnects every bot in
-  parallel (15 s budget) and releases the state-dir lock.
+  parallel (15 s budget) and releases the state-dir lock. With `--simulate`
+  the bots run against an in-memory Steam and game coordinator instead, for
+  consumers' integration tests; see
+  [Simulation mode](docs/development/simulation.md).
 - **auth** logs one bot on with its password once and stores the refresh
   token in the token store. With a `shared_secret` it needs no input. Without
   one it takes `--code` (authenticator or email code) or asks on the

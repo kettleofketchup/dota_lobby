@@ -9,7 +9,7 @@ This page is for people changing the code or the docs. To run the service, start
 |---|---|
 | `cmd/dota_lobby/` | Entry point and subcommands: `serve`, `auth`, `healthcheck`, `version` |
 | `pkg/config/` | Config loading with its own Viper instance: files, credentials files, `DOTA_LOBBY_*` env, `*_FILE`, validation, the `Secret` type |
-| `pkg/gc/` | The only package that imports go-steam and go-dota2. `gc.Client` is the seam; `pkg/gc/fake` is a scripted fake for tests |
+| `pkg/gc/` | The only package that imports go-steam and go-dota2. `gc.Client` is the seam; `pkg/gc/fake` is a scripted fake for tests; `pkg/gc/sim` is the simulated Steam and game coordinator of [simulation mode](simulation.md) |
 | `pkg/auth/` | Token store, Steam Guard TOTP, the EResult classifier, the state-dir `flock` |
 | `pkg/bot/` | The per-bot state machine (`next()`, a pure function), its supervisor, the GC request worker and the manager |
 | `pkg/api/` | HTTP API: health endpoints and the `/v1` operations (huma on the standard mux), problem+json errors, the OpenAPI document |

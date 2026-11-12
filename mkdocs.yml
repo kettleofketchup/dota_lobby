@@ -80,3 +80,4 @@ nav:
       - Overview: development/index.md
       - Changelog: development/changelog.md
       - Releasing: development/releasing.md
+      - Simulation mode: development/simulation.md

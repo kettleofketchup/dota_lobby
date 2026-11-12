@@ -13,7 +13,7 @@ dota_lobby/
 │   ├── api/             # HTTP API server (handlers, middleware)
 │   ├── auth/            # Token store, TOTP, EResult classifier, state-dir lock
 │   ├── bot/             # Per-bot supervisor, GC worker, manager
-│   ├── gc/              # Only importer of go-steam/go-dota2 (+ fake/)
+│   ├── gc/              # Only importer of go-steam/go-dota2 (+ fake/, sim/)
 │   └── config/          # Configuration loading with Viper
 ```
 
@@ -63,6 +63,7 @@ just release::upgrade      # Cut a release (repo admin); also hotfix, major, cur
 | GET | /health | No | Detailed health, always 200 |
 | GET | /v1/bots, /v1/bots/{name} | Yes* | Bot states |
 | any | /v1/lobbies/... | Yes* | 501 until Phase 3 |
+| any | /v1/sim/... | Yes* | Simulator control; only with `serve --simulate` |
 
 *Only if `secrets.api_key` is configured
 
