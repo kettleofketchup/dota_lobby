@@ -69,6 +69,7 @@ nav:
   - Deployment:
       - Docker Compose: deployment/docker-compose.md
       - docker run: deployment/docker.md
+      - Kubernetes: deployment/kubernetes.md
       - Build from source: deployment/from-source.md
   - API: api/index.md
   - Operations:
