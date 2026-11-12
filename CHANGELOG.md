@@ -14,3 +14,363 @@ publishes the GitHub Release and `container.yml` the image. See
 ## [Unreleased]
 
 <!-- Do not edit. Unreleased changes live in changelog.d/; `just release::` assembles them here. -->
+
+## [0.1.0] - 2026-11-12
+
+### Upgrading
+
+From this release on, the service copies its database before it applies any migration, to
+`<state_dir>/backups/` (`/app/state/backups/` in the container). The first start after an
+upgrade that brings migrations writes a copy as large as the database, so leave that much free
+space on the state volume. If the copy cannot be written, the service exits with
+`refusing to migrate: pre-migration backup failed` and leaves the database untouched. The new
+keys `store.backup.enabled` (default `true`), `store.backup.dir` (default
+`<state_dir>/backups`) and `store.backup.keep` (default `5`) need no change.
+
+Migrations cannot be undone, so before every upgrade also take a copy on the host. With Docker
+Compose, after `docker compose pull` and before `just docker up`:
+
+```bash
+just docker backup
+```
+
+It runs the new image in a one-off container on the state volume, never the old container,
+which has no `backup` command. So it works whether the old container is running or not, with
+the new `DOTA_LOBBY_TAG` set and pulled.
+
+Bots now log in headless with a Steam Guard mobile authenticator instead of a bare
+password. Before upgrading, set up each bot as described in
+[Bot accounts](https://kettleofketchup.github.io/dota_lobby/configuration/bot-accounts/):
+add an authenticator with steamguard-cli, then give the service the account's
+`shared_secret` alongside the username and password. An account with Steam Guard turned
+off, as the old docs advised, should have the authenticator added first.
+
+The service now writes a token store and a lock file to `state_dir`. With Docker Compose,
+`compose.yaml` mounts the named volume `state` at `/app/state`; with `docker run`, mount a
+writable volume there.
+
+The old `secrets.bots` list and `server.api_key` still load, with a deprecation warning.
+Move them to the keyed `secrets.bots.<name>` map and `secrets.api_key`.
+
+`/bots`, `/lobby/create` and `/lobby/info` now return `410 Gone`. Use `/v1/bots`; lobby
+endpoints return `501` until lobby support lands.
+
+API errors changed format. Every error is now an RFC 9457 problem with
+`Content-Type: application/problem+json`, and the fields moved to the top level:
+
+```json
+{"title": "Conflict", "status": 409, "detail": "lobby is in_game", "code": "invalid_state", "retryable": false}
+```
+
+was
+
+```json
+{"error": {"code": "invalid_state", "message": "lobby is in_game", "retryable": false}}
+```
+
+Read `code` and `retryable` from the top level, and `detail` instead of `message`. The `code`
+values are unchanged, with `internal` added for a `500`.
+
+Requests that fail validation now answer `422 invalid_request` instead of `400`, with one
+entry per problem in `errors` (`location` such as `body.teams.radiant.players[0]` or
+`query.limit`, and `message`). This covers unknown or mistyped body fields, missing required
+fields (`external_ref`, `name`, `teams` on create; `teams` on roster; `account_id` on kick),
+bad query parameters (`state`, `active`, `limit`, `after`) and bad path parameters such as a
+league ID that is not a positive 32-bit number. `400` is left for a body that is not JSON. A
+body without a `Content-Type` is now read as JSON instead of answering `415`.
+
+The database gains `bot_leagues.first_seen_at` and a `bot_league_changes` table. The migration
+runs by itself at startup; leagues already stored start with their last refresh time as first
+seen, and no change is recorded for them. A database written by this release is refused by
+older ones.
+
+The database gains the `lobbies`, `lobby_players` and `lobby_events` tables. The migration runs
+by itself at startup; a database written by this release is refused by older ones.
+
+The default `lobby.host_seat_strategy` changed to `[caster, self_kick]`. A config that sets the
+key keeps its own list. Which strategy lets a launch reach a game has not been confirmed live
+yet; if launches keep failing with the caster slot, put another strategy first:
+
+```yaml
+lobby:
+  host_seat_strategy: [player_pool, self_kick, caster]
+```
+
+The lobby passwords are stored in the database (`store.path`, mode `0600`); include it in
+whatever protects the state volume.
+
+The database gets a webhook delivery queue on the first start; the migration runs on its own.
+
+`webhooks` entries were accepted but unused before. They are now delivered, and each one needs
+its signing secret under `secrets.webhook_secrets`, keyed by the exact URL, or the service
+refuses to start. A URL may now appear only once in `webhooks`.
+
+### Security
+
+- `Secret` values are redacted in every `fmt` verb, JSON, text and `slog` output, and
+  credentials files that are still sops-encrypted are rejected.
+- Token and lock files are written with mode 0600 in a 0700 directory, and a second process
+  using the same `state_dir` refuses to start.
+- A wrong method on a protected `/v1` path answers `401` without the API key, so the `Allow`
+  list is not revealed to unauthenticated callers.
+- Steam Guard codes are held as redacted secrets in the Steam client credentials.
+- Webhook deliveries are signed: `X-Dota-Lobby-Signature` is the HMAC-SHA256 of
+  `"<X-Dota-Lobby-Timestamp>.<body>"` under the webhook's secret, with a fresh timestamp on
+  every attempt so receivers can reject replays older than 5 minutes. A webhook without a
+  signing secret stops startup.
+- An optional static token (`webhooks[].token_header` with `secrets.webhook_tokens`) lets a
+  receiver keep its existing service-token check. Neither the token, the secret nor the lobby
+  password is logged or put in an event; receiver URLs are logged, and named in startup errors,
+  without their query or user info.
+- Redirects from a receiver are never followed.
+- API keys are compared in constant time.
+- Credentials and the API key use a `Secret` type that prints and marshals to JSON as
+  `***REDACTED***`, so they stay out of logs.
+- The service logs `WARNING: API key authentication disabled - all endpoints are public` at
+  startup when `server.api_key` is not set.
+
+### Added
+
+- `CHANGELOG.md`, assembled at release time from per-PR fragments in `changelog.d/`.
+- A `changelog` CI check that rejects hand edits to `CHANGELOG.md`, malformed fragments and
+  fragments a release already consumed, and warns when a pull request adds none.
+- `just release::hotfix`, `just release::upgrade` and `just release::major` cut a release:
+  they assemble the notes, commit, tag `vX.Y.Z` and push.
+- GitHub Releases carry the version's `CHANGELOG.md` section and a commit list as their body.
+- **Backup before migrations.** Before it applies a pending migration to an existing database,
+  the service writes a copy to `<state_dir>/backups/`
+  (`dota_lobby-<from>-to-<to>-<UTC time>.db`) and checks it. Once the migrations have
+  succeeded it keeps the newest 5; a failed migration deletes none. If the copy fails,
+  nothing is migrated and the service exits with
+  `refusing to migrate: pre-migration backup failed`. New keys: `store.backup.enabled`,
+  `store.backup.dir` and `store.backup.keep`.
+- `dota_lobby backup --out PATH` copies the database on demand. It opens it read-only and takes
+  no lock, so it works while the service runs, and it needs no secrets. A directory `--out`
+  gets a timestamped `dota_lobby-manual-*.db`, and `--keep-manual N` prunes older manual copies
+  there. `--missing-ok` exits `0` without writing anything when there is no database yet.
+- `just docker backup [dir]` takes that snapshot in a one-off container of the
+  `DOTA_LOBBY_TAG` image, next to the running service or without it, and copies it to a host
+  directory (`backups/` by default).
+- `just secrets webhook-secret <url>` generates a webhook signing secret into
+  `secrets/service.sops.yaml` without printing it. `just secrets webhook-secret-env <url>
+  <env_file>` hands the same secret to the receiver's env file, and `webhook-secret-env-add`
+  adds it next to the old one there, for a rotation without failed deliveries.
+  `just secrets webhook-token <url>` stores a receiver token read from stdin, and
+  `just secrets list` shows which webhook URLs have a secret or token.
+- **Headless bot login.** Each bot logs in with password plus a Steam Guard code generated
+  from its `shared_secret`, keeps the refresh token in `state_dir`, and logs in again from
+  that token after a restart. Bots never run Steam or Dota 2.
+- **Per-bot supervisor** with staggered logins, reconnect with jittered backoff, cooldowns
+  for rate limits and sessions elsewhere, and a `needs_attention` state for problems a
+  person must fix.
+- Endpoints `/livez`, `/readyz`, `/health`, `/v1/bots`, `/v1/bots/{name}` and
+  `POST /v1/bots/{name}/retry`.
+- Subcommands `serve`, `auth --bot <name>` and `healthcheck`, and a container
+  `HEALTHCHECK`.
+- Config from per-bot credentials files (`credentials_file`, `credentials_dir`) in the
+  format `sops decrypt` produces, `DOTA_LOBBY_*` environment variables and `*_FILE`
+  variants.
+- `just secrets` and `just docker` recipes that keep bot credentials in local sops files and
+  decrypt them to a tmpfs directory only while the stack runs.
+- `renew_blocked` in `/v1/bots`: why background token renewal stopped. A refused password is
+  never sent to Steam again, a rate limit pauses logons for every bot, and a rejected Steam
+  Guard code is retried in the next code window at most twice.
+- **OpenAPI spec.** The `/v1` API is described as OpenAPI 3.1, served without the API key at
+  `/openapi.json` and `/openapi.yaml` (`/openapi-3.0.json` and `/openapi-3.0.yaml` for older
+  client generators) and committed as `api/openapi.yaml`. Every operation has a stable
+  `operationId`, and the webhook event is included as the `LobbyEvent` schema under
+  `webhooks.lobby-event`, with the `data` of every event type typed through a discriminator on
+  `type`, so clients and webhook receivers can be generated from one document.
+- `just go::openapi` regenerates `api/openapi.yaml`; a test fails when it is out of date.
+- **League inventory.** `GET /v1/leagues` now shows, for every league, each holder's
+  `first_seen_at`, `bot_state`, `ready` and the `lobby_id` it hosts, plus `holders_total` and
+  `holders_free` (holders that could take a new lobby now). The existing fields stay.
+- `GET /v1/leagues/{id}` returns one league in that shape; `404` when no bot holds it.
+- `GET /v1/bots/{name}/leagues` lists a bot's leagues with their source, `verified` and
+  `first_seen_at`, the outcome of its last league refresh, and its recent ticket changes
+  (`added` / `removed`, newest first).
+- `POST /v1/bots/{name}/leagues/refresh` fetches a bot's league list from the game coordinator
+  now, within `gc.request_timeout`, so a newly granted ticket counts at once; `503` when the bot
+  is not `gc_ready`. `POST /v1/leagues/refresh` does it for every ready bot and reports each
+  bot's outcome. A bot fetched successfully less than 15 seconds ago is not asked again.
+- The database records when each league first appeared for a bot and every league that
+  appeared or disappeared; each change is also logged at info as `bot league tickets changed`.
+- **Lobby chat.** With `lobby.chat.enabled`, the bot joins each lobby's chat (again after a
+  reconnect) and answers `!help`, `!teams`, `!ready`, `!unready` and `!start`, and `!cancel`
+  for admins (`lobby.admins` and the lobby's `admins`). Senders are identified by the account
+  ID the game coordinator puts on the message, never by their chat name, and only lobby members
+  are answered.
+- `!start` launches after `lobby.chat.start_countdown` (10 s). A player can start a `ready`
+  lobby; an admin's start is a forced launch from `waiting` too. A player's start stops if the
+  lobby stops being ready. After `lobby.max_launch_attempts` no chat start launches; only an
+  API launch with `force` does.
+- The chat join runs alongside the lobby, never holding up API calls or the launch, gets at
+  most 5 s, and backs off from 30 s to 5 min after repeated failures. `!ready` and `!unready`
+  share a 3 s cooldown per player.
+- With `"ready_check": true`, a rostered lobby is only `ready` once every seated player typed
+  `!ready`. Players lose the mark when they leave their side, shown in their `ready` field and
+  in `lobby.player_ready` / `lobby.player_unready` events.
+- The bot tells a player it moved off the wrong side which side is theirs, and says when
+  everyone is set. Its messages are spaced by `lobby.chat.send_interval` (1 s).
+- New keys: `lobby.chat.prefix`, `lobby.chat.send_interval`, `lobby.chat.start_countdown`.
+  `lobby.chat.enabled` and `lobby.admins` are now used.
+- **Lobby hosting.** `POST /v1/lobbies` accepts a lobby and answers `202` in `pending`; a free
+  bot that holds the league creates it in the background, and a lobby that comes back with a
+  different league is destroyed and fails as `league_rejected`. `external_ref` makes the
+  request idempotent: the same request returns the existing lobby, a different one is
+  `409 conflict`, and the ref is free again once the lobby ends. A league no bot holds is
+  `422 league_not_held`.
+- `GET /v1/lobbies` (filters, cursor paging), `GET`, `PATCH` and `DELETE /v1/lobbies/{id}`,
+  and `invite`, `kick`, `roster`, `launch`, `teams/flip` and `teams/shuffle` under it. The
+  lobby password is only in the create and `GET /v1/lobbies/{id}` responses.
+- Rostered players get one invite each, recorded before it is sent so a restart never repeats
+  it; resends are limited by `lobby.invite.min_resend` and `max_per_player`. Players on the
+  wrong side and strangers on a side are moved back to the pool, at most once per
+  `lobby.enforce_cooldown` per member.
+- Before every launch the bot leaves its player slot with the `lobby.host_seat_strategy` list,
+  each strategy confirmed in the lobby. A launch that does not reach a game returns the lobby to
+  `waiting` and the next launch uses the next strategy, up to `lobby.max_launch_attempts`.
+  `launch: auto` launches `lobby.auto_launch_delay` after the lobby is ready.
+- The match ID and the lobby's outcome (winner side and `team_ref`, marked provisional) are
+  recorded, and every change is stored as a numbered lobby event.
+- Lobbies survive a restart: each one gets its bot back and carries on, or fails as
+  `lobby_lost` / `lost_in_game` when the lobby is gone. With `lobby.destroy_on_shutdown`,
+  lobbies that have not launched are destroyed at shutdown instead.
+- A bot that comes back from an outage still holding a lobby that ended meanwhile destroys it,
+  or only leaves it if the match launched.
+- `teams/flip` swaps the rosters once the lobby shows the flip, so seated players are never
+  moved off their side by the swap.
+- New keys: `lobby.host_seat_confirm_timeout`, `max_launch_attempts`, `pending_timeout`,
+  `auto_launch_delay`, `postgame_linger`, `enforce_cooldown`, `readopt_timeout`,
+  `drain_timeout`, `destroy_on_shutdown`, `admins`, and `store.retention`. `gc.create_timeout`
+  and the existing `lobby.*` timeouts are now used.
+- **League discovery.** Each bot asks the game coordinator which leagues its account
+  administers when it reaches `gc_ready` and every `league.refresh_interval` (30 min).
+  `bots[].leagues` from the config is an unverified fallback until that list is known, or
+  always with `league.allow_unverified: true`.
+- `GET /v1/leagues` lists every league a bot may host and which bots hold it, with the source
+  (`gc` or `config`) and when the list was fetched. `GET /v1/leagues/{id}/nodes` returns a
+  league's lobby nodes through a ready bot that holds it, falling back to the next ready holder
+  when one fails, within `gc.request_timeout` (capped at 12 s) including queue wait.
+- `/v1/bots` and `/v1/bots/{name}` gain `ready_since`, `leagues` and `lobby` (always `null`
+  until lobbies are created).
+- **SQLite database** at `store.path` (default `<state_dir>/dota_lobby.db`, mode `0600`),
+  migrated automatically at startup. It keeps the league lists across restarts. A database
+  written by a newer release is refused.
+- **Webhooks.** Every lobby event is pushed to the receivers in `webhooks` as a JSON envelope
+  with a unique `id`, the lobby's `seq`, the time, a summary of the lobby (`external_ref`,
+  `state`, `bot`, `gc_lobby_id`, `league_id`, `metadata`) and the event's `data`. Each
+  webhook picks event types with globs in `webhooks[].events`; without `events` it gets every
+  event.
+- Deliveries are queued in the database in the transaction that stores the event and survive
+  restarts. A lobby's events reach each receiver in `seq` order; other lobbies are not held
+  back. Timeouts, connection errors, `408`, `425`, `429` and `5xx` are retried after 10 s,
+  30 s, 2 min, 10 min, 30 min and then hourly (±20 %, `Retry-After` honoured) until
+  `webhook_delivery.max_age` (24 h); other answers give the delivery up at once.
+- `GET /v1/lobbies/{id}/events?after=&limit=` lists a lobby's events in the same envelope, for
+  catching up on anything a receiver missed.
+- New keys: `webhooks[].token_header`, `webhook_delivery.timeout`, `webhook_delivery.max_age`
+  and `secrets.webhook_tokens`. `webhooks` and `secrets.webhook_secrets` are now used.
+- Each webhook has its own 4 delivery slots, so a receiver that hangs until
+  `webhook_delivery.timeout` does not delay the others. A delivery whose queue update fails
+  (a full or read-only database) is tried again 30 s later instead of being resent at once.
+- Multi-bot manager: logs every Steam account listed in `secrets.yaml` on to Steam and
+  reconnects them when they drop.
+- REST API: `GET /health`, `GET /bots`, `POST /lobby/create` and `GET`/`POST /lobby/info`.
+  The lobby endpoints validate requests and pick a free bot but do not create lobbies yet.
+- Configuration with Viper, split into `config.yaml` (server settings) and `secrets.yaml`
+  (bot credentials).
+- Optional API key authentication: set `server.api_key` and send the key as `X-API-Key` or
+  `Authorization: Bearer <key>`. `/health` stays public.
+- Request validation on `POST /lobby/create`: `lobby_name` is required and at most 100
+  characters, `password` at most 50.
+- Release workflow that attaches the Linux amd64 binary to a GitHub Release for every `v*`
+  tag, and golangci-lint on every pull request and push to `main`.
+- Container image: a multi-stage `Dockerfile` that builds a static binary into a distroless
+  `nonroot` image, published to `ghcr.io/kettleofketchup/dota_lobby` for `linux/amd64` and
+  `linux/arm64` on every `v*` tag.
+- `compose.yaml` for a single-machine deployment that mounts `config/` read-only.
+- `just docs::serve` and `just docs::build` work (the `Dockerfile.docs` and `pyproject.toml` they
+  need were missing), and the `just go::*` recipes run from the repo root wherever `just` is
+  called from.
+
+### Changed
+
+- Built on the upstream go-steam and go-dota2 libraries with Go 1.26 or newer, replacing the
+  pinned versions whose password login Steam no longer accepts.
+- The container image builds with Go 1.27.1 and keeps a writable state volume at
+  `/app/state`; the root filesystem stays read-only.
+- `dota_lobby healthcheck` reads `server.port` from the same config as `serve`, over loopback,
+  and no longer needs `DOTA_LOBBY_SERVER_PORT` when the port is set in `config.yaml`.
+- A credentials file that sets one field under two names (for example `STEAM_PASS` and
+  `password`) with different values is rejected instead of picking one.
+- A `STEAM_REFRESH_TOKEN` that is not a JWT is accepted as the seed, with an unknown expiry.
+- A graceful stop sends `SetPlaying(false)` before closing the connection, and stopping a bot
+  no longer waits past its budget for a stuck game coordinator request.
+- Background token renewal runs only while a bot is `gc_ready` with an unexpired token. If a
+  reconnect needs a password login while a renewal is running, it waits for that renewal
+  instead of submitting the same Steam Guard code twice. A renewed token is used at the next
+  logon rather than being replaced by a new password login.
+- A refresh token Steam has refused is remembered (as a hash, in the bot's state directory)
+  and is not seeded again from `STEAM_REFRESH_TOKEN` on a retry or restart; a new seed is
+  accepted.
+- Logon stagger slots are held one per bot, so retries and backoff loops no longer push
+  other bots' first logons later.
+- `POST /v1/bots/{name}/retry` answers `503` instead of hanging when the bot's run loop is
+  backed up, and stopping a bot no longer waits out the whole shutdown budget when Steam
+  never confirms the disconnect.
+- The HTTP API runs on huma v2 on the standard library mux. Routes, success statuses and
+  response fields are unchanged; errors are `application/problem+json` and validation errors
+  are `422` (see Upgrading).
+- Error responses never echo a rejected request body or object back, so a lobby password in a
+  bad request does not reach a client's error log. The cause of a `5xx` is logged, never sent.
+- `invited` in the `POST /v1/lobbies/{id}/invite` response is `[]` rather than `null` when
+  nobody was invited.
+- `lobby.host_seat_strategy` defaults to `[caster, self_kick]` (was
+  `[self_kick, player_pool, spectator, caster]`), and `no_team` is a valid strategy.
+- `/v1/lobbies` no longer answers `501`, and `lobby` in `/v1/bots` names the lobby a bot hosts.
+
+### Removed
+
+- The `/bots`, `/lobby/create` and `/lobby/info` endpoints; they return `410 Gone`.
+
+### Documentation
+
+- New Development > Changelog page on writing fragments; the Releasing page describes
+  `just release::`.
+- A Backups section in the Docker Compose guide: the automatic pre-migration copies,
+  `just docker backup`, and how to restore one. The upgrade steps now take a backup first and
+  point to the changelog's upgrade notes.
+- The webhooks guide shows the `just secrets` recipes for setting up DraftForge, a two-phase
+  secret rotation that keeps deliveries working, and notes that a `403` from DraftForge's
+  allowlist or its Helm ingress gives deliveries up at once.
+- The `store.backup.*` keys in the configuration reference, the `backup` subcommand in the
+  build-from-source guide, and a troubleshooting entry for a failed pre-migration backup.
+- The release docs no longer say to make the GHCR package public by hand: a package
+  published from a public repository is public already, so the first-release step is
+  now to check that the image pulls without logging in. The Docker page says when the
+  `latest`, `X.Y` and `X` tags exist, and troubleshooting names a private package as the
+  cause of `unauthorized` on pull.
+- Bot accounts, configuration, Docker, API and troubleshooting pages rewritten for headless
+  bots, including the steamguard-cli setup runbook.
+- API reference for the league inventory and refresh endpoints, and a section on adding a league
+  ticket to a bot account and refreshing its list in the bot accounts guide.
+- A Lobby chat page under Operations with the commands for players and admins and how the
+  ready check works, the `lobby.chat` keys in the configuration reference, and a
+  troubleshooting entry for a bot that does not answer in the chat.
+- Lobby sections in the API reference (states, endpoints, the lobby object, host seat, events,
+  restarts), the `lobby` keys in the configuration reference, and troubleshooting for
+  `league_rejected`, `host_not_seated`, failed launches and invites that do not arrive.
+- API reference for the league endpoints and the new `/v1/bots` fields, the `league.*` and
+  `store.path` keys in the configuration reference, and a troubleshooting section for a bot
+  that does not list a league.
+- A Webhooks page under Operations: configuration, the request and its headers, signature
+  verification with a Python example and a test vector, the retry and ordering rules, every
+  event type with its data, and a section on receiving the events in DraftForge.
+- The events endpoint in the API reference, the `webhooks` and `webhook_delivery` keys and
+  the webhook secrets in the configuration reference, and a troubleshooting entry for
+  webhooks that do not arrive.
+- Documentation site at https://kettleofketchup.github.io/dota_lobby/, built with MkDocs
+  Material and published to GitHub Pages from `main`: quick start, configuration
+  reference, bot accounts, Docker Compose, `docker run` and from-source deployment, API
+  reference, troubleshooting and known limitations. The README points to it.

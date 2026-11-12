@@ -1,1 +1,0 @@
-- The `/bots`, `/lobby/create` and `/lobby/info` endpoints; they return `410 Gone`.
