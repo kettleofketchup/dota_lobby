@@ -172,7 +172,8 @@ func Load(opts Options) (*Config, error) {
 		}
 		cfg.Server.APIKey = ""
 	}
-	cfg.Store.resolvePaths(cfg.StateDir)
+	cfg.storeSet = storePathsSet{path: cfg.Store.Path != "", backupDir: cfg.Store.Backup.Dir != ""}
+	cfg.Store.resolvePaths(cfg.StateDir, cfg.storeSet, cfg.Simulation.Enabled)
 
 	used := map[string]bool{}
 	for _, p := range bots {
@@ -194,7 +195,7 @@ func Load(opts Options) (*Config, error) {
 				DeviceName:   s.DeviceName,
 			},
 		}
-		if b.Enabled && !b.Credentials.Password.IsSet() && !b.Credentials.RefreshToken.IsSet() {
+		if b.Enabled && !cfg.Simulation.Enabled && !b.Credentials.Password.IsSet() && !b.Credentials.RefreshToken.IsSet() {
 			log.Warn("bot has no password or refresh token; it can log on only with a token already in state_dir", "bot", b.Name)
 		}
 		cfg.Bots = append(cfg.Bots, b)
@@ -453,13 +454,25 @@ func applyFileEnv(v *viper.Viper) error {
 	return nil
 }
 
-// resolvePaths fills the empty store paths in from state_dir.
-func (sc *StoreConfig) resolvePaths(stateDir string) {
-	if sc.Path == "" {
+// storePathsSet records which store paths the config set explicitly.
+type storePathsSet struct{ path, backupDir bool }
+
+// resolvePaths fills the store paths the config did not set in from
+// state_dir: <state_dir>/dota_lobby.db and <state_dir>/backups, or
+// SimulationStoreFile and SimulationBackupDir in simulation mode, so a
+// simulated run never touches the real database or prunes its backups.
+func (sc *StoreConfig) resolvePaths(stateDir string, set storePathsSet, simulation bool) {
+	if !set.path {
 		sc.Path = filepath.Join(stateDir, "dota_lobby.db")
+		if simulation {
+			sc.Path = filepath.Join(stateDir, SimulationStoreFile)
+		}
 	}
-	if sc.Backup.Dir == "" {
+	if !set.backupDir {
 		sc.Backup.Dir = filepath.Join(stateDir, "backups")
+		if simulation {
+			sc.Backup.Dir = filepath.Join(stateDir, SimulationBackupDir)
+		}
 	}
 }
 
@@ -498,7 +511,8 @@ func LoadStore(opts Options) (StoreConfig, error) {
 			Keep:    v.GetInt("store::backup::keep"),
 		},
 	}
-	sc.resolvePaths(v.GetString("state_dir"))
+	set := storePathsSet{path: sc.Path != "", backupDir: sc.Backup.Dir != ""}
+	sc.resolvePaths(v.GetString("state_dir"), set, v.GetBool("simulation::enabled"))
 	return sc, nil
 }
 

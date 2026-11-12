@@ -26,6 +26,8 @@ type Config struct {
 	Webhooks  []WebhookConfig `mapstructure:"webhooks"`
 	// WebhookDelivery applies to every webhook.
 	WebhookDelivery WebhookDeliveryConfig `mapstructure:"webhook_delivery"`
+	// Simulation runs the service against a simulated Steam and GC.
+	Simulation SimulationConfig `mapstructure:"simulation"`
 
 	// CredentialsDir holds one decrypted credentials file per bot, named
 	// <bot>.yaml (or .yml, .json, .env), typically a tmpfs filled from the
@@ -36,6 +38,10 @@ type Config struct {
 	Bots []BotConfig `mapstructure:"-"`
 	// Secrets holds the service-wide secrets; bot credentials are on Bots.
 	Secrets Secrets `mapstructure:"-"`
+
+	// storeSet records which store paths were configured, so simulation
+	// mode does not move explicit ones.
+	storeSet storePathsSet
 }
 
 // ServerConfig is the HTTP API listener.
@@ -213,6 +219,75 @@ type WebhookDeliveryConfig struct {
 	MaxAge time.Duration `mapstructure:"max_age"`
 }
 
+// SimulationConfig is simulation mode: the bots run against an in-memory
+// Steam and game coordinator instead of logging on, for integration tests
+// of the service's consumers. It refuses bots with real credentials.
+type SimulationConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+	// AutoJoin makes an invited player join AutoJoinDelay after the invite
+	// and take a slot on its rostered side.
+	AutoJoin      bool          `mapstructure:"auto_join"`
+	AutoJoinDelay time.Duration `mapstructure:"auto_join_delay"`
+	// AutoReady makes an auto-joined player say the ready chat command
+	// once seated.
+	AutoReady bool `mapstructure:"auto_ready"`
+	// AutoStart starts the match of a launched lobby AutoStartDelay after
+	// the launch.
+	AutoStart      bool          `mapstructure:"auto_start"`
+	AutoStartDelay time.Duration `mapstructure:"auto_start_delay"`
+	// Bots set per-bot simulation details, by bot name.
+	Bots []SimulationBot `mapstructure:"bots"`
+}
+
+// SimulationBot is one bot's simulated account.
+type SimulationBot struct {
+	Name string `mapstructure:"name"`
+	// AccountID is the simulated account ID; 0 picks one from the bot's
+	// position in the bots list.
+	AccountID uint32 `mapstructure:"account_id"`
+	// Leagues are the leagues the simulated account administers; empty
+	// uses the bot's bots[].leagues.
+	Leagues []uint32 `mapstructure:"leagues"`
+}
+
+// SimulationAccountBase is the first simulated bot account ID, far above
+// the real accounts players have.
+const SimulationAccountBase uint32 = 4_000_000_000
+
+// SimulatedBot returns the simulated account of the i-th bot in Bots.
+func (c *Config) SimulatedBot(i int) SimulationBot {
+	b := c.Bots[i]
+	out := SimulationBot{Name: b.Name, AccountID: SimulationAccountBase + uint32(i) + 1, Leagues: b.Leagues}
+	for _, s := range c.Simulation.Bots {
+		if !strings.EqualFold(s.Name, b.Name) {
+			continue
+		}
+		if s.AccountID != 0 {
+			out.AccountID = s.AccountID
+		}
+		if len(s.Leagues) > 0 {
+			out.Leagues = s.Leagues
+		}
+	}
+	return out
+}
+
+// Simulation mode's defaults for store.path and store.backup.dir, inside
+// state_dir, so a simulated run never touches the real database or its
+// backups in the same state_dir.
+const (
+	SimulationStoreFile = "dota_lobby-simulation.db"
+	SimulationBackupDir = "backups-simulation"
+)
+
+// EnableSimulation turns simulation mode on after Load, for the serve
+// --simulate flag, and validates the result.
+func (c *Config) EnableSimulation() error {
+	c.Simulation.Enabled = true
+	c.Store.resolvePaths(c.StateDir, c.storeSet, true)
+	return c.Validate()
+}
+
 // Secrets are the service-wide secrets from the secrets file and env.
 type Secrets struct {
 	APIKey      Secret `mapstructure:"api_key"`
@@ -360,6 +435,13 @@ func defaults() map[string]any {
 
 		"webhook_delivery::timeout": "10s",
 		"webhook_delivery::max_age": "24h",
+
+		"simulation::enabled":          false,
+		"simulation::auto_join":        false,
+		"simulation::auto_join_delay":  "1s",
+		"simulation::auto_ready":       false,
+		"simulation::auto_start":       false,
+		"simulation::auto_start_delay": "5s",
 	}
 }
 
