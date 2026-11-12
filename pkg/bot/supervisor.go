@@ -82,6 +82,9 @@ type SupervisorOptions struct {
 	TOTPSkew time.Duration
 	// Seed seeds the backoff jitter; 0 picks a random seed.
 	Seed uint64
+	// Simulated runs the bot against a simulated GC client: it logs on
+	// without a token and never touches the token store.
+	Simulated bool
 }
 
 // Supervisor runs one bot's state machine on its own goroutine. Its
@@ -267,7 +270,7 @@ func (s *Supervisor) Stalled(maxAge time.Duration) bool {
 func (s *Supervisor) Start(ctx context.Context) {
 	s.startOnce.Do(func() {
 		s.ctx, s.cancel = context.WithCancel(ctx)
-		s.snap.HasToken = s.loadToken()
+		s.snap.HasToken = s.opts.Simulated || s.loadToken()
 		go s.run()
 		s.push(Start{})
 	})
@@ -442,7 +445,7 @@ func (s *Supervisor) handle(in Input) {
 		// An operator may have put a new token in place (auth --bot).
 		switch s.snap.State {
 		case StateNeedsAttention, StateBackoff, StateCoolingDown:
-			s.snap.HasToken = s.loadToken()
+			s.snap.HasToken = s.opts.Simulated || s.loadToken()
 		}
 		// The operator has had their say about the credentials too.
 		s.clearRenewBlock()
@@ -541,6 +544,9 @@ func (s *Supervisor) exec(a Action) Input {
 	case Authenticate:
 		s.startAuth()
 	case DeleteToken:
+		if s.opts.Simulated {
+			break
+		}
 		if err := s.store.DeleteRejected(); err != nil {
 			s.log.Error("delete dead token", "err", err)
 		}
@@ -573,6 +579,9 @@ func (s *Supervisor) stopTimer() {
 // connect logs on with the stored token. An unreadable or expired token
 // counts as no token, which sends the machine to Authenticate.
 func (s *Supervisor) connect() error {
+	if s.opts.Simulated {
+		return s.client.Connect(s.ctx, gc.Credentials{Username: s.bot.Username, DeviceName: s.bot.Credentials.DeviceName})
+	}
 	tok, err := s.store.Load()
 	switch {
 	case errors.Is(err, auth.ErrNoToken):
