@@ -12,6 +12,7 @@ import (
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 	"github.com/kettleofketchup/dota_lobby/pkg/gc"
 	"github.com/kettleofketchup/dota_lobby/pkg/gc/fake"
+	"github.com/kettleofketchup/dota_lobby/pkg/gc/sim"
 )
 
 func TestGate(t *testing.T) {
@@ -197,5 +198,54 @@ func TestManagerRetry(t *testing.T) {
 	m := &Manager{byName: map[string]*Supervisor{}}
 	if err := m.Retry(t.Context(), "nobody"); !errors.Is(err, ErrUnknownBot) {
 		t.Errorf("unknown bot = %v", err)
+	}
+}
+
+// Simulated bots need no credentials, log on together and leave the token
+// store alone.
+func TestManagerSimulated(t *testing.T) {
+	cfg := &config.Config{StateDir: t.TempDir()}
+	cfg.Steam.LoginStagger = time.Hour
+	for _, n := range []string{"sim-a", "sim-b"} {
+		cfg.Bots = append(cfg.Bots, config.BotConfig{Name: n, Username: n, Enabled: true})
+	}
+	clk := newFakeClock()
+	world := sim.New(sim.Options{})
+	var accounts uint32
+	m := NewManager(cfg, ManagerOptions{
+		Logger:    testLogger(t),
+		Clock:     clk,
+		Simulated: true,
+		NewClient: func(b config.BotConfig) gc.Client {
+			accounts++
+			return world.Client(sim.Bot{Name: b.Name, AccountID: config.SimulationAccountBase + accounts})
+		},
+	})
+	if err := m.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for m.ReadyCount() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("not ready: %+v", m.Statuses())
+		}
+		clk.Advance(250 * time.Millisecond)
+		time.Sleep(200 * time.Microsecond)
+	}
+	if waited := clk.Now().Sub(newFakeClock().Now()); waited > time.Minute {
+		t.Errorf("simulated bots waited %s for logon slots", waited)
+	}
+	for _, st := range m.Statuses() {
+		if st.SteamID == 0 || !st.TokenExpiresAt.IsZero() {
+			t.Errorf("status = %+v", st)
+		}
+	}
+	if err := m.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range cfg.Bots {
+		if _, err := auth.NewStore(cfg.BotStateDir(b)).Load(); !errors.Is(err, auth.ErrNoToken) {
+			t.Errorf("%s: token store touched: %v", b.Name, err)
+		}
 	}
 }

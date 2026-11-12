@@ -1348,3 +1348,24 @@ func TestLobbiesNeverLeakPassKey(t *testing.T) {
 		t.Errorf("password not kept: %q / %q", got.Spec.Password.Reveal(), row.PassKey)
 	}
 }
+
+func TestRosterTeam(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	l, _ := h.toWaiting(spec("game-roster"))
+	tests := []struct {
+		lobbyID uint64
+		account uint32
+		team    gc.Team
+		ok      bool
+	}{
+		{l.GCLobbyID, 11, gc.TeamRadiant, true},
+		{l.GCLobbyID, 21, gc.TeamDire, true},
+		{l.GCLobbyID, 99, 0, false},
+		{l.GCLobbyID + 1, 11, 0, false},
+	}
+	for _, tt := range tests {
+		if team, ok := h.m.RosterTeam(tt.lobbyID, tt.account); team != tt.team || ok != tt.ok {
+			t.Errorf("RosterTeam(%d, %d) = %v %v, want %v %v", tt.lobbyID, tt.account, team, ok, tt.team, tt.ok)
+		}
+	}
+}

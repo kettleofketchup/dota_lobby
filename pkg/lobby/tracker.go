@@ -70,6 +70,9 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 			m.onChat(e, cs, h, msg)
 		case j := <-cs.joinedC():
 			m.chatJoined(e, cs, j)
+			for _, msg := range cs.takeEarly() {
+				m.onChat(e, cs, h, msg)
+			}
 		case <-cs.countdownC():
 		}
 	}

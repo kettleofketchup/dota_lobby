@@ -104,7 +104,8 @@ func nonEmpty(s string) *string {
 }
 
 type botList struct {
-	Bots []botView `json:"bots" doc:"Every bot, in config order"`
+	Bots       []botView `json:"bots" doc:"Every bot, in config order"`
+	Simulation bool      `json:"simulation" doc:"True when the bots run against the simulated Steam and game coordinator (serve --simulate); nothing reaches Steam"`
 }
 
 type botsOutput struct{ Body botList }
@@ -257,7 +258,7 @@ func (s *Server) listBots(context.Context, *struct{}) (*botsOutput, error) {
 	for i, st := range sts {
 		out[i] = s.botView(st, leases)
 	}
-	return &botsOutput{Body: botList{Bots: out}}, nil
+	return &botsOutput{Body: botList{Bots: out, Simulation: s.opts.Simulator != nil}}, nil
 }
 
 func (s *Server) getBot(_ context.Context, in *botNameInput) (*botOutput, error) {

@@ -92,10 +92,10 @@ fatal error. A secrets file that is still sops-encrypted is refused with
 | `league.sources` | list | `[gc, config]` | Where a bot's leagues come from: `gc` asks the game coordinator which leagues the account administers, `config` uses `bots[].leagues`. `web` is accepted but not used yet |
 | `league.refresh_interval` | duration | `30m` | How often each ready bot's league list is fetched again. It is also fetched every time the bot reaches `gc_ready` |
 | `league.allow_unverified` | bool | `false` | Keep using a bot's configured leagues after the game coordinator list is known, even those the game coordinator does not list. Leave it off unless the game coordinator list is wrong |
-| `store.path` | path | empty | The SQLite database. Empty means `<state_dir>/dota_lobby.db`. Created mode `0600`; keep it on the persistent state volume. It holds the lobby passwords |
+| `store.path` | path | empty | The SQLite database. Empty means `<state_dir>/dota_lobby.db`, or `<state_dir>/dota_lobby-simulation.db` in simulation mode. Created mode `0600`; keep it on the persistent state volume. It holds the lobby passwords |
 | `store.retention` | duration | `720h` | How long ended lobbies and their events are kept before an hourly sweep deletes them |
 | `store.backup.enabled` | bool | `true` | Copy the database before applying any pending migration. If the copy fails, startup stops and nothing is migrated. See [Backups](../deployment/docker-compose.md#backups) |
-| `store.backup.dir` | path | empty | Where those copies go. Empty means `<state_dir>/backups`. Created mode `0700`, each copy `0600` |
+| `store.backup.dir` | path | empty | Where those copies go. Empty means `<state_dir>/backups`, or `<state_dir>/backups-simulation` in simulation mode. Created mode `0700`, each copy `0600` |
 | `store.backup.keep` | int | `5` | How many automatic copies to keep. Older ones are deleted once the migrations have succeeded; after a failed migration none is deleted. At least `1`. Copies from `dota_lobby backup` are never deleted by this |
 | `webhooks` | list | empty | Event receivers, see [`webhooks[]`](#webhooks) |
 | `webhook_delivery.timeout` | duration | `10s` | How long one delivery attempt may take, response included |
@@ -131,6 +131,24 @@ How lobbies run. See [Lobbies](../api/index.md#lobbies) for what each step does.
 | `lobby.invite.max_per_player` | int | `5` | Invites per player, the automatic one included |
 | `lobby.regions` | map | `{us_west: 1, us_east: 2, europe: 3, sea: 5}` | Region names for requests. The numbers are unconfirmed; keep them current by hand |
 | `lobby.game_modes` | map | `{ap: 1, cm: 2, cd: 16, ad: 22, turbo: 23}` | Game mode names for requests |
+
+### `simulation`
+
+Runs the bots against a simulated Steam and game coordinator for integration tests; see
+[Simulation mode](../development/simulation.md). `serve --simulate` turns it on too. It refuses
+to start when any bot has a password, shared secret or refresh token.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `simulation.enabled` | bool | `false` | Simulate Steam and the game coordinator. Nothing logs on to Steam |
+| `simulation.auto_join` | bool | `false` | Invited players join and sit on their rostered side by themselves |
+| `simulation.auto_join_delay` | duration | `1s` | From an invite to the join, and from the seat to the ready command |
+| `simulation.auto_ready` | bool | `false` | Auto-joined players say the ready command (`lobby.chat.prefix` + `ready`) once seated |
+| `simulation.auto_start` | bool | `false` | A launched lobby starts its match by itself |
+| `simulation.auto_start_delay` | duration | `5s` | From the launch to the match start |
+| `simulation.bots[].name` | string | required | A bot from `bots[]` |
+| `simulation.bots[].account_id` | int | `4000000000` + position | The simulated account ID |
+| `simulation.bots[].leagues` | list of int | the bot's `bots[].leagues` | Leagues the simulated account administers |
 
 ### `bots[]`
 

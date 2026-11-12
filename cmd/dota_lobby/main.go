@@ -1,6 +1,6 @@
 // Command dota_lobby runs the lobby service and its operator tools.
 //
-//	dota_lobby [serve] [flags]          run the service (the default)
+//	dota_lobby [serve] [flags]          run the service (the default); --simulate fakes Steam
 //	dota_lobby auth --bot NAME [flags]  log a bot on with its password once and store the token
 //	dota_lobby healthcheck [flags]      GET /livez on this host; exit 0 when alive
 //	dota_lobby backup --out PATH        copy the database, also while serve runs
@@ -58,7 +58,7 @@ func main() {
 }
 
 const usageText = `usage:
-  dota_lobby [serve] [--config FILE] [--secrets FILE]
+  dota_lobby [serve] [--config FILE] [--secrets FILE] [--simulate]
   dota_lobby auth --bot NAME [--code CODE] [--force] [--timeout 2m] [--config FILE] [--secrets FILE]
   dota_lobby healthcheck [--url URL] [--timeout 5s]
   dota_lobby backup --out PATH|DIR/ [--keep-manual N] [--missing-ok] [--db FILE] [--timeout 2m] [--config FILE]
@@ -105,6 +105,8 @@ func (c cli) run(ctx context.Context, args []string) int {
 // configFlags are the flags every config-reading command takes.
 type configFlags struct {
 	configFile, secretsFile string
+	// simulate turns simulation mode on; serve sets it from --simulate.
+	simulate bool
 }
 
 func (f *configFlags) register(fs *flag.FlagSet) {
@@ -113,7 +115,7 @@ func (f *configFlags) register(fs *flag.FlagSet) {
 }
 
 func (f configFlags) load(log *slog.Logger) (*config.Config, error) {
-	cfg, err := config.Load(config.Options{ConfigFile: f.configFile, SecretsFile: f.secretsFile, Logger: log})
+	cfg, err := config.Load(config.Options{ConfigFile: f.configFile, SecretsFile: f.secretsFile, Logger: log, Simulate: f.simulate})
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}

@@ -83,8 +83,12 @@ components:
           type:
             - array
             - "null"
+        simulation:
+          description: True when the bots run against the simulated Steam and game coordinator (serve --simulate); nothing reaches Steam
+          type: boolean
       required:
         - bots
+        - simulation
       type: object
     BotView:
       additionalProperties: false
@@ -2388,6 +2392,342 @@ components:
       required:
         - teams
       type: object
+    SimChatResult:
+      additionalProperties: false
+      properties:
+        delivered:
+          description: True when the host was in the lobby chat and got the line
+          type: boolean
+        lobby:
+          $ref: "#/components/schemas/SimLobbyView"
+      required:
+        - delivered
+        - lobby
+      type: object
+    SimChatView:
+      additionalProperties: false
+      properties:
+        account_id:
+          format: int32
+          minimum: 0
+          type: integer
+        at:
+          format: date-time
+          type: string
+        delivered:
+          description: False for a player's line said while the host was not in the lobby chat; the host never saw it. The host's own lines are always true
+          type: boolean
+        persona_name:
+          type: string
+        text:
+          type: string
+      required:
+        - account_id
+        - persona_name
+        - text
+        - at
+        - delivered
+      type: object
+    SimEndRequest:
+      additionalProperties: false
+      properties:
+        result:
+          description: radiant or dire wins, or not_scored (not_scored_canceled)
+          enum:
+            - radiant
+            - dire
+            - not_scored
+          type: string
+      required:
+        - result
+      type: object
+    SimFailRequest:
+      additionalProperties: false
+      properties:
+        mode:
+          description: "lost: the lobby disappears from the bot's cache; load_failed: a launched lobby goes back to the UI state without a game"
+          enum:
+            - lost
+            - load_failed
+          type: string
+      required:
+        - mode
+      type: object
+    SimJoinRequest:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The joining player's 32-bit account ID; an invite is not needed
+          examples:
+            - 11111111
+          format: int32
+          minimum: 1
+          type: integer
+        persona_name:
+          description: The name the player shows in chat; default "Player <account_id>"
+          maxLength: 64
+          type: string
+      required:
+        - account_id
+      type: object
+    SimLobbyList:
+      additionalProperties: false
+      properties:
+        lobbies:
+          description: Every simulated lobby, oldest first
+          items:
+            $ref: "#/components/schemas/SimLobbyView"
+          type:
+            - array
+            - "null"
+      required:
+        - lobbies
+      type: object
+    SimLobbyView:
+      additionalProperties: false
+      properties:
+        bot:
+          description: The bot hosting the lobby
+          type: string
+        chat:
+          description: The lobby chat, oldest first, the last 200 lines
+          items:
+            $ref: "#/components/schemas/SimChatView"
+          type:
+            - array
+            - "null"
+        chat_joined:
+          description: True while the host is in the lobby chat
+          type: boolean
+        created_at:
+          format: date-time
+          type: string
+        game_mode:
+          format: int32
+          minimum: 0
+          type: integer
+        gc_lobby_id:
+          description: The simulated GC lobby ID, as the service's lobby shows it
+          type: string
+        host_account_id:
+          format: int32
+          minimum: 0
+          type: integer
+        league_id:
+          description: The league read back; 0 when the bot does not administer the league asked for
+          format: int32
+          minimum: 0
+          type: integer
+        league_node_id:
+          format: int32
+          minimum: 0
+          type: integer
+        match_id:
+          description: The simulated match ID once the match started
+          type:
+            - string
+            - "null"
+        members:
+          description: Every member, the host included, in join order
+          items:
+            $ref: "#/components/schemas/SimMemberView"
+          type:
+            - array
+            - "null"
+        name:
+          type: string
+        outcome:
+          description: The EMatchOutcome once the match ended
+          format: int32
+          type:
+            - integer
+            - "null"
+        password:
+          type: string
+        pending_invites:
+          description: Invited account IDs that have not joined
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+            - array
+            - "null"
+        server_region:
+          format: int32
+          minimum: 0
+          type: integer
+        state:
+          description: "The GC lobby state: ui before the launch, server_assign after it, run once the match started, postgame once it ended"
+          enum:
+            - ui
+            - server_setup
+            - run
+            - postgame
+            - ready_up
+            - not_ready
+            - server_assign
+          type: string
+        tv_delay_seconds:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - gc_lobby_id
+        - bot
+        - host_account_id
+        - state
+        - name
+        - password
+        - league_id
+        - league_node_id
+        - game_mode
+        - server_region
+        - tv_delay_seconds
+        - match_id
+        - outcome
+        - members
+        - pending_invites
+        - chat_joined
+        - chat
+        - created_at
+      type: object
+    SimMemberView:
+      additionalProperties: false
+      properties:
+        account_id:
+          format: int32
+          minimum: 0
+          type: integer
+        host:
+          description: True for the bot that hosts the lobby
+          type: boolean
+        persona_name:
+          type: string
+        slot:
+          description: The slot on radiant or dire (0-4); the channel for broadcaster; 0 otherwise
+          format: int32
+          minimum: 0
+          type: integer
+        steam_id:
+          description: The SteamID64, as a string
+          type: string
+        team:
+          enum:
+            - radiant
+            - dire
+            - broadcaster
+            - spectator
+            - player_pool
+            - no_team
+          type: string
+      required:
+        - account_id
+        - steam_id
+        - team
+        - slot
+        - persona_name
+        - host
+      type: object
+    SimSayRequest:
+      additionalProperties: false
+      properties:
+        account_id:
+          description: The member who says it
+          examples:
+            - 11111111
+          format: int32
+          minimum: 1
+          type: integer
+        text:
+          examples:
+            - "!ready"
+          maxLength: 300
+          minLength: 1
+          type: string
+      required:
+        - account_id
+        - text
+      type: object
+    SimSeatRequest:
+      additionalProperties: false
+      properties:
+        slot:
+          description: The radiant or dire slot, 0-4, default the first free one; or the broadcaster channel, default 0. Not allowed for other teams
+          format: int32
+          minimum: 0
+          type: integer
+        team:
+          description: Where the player moves; player_pool is the unassigned pool
+          enum:
+            - radiant
+            - dire
+            - player_pool
+            - spectator
+            - broadcaster
+          type: string
+      required:
+        - team
+      type: object
+    SimSettingsRequest:
+      additionalProperties: false
+      properties:
+        auto_join:
+          type: boolean
+        auto_join_delay_ms:
+          format: int64
+          maximum: 3600000
+          minimum: 0
+          type: integer
+        auto_ready:
+          type: boolean
+        auto_start:
+          type: boolean
+        auto_start_delay_ms:
+          format: int64
+          maximum: 3600000
+          minimum: 0
+          type: integer
+      type: object
+    SimSettingsView:
+      additionalProperties: false
+      properties:
+        auto_join:
+          description: Invited players join and take a slot on their rostered side
+          type: boolean
+        auto_join_delay_ms:
+          description: How long after the invite a player joins
+          format: int64
+          type: integer
+        auto_ready:
+          description: Auto-joined players say the ready command once seated
+          type: boolean
+        auto_start:
+          description: A launched lobby starts its match on its own
+          type: boolean
+        auto_start_delay_ms:
+          description: How long after the launch the match starts
+          format: int64
+          type: integer
+        ready_command:
+          description: "What a ready player says: lobby.chat.prefix and ready"
+          type: string
+      required:
+        - auto_join
+        - auto_join_delay_ms
+        - auto_ready
+        - auto_start
+        - auto_start_delay_ms
+        - ready_command
+      type: object
+    SimStartRequest:
+      additionalProperties: false
+      properties:
+        match_id:
+          description: The match ID to report, as a string; default the next simulated one
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      type: object
     TeamReq:
       additionalProperties: false
       properties:
@@ -3970,6 +4310,682 @@ paths:
       summary: Balanced shuffle of an open lobby
       tags:
         - Lobbies
+  /v1/sim/lobbies:
+    get:
+      operationId: list-sim-lobbies
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyList"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: List the simulated lobbies
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}:
+    get:
+      description: The lobby as the simulated game coordinator holds it, chat included.
+      operationId: get-sim-lobby
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Get a simulated lobby
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/chat:
+    post:
+      description: The line reaches the bot when it is in the lobby chat, so chat commands such as !ready and !start can be tested.
+      operationId: say-sim-chat
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimSayRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimChatResult"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Post a chat line as a player
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/end:
+    post:
+      description: The lobby goes to postgame with the outcome, which the service reports as match.ended. 409 invalid_state when no match is running.
+      operationId: end-sim-match
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimEndRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: End the running match
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/fail:
+    post:
+      description: "lost drops the lobby from the bot's cache: after lobby lost grace (10 s) the service fails it as lobby_lost or lost_in_game. load_failed returns a launched lobby to the UI state: the launch failed."
+      operationId: fail-sim-lobby
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimFailRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Make a lobby fail
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/players:
+    post:
+      description: The player joins the unassigned pool, as when accepting an invite. 409 already_member for a member.
+      operationId: join-sim-lobby
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimJoinRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Make a player join
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/players/{account_id}:
+    delete:
+      operationId: leave-sim-lobby
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+        - description: The player's 32-bit account ID
+          in: path
+          name: account_id
+          required: true
+          schema:
+            description: The player's 32-bit account ID
+            examples:
+              - 11111111
+            format: int32
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Make a player leave
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/players/{account_id}/ready:
+    post:
+      description: Says lobby.chat.prefix and ready in the lobby chat as the player, which marks it ready when the lobby has a ready check.
+      operationId: ready-sim-player
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+        - description: The player's 32-bit account ID
+          in: path
+          name: account_id
+          required: true
+          schema:
+            description: The player's 32-bit account ID
+            examples:
+              - 11111111
+            format: int32
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimChatResult"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Make a player say the ready command
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/players/{account_id}/seat:
+    post:
+      description: 409 seat_taken for a taken slot or a full team, not_member for a player not in the lobby.
+      operationId: seat-sim-player
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+        - description: The player's 32-bit account ID
+          in: path
+          name: account_id
+          required: true
+          schema:
+            description: The player's 32-bit account ID
+            examples:
+              - 11111111
+            format: int32
+            minimum: 1
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimSeatRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Make a player take a seat
+      tags:
+        - Simulation
+  /v1/sim/lobbies/{id}/start:
+    post:
+      description: The lobby gets a match ID and goes to run, which the service reports as match.started. 409 invalid_state before the launch.
+      operationId: start-sim-match
+      parameters:
+        - description: The simulated GC lobby ID, or the service's lobby ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The simulated GC lobby ID, or the service's lobby ID
+            examples:
+              - "900000000000000001"
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimStartRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimLobbyView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Start the match of a launched lobby
+      tags:
+        - Simulation
+  /v1/sim/settings:
+    get:
+      operationId: get-sim-settings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimSettingsView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Get the auto-mode settings
+      tags:
+        - Simulation
+    patch:
+      description: Changes the fields given; the others keep their value. Scheduled joins and starts keep their delay.
+      operationId: update-sim-settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimSettingsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimSettingsView"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - apiKey: []
+        - bearer: []
+      summary: Change the auto-mode settings
+      tags:
+        - Simulation
 tags:
   - description: The Steam bot accounts and their state.
     name: Bots
@@ -3977,6 +4993,8 @@ tags:
     name: Leagues
   - description: Create and drive lobbies.
     name: Lobbies
+  - description: "Drive the simulated Steam and game coordinator: players join, take seats and chat, and matches start and end on request. Routed only when the service runs in simulation mode (serve --simulate or simulation.enabled); otherwise these paths answer 404."
+    name: Simulation
 webhooks:
   lobby-event:
     post:

@@ -121,6 +121,24 @@ webhook_delivery:
   timeout: 10s             # one attempt, response included
   max_age: 24h             # retry a failing delivery this long after the event
 
+# Simulation mode, for integration tests of consumers: no bot logs on to
+# Steam; lobbies, players and matches are simulated in memory and driven
+# through /v1/sim. Also `serve --simulate` or DOTA_LOBBY_SIMULATION_ENABLED.
+# Startup is refused when any bot has a password, shared_secret or
+# refresh_token. The database defaults to <state_dir>/dota_lobby-simulation.db.
+# See docs/development/simulation.md.
+simulation:
+  enabled: false
+  auto_join: false         # invited players join and sit on their rostered side
+  auto_join_delay: 1s      # invite to join, and seat to the ready command
+  auto_ready: false        # auto-joined players say the ready command once seated
+  auto_start: false        # a launched lobby starts its match by itself
+  auto_start_delay: 5s     # launch to match start
+  # bots:                  # optional, by name from bots below
+  #   - name: league_bot_1
+  #     account_id: 4000000101  # default 4000000000 + position in bots
+  #     leagues: [20004]        # default: the bot's leagues
+
 bots:
   - name: league_bot_1       # used in the API, logs and env names
     # username: league_bot_1 # Steam account; defaults to STEAM_USER, then name

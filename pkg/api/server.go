@@ -88,6 +88,9 @@ type Options struct {
 	Leases Leases
 	// Lobbies is the lobby manager; nil answers 503 on /v1/lobbies.
 	Lobbies Lobbies
+	// Simulator is the simulated Steam and GC in simulation mode. Nil
+	// leaves the /v1/sim operations unrouted and reports simulation false.
+	Simulator Simulator
 	// GCRequestTimeout bounds a synchronous GC call made for a request,
 	// queue wait included (gc.request_timeout). 0 means
 	// bot.DefaultRequestTimeout; it is capped at MaxSyncGCWait.
@@ -215,6 +218,7 @@ func (s *Server) routes() http.Handler {
 	s.registerBots(r)
 	s.registerLeagues(r)
 	s.registerLobbies(r)
+	s.registerSim(r)
 	documentWebhook(s.api.OpenAPI())
 	oapi := s.api.OpenAPI()
 	r.handle("GET /openapi.json", s.specHandler(openAPIJSON, func() ([]byte, error) { return json.Marshal(oapi) }))

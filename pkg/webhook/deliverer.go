@@ -77,7 +77,9 @@ type Options struct {
 	Concurrency int
 	// Version goes in the User-Agent.
 	Version string
-	Logger  *slog.Logger
+	// Simulation marks every delivery with HeaderSimulation.
+	Simulation bool
+	Logger     *slog.Logger
 	// Now defaults to time.Now.
 	Now func() time.Time
 	// Jitter returns a number in [0, 1); it defaults to math/rand.
@@ -334,6 +336,9 @@ func (d *Deliverer) send(ctx context.Context, rawURL string, h hook, env lobby.E
 	req.Header.Set(HeaderEventType, env.Type)
 	req.Header.Set(HeaderTimestamp, strconv.FormatInt(ts, 10))
 	req.Header.Set(HeaderSignature, Sign(h.secret, ts, body))
+	if d.opts.Simulation {
+		req.Header.Set(HeaderSimulation, "true")
+	}
 	if h.tokenHeader != "" && h.token.IsSet() {
 		req.Header.Set(h.tokenHeader, h.token.Reveal())
 	}

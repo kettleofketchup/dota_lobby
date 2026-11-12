@@ -212,7 +212,62 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Simulation.Enabled {
+		errs = append(errs, c.validateSimulation()...)
+	}
+
 	return errors.Join(errs...)
+}
+
+// validateSimulation checks simulation mode. A bot with real credentials
+// is refused: a simulated run must never be one config switch away from
+// logging real accounts on, or from a config that can.
+func (c *Config) validateSimulation() []error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	s := c.Simulation
+	if s.AutoJoinDelay < 0 {
+		add("simulation.auto_join_delay must not be negative")
+	}
+	if s.AutoStartDelay < 0 {
+		add("simulation.auto_start_delay must not be negative")
+	}
+	for _, b := range c.Bots {
+		cr := b.Credentials
+		var set []string
+		if cr.Password.IsSet() {
+			set = append(set, "password")
+		}
+		if cr.SharedSecret.IsSet() {
+			set = append(set, "shared_secret")
+		}
+		if cr.RefreshToken.IsSet() {
+			set = append(set, "refresh_token")
+		}
+		if len(set) > 0 {
+			add("simulation mode refuses bot %s: it has Steam credentials configured (%s); a simulated config must not hold real credentials",
+				b.Name, strings.Join(set, ", "))
+		}
+	}
+	seen := map[string]bool{}
+	for i, sb := range s.Bots {
+		if _, ok := c.Bot(sb.Name); !ok {
+			add("simulation.bots[%d]: no bot named %q in bots", i, sb.Name)
+		}
+		if seen[strings.ToLower(sb.Name)] {
+			add("simulation.bots[%d]: bot %q listed twice", i, sb.Name)
+		}
+		seen[strings.ToLower(sb.Name)] = true
+	}
+	accounts := map[uint32]string{}
+	for i, b := range c.Bots {
+		a := c.SimulatedBot(i).AccountID
+		if prev, dup := accounts[a]; dup {
+			add("simulation: bots %q and %q have the same account_id %d", prev, b.Name, a)
+		}
+		accounts[a] = b.Name
+	}
+	return errs
 }
 
 // headerToken is an HTTP header name (RFC 9110 token).

@@ -29,6 +29,10 @@ type ManagerOptions struct {
 	ShutdownBudget time.Duration
 	// Seed returns a jitter seed per bot; nil picks random seeds.
 	Seed func(b config.BotConfig) uint64
+	// Simulated means NewClient returns simulated clients: the bots log
+	// on without tokens, never touch the token store, and are not spaced
+	// by steam.login_stagger.
+	Simulated bool
 }
 
 // Manager runs a Supervisor for every enabled bot and holds the state-dir
@@ -65,11 +69,15 @@ func NewManager(cfg *config.Config, opts ManagerOptions) *Manager {
 			return gc.New(gc.Options{Logger: log.With("bot", b.Name)})
 		}
 	}
+	stagger := cfg.Steam.LoginStagger
+	if opts.Simulated {
+		stagger = 0
+	}
 	m := &Manager{
 		cfg:    cfg,
 		opts:   opts,
 		log:    opts.Logger,
-		gate:   NewGate(cfg.Steam.LoginStagger),
+		gate:   NewGate(stagger),
 		byName: map[string]*Supervisor{},
 	}
 	params := ParamsFromConfig(cfg.Steam, cfg.GC)
@@ -85,6 +93,7 @@ func NewManager(cfg *config.Config, opts ManagerOptions) *Manager {
 			Logger:         opts.Logger,
 			RequestTimeout: cfg.GC.RequestTimeout,
 			TOTPSkew:       cfg.Steam.TOTPSkew,
+			Simulated:      opts.Simulated,
 		}
 		if opts.Seed != nil {
 			so.Seed = opts.Seed(b)
@@ -115,7 +124,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	for _, s := range m.sups {
 		s.Start(runCtx)
 	}
-	m.log.Info("bots started", "count", len(m.sups), "login_stagger", m.cfg.Steam.LoginStagger)
+	m.log.Info("bots started", "count", len(m.sups), "login_stagger", m.gate.stagger, "simulated", m.opts.Simulated)
 	return nil
 }
 

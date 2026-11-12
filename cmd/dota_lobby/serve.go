@@ -5,14 +5,20 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/api"
+	"github.com/kettleofketchup/dota_lobby/pkg/auth"
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
+	"github.com/kettleofketchup/dota_lobby/pkg/config"
 	"github.com/kettleofketchup/dota_lobby/pkg/events"
+	"github.com/kettleofketchup/dota_lobby/pkg/gc"
+	"github.com/kettleofketchup/dota_lobby/pkg/gc/sim"
 	"github.com/kettleofketchup/dota_lobby/pkg/league"
 	"github.com/kettleofketchup/dota_lobby/pkg/lobby"
 	"github.com/kettleofketchup/dota_lobby/pkg/pool"
@@ -32,6 +38,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cf configFlags
 	cf.register(fs)
+	fs.BoolVar(&cf.simulate, "simulate", false, "run against a simulated Steam and game coordinator (same as simulation.enabled)")
 	if err := c.parse(fs, args); err != nil {
 		return err
 	}
@@ -41,9 +48,22 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Simulation.Enabled {
+		if err := refuseStoredTokens(cfg); err != nil {
+			return err
+		}
+	}
 	log := newLogger(c.stderr, cfg.Log)
 	log.Info("starting dota_lobby", "version", version, "commit", commit, "built", buildDate,
-		"bots", len(cfg.Bots), "state_dir", cfg.StateDir)
+		"bots", len(cfg.Bots), "state_dir", cfg.StateDir, "simulation", cfg.Simulation.Enabled)
+	mgrOpts := bot.ManagerOptions{Logger: log}
+	var world *sim.World
+	if cfg.Simulation.Enabled {
+		world = newSimulation(cfg, log)
+		defer world.Close()
+		mgrOpts.Simulated = true
+		mgrOpts.NewClient = simulatedClients(cfg, world)
+	}
 
 	// Bind first, so a busy port fails startup before any bot logs on.
 	addr := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
@@ -51,7 +71,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	mgr := bot.NewManager(cfg, bot.ManagerOptions{Logger: log})
+	mgr := bot.NewManager(cfg, mgrOpts)
 	if err := mgr.Start(ctx); err != nil {
 		_ = ln.Close()
 		return err
@@ -94,10 +114,13 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		<-regDone
 		return errors.Join(err, stopBots(mgr, log))
 	}
+	if world != nil {
+		world.SetRoster(lobbies.RosterTeam)
+	}
 	wake, unsubscribe := bus.Subscribe(nil)
 	deliverer := webhook.New(webhook.Options{
 		Queue: db.Deliveries(), Webhooks: cfg.Webhooks, Secrets: cfg.Secrets, Delivery: cfg.WebhookDelivery,
-		Wake: wake, Version: version, Logger: log,
+		Wake: wake, Version: version, Simulation: cfg.Simulation.Enabled, Logger: log,
 	})
 	hookCtx, stopHooks := context.WithCancel(context.WithoutCancel(ctx))
 	hooksDone := make(chan struct{})
@@ -118,6 +141,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		MaxBodyBytes:     cfg.Server.MaxBodyBytes,
 		Logger:           log,
 		Version:          version,
+		Simulator:        simulator(world),
 	})
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
@@ -156,6 +180,68 @@ func (c cli) serve(ctx context.Context, args []string) error {
 		log.Info("stopped cleanly")
 	}
 	return runErr
+}
+
+// newSimulation builds the simulated Steam and GC and says so loudly: a
+// simulated service must never be taken for a live one.
+func newSimulation(cfg *config.Config, log *slog.Logger) *sim.World {
+	s := cfg.Simulation
+	log.Warn("SIMULATION MODE: no bot logs on to Steam; lobbies, players and matches are simulated in memory and "+
+		"/v1/sim drives them. Never point a production consumer at this service.",
+		"database", cfg.Store.Path, "auto_join", s.AutoJoin, "auto_join_delay", s.AutoJoinDelay,
+		"auto_ready", s.AutoReady, "auto_start", s.AutoStart, "auto_start_delay", s.AutoStartDelay)
+	return sim.New(sim.Options{
+		Settings: sim.Settings{
+			AutoJoin: s.AutoJoin, AutoJoinDelay: s.AutoJoinDelay, AutoReady: s.AutoReady,
+			AutoStart: s.AutoStart, AutoStartDelay: s.AutoStartDelay,
+		},
+		ReadyCommand: cfg.Lobby.Chat.Prefix + "ready",
+		Logger:       log,
+	})
+}
+
+// refuseStoredTokens stops a simulated run whose state dir holds a bot's
+// Steam token, as a production deployment's does after `auth --bot`: such
+// a config can log real accounts on with no credentials in it, and its
+// webhooks most likely reach production receivers. Every bot counts,
+// enabled or not, and so does a token file that does not parse.
+func refuseStoredTokens(cfg *config.Config) error {
+	var errs []error
+	for _, b := range cfg.Bots {
+		path := auth.NewStore(cfg.BotStateDir(b)).Path()
+		_, err := os.Stat(path)
+		switch {
+		case err == nil:
+			errs = append(errs, fmt.Errorf("simulation mode refuses bot %s: a Steam token is stored at %s; "+
+				"a simulated service must not share a state_dir with a real one", b.Name, path))
+		case !errors.Is(err, fs.ErrNotExist):
+			errs = append(errs, fmt.Errorf("simulation mode: check bot %s for a stored token: %w", b.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// simulatedClients gives every configured bot its simulated account.
+func simulatedClients(cfg *config.Config, world *sim.World) func(config.BotConfig) gc.Client {
+	return func(b config.BotConfig) gc.Client {
+		for i := range cfg.Bots {
+			if cfg.Bots[i].Name != b.Name {
+				continue
+			}
+			sb := cfg.SimulatedBot(i)
+			return world.Client(sim.Bot{Name: b.Name, AccountID: sb.AccountID, PersonaName: b.Name, Leagues: sb.Leagues})
+		}
+		panic("simulated client for an unknown bot " + b.Name)
+	}
+}
+
+// simulator is the API's view of the world; a nil world is no simulator,
+// not a non-nil interface holding nil.
+func simulator(world *sim.World) api.Simulator {
+	if world == nil {
+		return nil
+	}
+	return world
 }
 
 // drainLobbies stops the lobby trackers before the bots go, so none of

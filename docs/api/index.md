@@ -41,6 +41,7 @@ the API.
 | `POST` | `/v1/lobbies/{id}/teams/flip` | When an API key is set | Swap the sides |
 | `POST` | `/v1/lobbies/{id}/teams/shuffle` | When an API key is set | Balanced shuffle of an open lobby |
 | `GET` | `/v1/lobbies/{id}/events` | When an API key is set | A lobby's events, oldest first |
+| various | `/v1/sim/...` | When an API key is set | Drive the simulator; only in [simulation mode](../development/simulation.md#control-api), `404` otherwise |
 | any | `/bots`, `/lobby/create`, `/lobby/info` | When an API key is set | `410`, the old endpoints are gone |
 | `GET` | `/openapi.json`, `/openapi.yaml` | Never | The OpenAPI 3.1 description of the `/v1` API |
 
@@ -196,6 +197,7 @@ Always `200`, for dashboards and old monitors:
   "min_ready_bots": 1,
   "states": {"cooling_down": 1},
   "stalled_bots": 0,
+  "simulation": false,
   "version": "1.2.3",
   "uptime_seconds": 742,
   "time": "2026-11-08T12:00:00Z"
@@ -203,6 +205,8 @@ Always `200`, for dashboards and old monitors:
 ```
 
 `states` counts bots per [state](#bot-states). Bot names are only shown under `/v1`.
+`simulation` is `true` when the service runs in [simulation mode](../development/simulation.md):
+nothing reaches Steam.
 
 ## `GET /v1/bots`
 
@@ -229,7 +233,8 @@ Always `200`, for dashboards and old monitors:
       "leagues": [17929],
       "lobby": null
     }
-  ]
+  ],
+  "simulation": false
 }
 ```
 
@@ -254,7 +259,8 @@ Always `200`, for dashboards and old monitors:
 | `leagues` | League IDs this bot may host lobbies for, sorted; `[]` when none. See [`GET /v1/leagues`](#get-v1leagues) for where each comes from |
 | `lobby` | ID of the lobby this bot hosts, or `null`. A bot hosts one lobby at a time, from the create until the lobby ends |
 
-Unknown values are `null`, not zero. Passwords, secrets and tokens never appear.
+Unknown values are `null`, not zero. Passwords, secrets and tokens never appear. The top-level
+`simulation` is `true` in [simulation mode](../development/simulation.md).
 
 ```bash
 curl -fsS -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/bots

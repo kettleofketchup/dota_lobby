@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/kettleofketchup/dota_lobby/pkg/gc/sim"
 )
 
 type specOp struct {
@@ -44,7 +45,10 @@ func TestOperationIDs(t *testing.T) {
 		"invite-lobby-players", "kick-lobby-member", "launch-lobby", "list-bots", "list-league-nodes", "list-leagues",
 		"list-lobbies", "list-lobby-events", "refresh-bot-leagues", "refresh-leagues", "retry-bot", "set-lobby-roster",
 		"shuffle-lobby-teams", "update-lobby",
+		"end-sim-match", "fail-sim-lobby", "get-sim-lobby", "get-sim-settings", "join-sim-lobby", "leave-sim-lobby",
+		"list-sim-lobbies", "ready-sim-player", "say-sim-chat", "seat-sim-player", "start-sim-match", "update-sim-settings",
 	}
+	slices.Sort(want)
 	var got []string
 	for _, o := range specOps(t, New(Options{})) {
 		got = append(got, o.op.OperationID)
@@ -61,8 +65,11 @@ func TestOperationIDs(t *testing.T) {
 // Every documented operation requires the key, and the middleware
 // enforces it: a forgotten Security fails here, not in production.
 func TestEveryOperationNeedsKey(t *testing.T) {
-	s := lobbyServer(t, &fakeLobbies{lobby: sampleLobby()})
-	fill := strings.NewReplacer("{id}", "1", "{name}", "bot1")
+	s := New(Options{
+		APIKey: testKey, Bots: &fakeBots{}, Lobbies: &fakeLobbies{lobby: sampleLobby()},
+		Simulator: sim.New(sim.Options{}),
+	})
+	fill := strings.NewReplacer("{id}", "1", "{name}", "bot1", "{account_id}", "11111111")
 	for _, o := range specOps(t, s) {
 		t.Run(o.op.OperationID, func(t *testing.T) {
 			if !reflect.DeepEqual(o.op.Security, keyAuth) {
