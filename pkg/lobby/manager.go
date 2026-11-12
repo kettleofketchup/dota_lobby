@@ -268,6 +268,31 @@ func (m *Manager) entry(id string) (*entry, bool) {
 	return e, ok
 }
 
+// RosterTeam reports the team the roster puts an account on in the active
+// lobby with the given GC lobby ID; ok is false when no active lobby has
+// that ID or its roster does not name the account. Simulation mode's
+// auto-join uses it.
+func (m *Manager) RosterTeam(gcLobbyID uint64, account uint32) (team gc.Team, ok bool) {
+	m.mu.Lock()
+	entries := make([]*entry, 0, len(m.active))
+	for _, e := range m.active {
+		entries = append(entries, e)
+	}
+	m.mu.Unlock()
+	for _, e := range entries {
+		l := e.snapshot()
+		if l.GCLobbyID != gcLobbyID {
+			continue
+		}
+		side, rostered := l.Spec.Teams.Side(account)
+		if !rostered {
+			return 0, false
+		}
+		return side.team(), true
+	}
+	return 0, false
+}
+
 func (m *Manager) kickScheduler() {
 	select {
 	case m.wake <- struct{}{}:
