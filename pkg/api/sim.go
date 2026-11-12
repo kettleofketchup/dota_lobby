@@ -28,7 +28,7 @@ type Simulator interface {
 	EndMatch(id uint64, outcome int32) (sim.LobbyInfo, error)
 	Fail(id uint64, mode string) (sim.LobbyInfo, error)
 	Settings() sim.Settings
-	SetSettings(s sim.Settings)
+	UpdateSettings(fn func(*sim.Settings)) sim.Settings
 	ReadyCommand() string
 }
 
@@ -462,8 +462,7 @@ func (s *Server) failSimLobby(ctx context.Context, in *simFailInput) (*simLobbyO
 	})
 }
 
-func (s *Server) simSettings() simSettingsView {
-	st := s.opts.Simulator.Settings()
+func (s *Server) simSettings(st sim.Settings) simSettingsView {
 	return simSettingsView{
 		AutoJoin: st.AutoJoin, AutoJoinDelayMS: st.AutoJoinDelay.Milliseconds(), AutoReady: st.AutoReady,
 		AutoStart: st.AutoStart, AutoStartDelayMS: st.AutoStartDelay.Milliseconds(),
@@ -472,12 +471,18 @@ func (s *Server) simSettings() simSettingsView {
 }
 
 func (s *Server) getSimSettings(context.Context, *struct{}) (*simSettingsOutput, error) {
-	return &simSettingsOutput{Body: s.simSettings()}, nil
+	return &simSettingsOutput{Body: s.simSettings(s.opts.Simulator.Settings())}, nil
 }
 
+// updateSimSettings merges the fields given into the settings inside the
+// World's lock, so concurrent updates of different fields all apply.
 func (s *Server) updateSimSettings(_ context.Context, in *simSettingsInput) (*simSettingsOutput, error) {
-	st := s.opts.Simulator.Settings()
 	b := in.Body
+	st := s.opts.Simulator.UpdateSettings(func(st *sim.Settings) { mergeSimSettings(st, b) })
+	return &simSettingsOutput{Body: s.simSettings(st)}, nil
+}
+
+func mergeSimSettings(st *sim.Settings, b simSettingsRequest) {
 	if b.AutoJoin != nil {
 		st.AutoJoin = *b.AutoJoin
 	}
@@ -493,6 +498,4 @@ func (s *Server) updateSimSettings(_ context.Context, in *simSettingsInput) (*si
 	if b.AutoStartDelayMS != nil {
 		st.AutoStartDelay = time.Duration(*b.AutoStartDelayMS) * time.Millisecond
 	}
-	s.opts.Simulator.SetSettings(st)
-	return &simSettingsOutput{Body: s.simSettings()}, nil
 }

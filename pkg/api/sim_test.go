@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -174,6 +175,27 @@ func TestSimSettings(t *testing.T) {
 	}
 	if r := send(t, s, "PATCH", "/v1/sim/settings", `{"auto_join_delay_ms": -1}`, nil); r.code != 422 {
 		t.Errorf("negative delay = %d", r.code)
+	}
+}
+
+// PATCHes of different fields sent together all apply.
+func TestSimSettingsConcurrentPatches(t *testing.T) {
+	s, w, _, _, _ := simServer(t)
+	bodies := []string{`{"auto_join": true}`, `{"auto_ready": true}`, `{"auto_start": true}`}
+	for run := range 50 {
+		w.SetSettings(sim.Settings{})
+		var wg sync.WaitGroup
+		for _, b := range bodies {
+			wg.Go(func() {
+				if r := send(t, s, "PATCH", "/v1/sim/settings", b, nil); r.code != 200 {
+					t.Errorf("patch %s = %d", b, r.code)
+				}
+			})
+		}
+		wg.Wait()
+		if st := w.Settings(); !st.AutoJoin || !st.AutoReady || !st.AutoStart {
+			t.Fatalf("run %d: settings %+v lost a change", run, st)
+		}
 	}
 }
 

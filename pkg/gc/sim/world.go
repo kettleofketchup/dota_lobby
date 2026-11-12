@@ -177,11 +177,20 @@ func (w *World) Settings() Settings {
 // SetSettings replaces the auto-mode settings. Joins and starts already
 // scheduled keep the delay they were scheduled with.
 func (w *World) SetSettings(s Settings) {
+	w.UpdateSettings(func(cur *Settings) { *cur = s })
+}
+
+// UpdateSettings changes the auto-mode settings with fn, under the World's
+// lock, and returns the result: concurrent updates of different fields
+// all apply.
+func (w *World) UpdateSettings(fn func(*Settings)) Settings {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.settings = s
+	fn(&w.settings)
+	s := w.settings
 	w.log.Info("simulation settings changed", "auto_join", s.AutoJoin, "auto_join_delay", s.AutoJoinDelay,
 		"auto_ready", s.AutoReady, "auto_start", s.AutoStart, "auto_start_delay", s.AutoStartDelay)
+	return s
 }
 
 // ReadyCommand is the chat line Ready says, "" when none is configured.
