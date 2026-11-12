@@ -171,8 +171,9 @@ coordinator lobby ID; `{account_id}` is a player's 32-bit account ID.
 | `GET /v1/sim/settings` | The auto-mode settings and the ready command |
 | `PATCH /v1/sim/settings` | Change some of `auto_join`, `auto_join_delay_ms`, `auto_ready`, `auto_start`, `auto_start_delay_ms` |
 
-Chat answers say whether the bot saw the line: `"delivered": false` means the bot had not
-joined the lobby chat yet, as a player typing too early in the real client. Errors are problem
+Chat answers say whether the bot saw the line: `"delivered": false` means the bot was not in
+the lobby chat, as with a player typing too early in the real client. The chat log marks
+lines the same way; the bot's own lines are always `"delivered": true`. Errors are problem
 details: `404 not_found` for an unknown lobby, `409 not_member`, `already_member`,
 `seat_taken` or `invalid_state`, `422` for a bad account ID or body.
 

@@ -303,6 +303,18 @@ func TestManualLifecycle(t *testing.T) {
 	if n := len(info.Chat); n != 3 || info.Chat[2].AccountID != botAccount || info.Chat[2].Text != "hello" {
 		t.Errorf("chat log = %+v", info.Chat)
 	}
+	// Only the line said before the join is undelivered; the bot's own
+	// line is delivered, and it does not come back to the bot.
+	for i, want := range []bool{false, true, true} {
+		if i < len(info.Chat) && info.Chat[i].Delivered != want {
+			t.Errorf("chat line %d delivered = %v", i, info.Chat[i].Delivered)
+		}
+	}
+	select {
+	case m := <-chats:
+		t.Errorf("the bot got its own line back: %+v", m)
+	default:
+	}
 	if _, err := w.Say(id, 999, "hi"); !errors.Is(err, ErrNotMember) {
 		t.Errorf("say by stranger = %v", err)
 	}

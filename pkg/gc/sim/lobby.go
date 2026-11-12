@@ -100,15 +100,16 @@ func (l *lobby) seat(m *member, team gc.Team, slot *uint32) error {
 	return fmt.Errorf("%w: %s is full", ErrSeatTaken, team)
 }
 
-// say appends a member's chat line and delivers it to the host when the
-// host is in the chat. The host never gets its own lines back.
+// say appends a member's chat line, delivered when the host is in the
+// chat. The host gets a player's delivered line; its own lines are
+// delivered (it said them in the chat) but never come back to it.
 func (l *lobby) say(m *member, text string) bool {
-	delivered := l.chatJoined && m.account != l.host.bot.AccountID
+	delivered := l.chatJoined
 	l.chat = append(l.chat, ChatLine{AccountID: m.account, PersonaName: m.persona, Text: text, At: l.w.opts.Now(), Delivered: delivered})
 	if over := len(l.chat) - chatHistory; over > 0 {
 		l.chat = slices.Delete(l.chat, 0, over)
 	}
-	if delivered {
+	if delivered && m.account != l.host.bot.AccountID {
 		l.host.chats.publish(gc.ChatMessage{ChannelID: l.channel, AccountID: m.account, PersonaName: m.persona, Text: text})
 	}
 	return delivered

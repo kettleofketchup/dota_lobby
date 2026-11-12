@@ -50,7 +50,7 @@ type simChatView struct {
 	PersonaName string    `json:"persona_name"`
 	Text        string    `json:"text"`
 	At          time.Time `json:"at"`
-	Delivered   bool      `json:"delivered" doc:"False for a player's line said before the host joined the lobby chat; the host never saw it"`
+	Delivered   bool      `json:"delivered" doc:"False for a player's line said while the host was not in the lobby chat; the host never saw it. The host's own lines are always true"`
 }
 
 type simLobbyView struct {

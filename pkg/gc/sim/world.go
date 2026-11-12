@@ -244,7 +244,8 @@ type ChatLine struct {
 	Text        string
 	At          time.Time
 	// Delivered is false for a player's message said while the host was
-	// not in the chat, which the host never sees.
+	// not in the chat, which the host never sees. The host's own lines
+	// are always delivered.
 	Delivered bool
 }
 
