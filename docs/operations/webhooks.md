@@ -55,6 +55,7 @@ X-Dota-Lobby-Event-Type: match.started
 X-Dota-Lobby-Timestamp: 1762624800
 X-Dota-Lobby-Signature: v1=<64 hex digits>
 X-Internal-Token: <secrets.webhook_tokens[url]>   # only with token_header
+X-Dota-Lobby-Simulation: true                      # only in simulation mode
 ```
 
 ```json
@@ -89,6 +90,11 @@ X-Internal-Token: <secrets.webhook_tokens[url]>   # only with token_header
 The `X-Dota-Lobby-Event-Id` and `X-Dota-Lobby-Event-Type` headers repeat `id` and `type`, so a
 receiver can route or drop a delivery before parsing the body. Request bodies are at most
 64 KiB.
+
+A service in [simulation mode](../development/simulation.md) adds
+`X-Dota-Lobby-Simulation: true` to every delivery. A production receiver should refuse a
+delivery that carries it. The header is not covered by the signature: it guards against a
+simulated service pointed at production by mistake, not against an attacker.
 
 ## Verify the signature
 

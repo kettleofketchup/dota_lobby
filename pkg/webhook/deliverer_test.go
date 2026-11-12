@@ -227,7 +227,7 @@ func TestDeliverySucceeds(t *testing.T) {
 	h := rec.header
 	if h.Get("Content-Type") != "application/json" || h.Get("User-Agent") != "dota_lobby/test" ||
 		h.Get(HeaderEventID) != "evt_lob_1_1" || h.Get(HeaderEventType) != "lobby.state_changed" ||
-		h.Get("X-Internal-Token") != "internal-token" {
+		h.Get("X-Internal-Token") != "internal-token" || h.Get(HeaderSimulation) != "" {
 		t.Errorf("headers = %v", h)
 	}
 	if err := Verify([]byte(testSecret), h.Get(HeaderTimestamp), h.Get(HeaderSignature), rec.body, r.clock.now(), 0); err != nil {

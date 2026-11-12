@@ -12,8 +12,9 @@ auto mode, invited players join and sit down by themselves.
 
 !!! danger "Never point a production consumer at a simulated service"
     Lobbies, players and match IDs are made up. Match IDs start at `9000000001` and GC lobby IDs
-    at `900000000000000001`, so neither can be taken for a real one, but nothing else marks the
-    events as simulated. Give a simulated service its own webhook receivers.
+    at `900000000000000001`, so neither can be taken for a real one. Every webhook delivery
+    carries `X-Dota-Lobby-Simulation: true`; a production receiver should refuse it. Give a
+    simulated service its own webhook receivers.
 
 ## Turning it on
 
@@ -31,7 +32,11 @@ A simulated service:
   `refresh_token` from any source (secrets file, credentials file or environment). The bots
   need only a name. A simulated config must never be one switch away from logging real
   accounts on.
+- **refuses to start when any bot has a Steam token stored** in its state directory
+  (`<state_dir>/bots/<username>/token.json`, written by `auth --bot` or a logon), as a
+  production deployment does. Give a simulated service its own `state_dir`.
 - logs a `SIMULATION MODE` warning at startup.
+- marks every webhook delivery with an `X-Dota-Lobby-Simulation: true` header.
 - reports `"simulation": true` on `GET /health` and `GET /v1/bots`.
 - routes the `/v1/sim` operations, which answer 404 otherwise.
 - uses `<state_dir>/dota_lobby-simulation.db` and `<state_dir>/backups-simulation` unless

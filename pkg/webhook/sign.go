@@ -20,6 +20,10 @@ const (
 	HeaderEventType = "X-Dota-Lobby-Event-Type"
 	HeaderTimestamp = "X-Dota-Lobby-Timestamp"
 	HeaderSignature = "X-Dota-Lobby-Signature"
+	// HeaderSimulation is "true" on every delivery of a service in
+	// simulation mode, so a receiver can refuse simulated events. It is
+	// not covered by the signature.
+	HeaderSimulation = "X-Dota-Lobby-Simulation"
 )
 
 // DefaultTolerance is the clock skew receivers should allow between the

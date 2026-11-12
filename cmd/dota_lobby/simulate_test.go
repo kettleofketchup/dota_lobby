@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -65,6 +66,9 @@ func (h *hookReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if env.ID != r.Header.Get(webhook.HeaderEventID) || env.Type != r.Header.Get(webhook.HeaderEventType) {
 		h.t.Errorf("headers %v do not match the body %s", r.Header, body)
+	}
+	if r.Header.Get(webhook.HeaderSimulation) != "true" {
+		h.t.Errorf("delivery not marked simulated: %v", r.Header)
 	}
 	h.mu.Lock()
 	h.events = append(h.events, delivered{ID: env.ID, Type: env.Type, Seq: env.Seq, LobbyID: env.Lobby.ID, LobbyState: env.Lobby.State, Data: env.Data})
@@ -314,6 +318,35 @@ func TestServeSimulateRefusesCredentials(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "simulation mode refuses bot real1") || strings.Contains(stderr.String(), "hunter2") {
 		t.Errorf("stderr = %s", stderr)
+	}
+}
+
+// A state dir that holds a bot's stored Steam token belongs to a real
+// deployment: simulation mode refuses it, even without credentials in the
+// config and for a disabled bot.
+func TestServeSimulateRefusesStoredTokens(t *testing.T) {
+	_, port, _ := net.SplitHostPort(freeAddr(t))
+	flags, stateDir := writeConfig(t, port, "bots: [{ name: real1 }, { name: real2, enabled: false }]\n", "secrets: { api_key: k }\n")
+	for _, b := range []string{"real1", "real2"} {
+		dir := filepath.Join(stateDir, "bots", b)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "token.json"), []byte(`{"refresh_token":"tok"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, _, stderr := newCLI()
+	if got := c.run(context.Background(), append([]string{"serve", "--simulate"}, flags...)); got != exitError {
+		t.Fatalf("exit %d, want %d\n%s", got, exitError, stderr)
+	}
+	for _, want := range []string{"simulation mode refuses bot real1", "simulation mode refuses bot real2", "a Steam token is stored"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q: %s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr.String(), `"tok"`) || fileExists(filepath.Join(stateDir, "dota_lobby-simulation.db")) {
+		t.Errorf("stderr = %s, or the simulation started", stderr)
 	}
 }
 

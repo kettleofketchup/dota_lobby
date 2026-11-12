@@ -4,9 +4,11 @@
   once; lobbies are created with the requested details (league read-back included) and
   reported exactly as live, so the lobby manager, seating enforcement, chat commands, the
   database and signed webhooks run unchanged. The service refuses to start in simulation mode
-  when any bot has a password, shared secret or refresh token, logs a `SIMULATION MODE`
-  warning, and uses its own database (`<state_dir>/dota_lobby-simulation.db`) and backup
-  directory unless `store.path` and `store.backup.dir` are set. The image is unchanged.
+  when any bot has a password, shared secret or refresh token, or a Steam token stored in
+  its state directory, logs a `SIMULATION MODE` warning, marks every webhook delivery with
+  `X-Dota-Lobby-Simulation: true`, and uses its own database
+  (`<state_dir>/dota_lobby-simulation.db`) and backup directory unless `store.path` and
+  `store.backup.dir` are set. The image is unchanged.
 - `/v1/sim` control operations (simulation mode only, API key required, tag Simulation in
   the OpenAPI document): list and get simulated lobbies; make a player join, take a seat, say
   the ready command, chat, or leave; start a launched lobby's match; end it with a radiant,

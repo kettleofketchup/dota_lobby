@@ -5,12 +5,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/kettleofketchup/dota_lobby/pkg/api"
+	"github.com/kettleofketchup/dota_lobby/pkg/auth"
 	"github.com/kettleofketchup/dota_lobby/pkg/bot"
 	"github.com/kettleofketchup/dota_lobby/pkg/config"
 	"github.com/kettleofketchup/dota_lobby/pkg/events"
@@ -48,6 +51,11 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	if *simulate && !cfg.Simulation.Enabled {
 		if err := cfg.EnableSimulation(); err != nil {
 			return fmt.Errorf("load config: %w", err)
+		}
+	}
+	if cfg.Simulation.Enabled {
+		if err := refuseStoredTokens(cfg); err != nil {
+			return err
 		}
 	}
 	log := newLogger(c.stderr, cfg.Log)
@@ -117,7 +125,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	wake, unsubscribe := bus.Subscribe(nil)
 	deliverer := webhook.New(webhook.Options{
 		Queue: db.Deliveries(), Webhooks: cfg.Webhooks, Secrets: cfg.Secrets, Delivery: cfg.WebhookDelivery,
-		Wake: wake, Version: version, Logger: log,
+		Wake: wake, Version: version, Simulation: cfg.Simulation.Enabled, Logger: log,
 	})
 	hookCtx, stopHooks := context.WithCancel(context.WithoutCancel(ctx))
 	hooksDone := make(chan struct{})
@@ -195,6 +203,27 @@ func newSimulation(cfg *config.Config, log *slog.Logger) *sim.World {
 		ReadyCommand: cfg.Lobby.Chat.Prefix + "ready",
 		Logger:       log,
 	})
+}
+
+// refuseStoredTokens stops a simulated run whose state dir holds a bot's
+// Steam token, as a production deployment's does after `auth --bot`: such
+// a config can log real accounts on with no credentials in it, and its
+// webhooks most likely reach production receivers. Every bot counts,
+// enabled or not, and so does a token file that does not parse.
+func refuseStoredTokens(cfg *config.Config) error {
+	var errs []error
+	for _, b := range cfg.Bots {
+		path := auth.NewStore(cfg.BotStateDir(b)).Path()
+		_, err := os.Stat(path)
+		switch {
+		case err == nil:
+			errs = append(errs, fmt.Errorf("simulation mode refuses bot %s: a Steam token is stored at %s; "+
+				"a simulated service must not share a state_dir with a real one", b.Name, path))
+		case !errors.Is(err, fs.ErrNotExist):
+			errs = append(errs, fmt.Errorf("simulation mode: check bot %s for a stored token: %w", b.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // simulatedClients gives every configured bot its simulated account.
