@@ -3,6 +3,7 @@ package sim
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -427,7 +428,7 @@ func TestAutoMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	v = waitLobby(t, c, func(v *gc.LobbyView) bool { return v.State == gc.LobbyRun })
-	if v.MatchID < matchIDBase {
+	if v.MatchID <= matchIDBase || v.MatchID > math.MaxInt64 {
 		t.Errorf("match id = %d", v.MatchID)
 	}
 

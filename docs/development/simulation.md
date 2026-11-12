@@ -11,10 +11,10 @@ The simulator stands in for the players and the game server. A test drives it th
 auto mode, invited players join and sit down by themselves.
 
 !!! danger "Never point a production consumer at a simulated service"
-    Lobbies, players and match IDs are made up. Match IDs start at `9000000001` and GC lobby IDs
-    at `900000000000000001`, so neither can be taken for a real one. Every webhook delivery
-    carries `X-Dota-Lobby-Simulation: true`; a production receiver should refuse it. Give a
-    simulated service its own webhook receivers.
+    Lobbies, players and match IDs are made up. Match IDs start at `7000000000000000001` and
+    GC lobby IDs at `900000000000000001`, far above any real one, so neither can be taken for a
+    real one. Every webhook delivery carries `X-Dota-Lobby-Simulation: true`; a production
+    receiver should refuse it. Give a simulated service its own webhook receivers.
 
 ## Turning it on
 

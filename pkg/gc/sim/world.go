@@ -106,10 +106,12 @@ type World struct {
 }
 
 // Bases of the simulated IDs. They are far from real ones, so a simulated
-// lobby or match ID is never mistaken for a live one.
+// lobby or match ID is never mistaken for a live one. Real match IDs grow
+// by a few hundred million a year from the billions; the match base is
+// above 2^62, out of their reach, and still fits a signed 64-bit column.
 const (
 	lobbyIDBase   uint64 = 900_000_000_000_000_000
-	matchIDBase   uint64 = 9_000_000_000
+	matchIDBase   uint64 = 7_000_000_000_000_000_000
 	channelIDBase uint64 = 800_000_000_000_000_000
 )
 
