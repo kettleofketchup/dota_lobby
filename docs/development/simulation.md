@@ -194,10 +194,18 @@ for a in 11111111 22222222; do
 done
 api -X POST localhost:8080/v1/sim/lobbies/$ID/players/11111111/seat -d '{"team": "radiant"}'
 api -X POST localhost:8080/v1/sim/lobbies/$ID/players/22222222/seat -d '{"team": "dire"}'
-api -X POST localhost:8080/v1/lobbies/$ID/launch       # once the lobby is ready
+# The service applies the seats on its own time: launch once it says ready (lobby.ready)
+until [ "$(api localhost:8080/v1/lobbies/$ID | jq -r .state)" = ready ]; do sleep 0.2; done
+api -X POST localhost:8080/v1/lobbies/$ID/launch
+# The bot launches on its own time too: start once the simulated lobby is launched
+until [ "$(api localhost:8080/v1/sim/lobbies/$ID | jq -r .state)" = server_assign ]; do sleep 0.2; done
 api -X POST localhost:8080/v1/sim/lobbies/$ID/start    # match.started
 api -X POST localhost:8080/v1/sim/lobbies/$ID/end -d '{"result": "dire"}'   # match.ended
 ```
+
+Every step after a control call waits for the state it needs: the control calls answer as soon
+as the simulator has changed, before the service has seen the change. A test can wait for the
+matching webhook instead.
 
 The webhooks carry `lobby.created`, `lobby.player_joined`, `lobby.player_seated`,
 `lobby.ready`, `lobby.launching`, `match.started` and `match.ended`, signed as in production.
