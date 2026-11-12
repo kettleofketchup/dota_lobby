@@ -70,7 +70,7 @@ credentials into the manifest as `stringData["<bot>.yaml"]`, still encrypted, ke
 bots already in it:
 
 ```bash
-just secrets k8s-secret draftforge1 ../cluster/apps/dota-lobby/dota-lobby-bots.enc.yaml
+just secrets k8s-secret draftforge1 path/to/dota-lobby-bots.enc.yaml
 ```
 
 The target file must already exist as an encrypted `kind: Secret`, created with your
