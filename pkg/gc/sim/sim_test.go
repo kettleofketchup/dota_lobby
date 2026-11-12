@@ -271,6 +271,18 @@ func TestManualLifecycle(t *testing.T) {
 	if _, err := w.Seat(id, bob, gc.TeamDire, &slot); !errors.Is(err, ErrSeatTaken) {
 		t.Errorf("taken slot = %v", err)
 	}
+	// A broadcaster slot is the caster channel, shared by any number of
+	// casters; a team without slots refuses one, and so does slot 5.
+	if info, err := w.Seat(id, bob, gc.TeamBroadcaster, &slot); err != nil || info.Members[2].Team != gc.TeamBroadcaster || info.Members[2].Slot != 2 {
+		t.Errorf("caster channel = %+v %v", info.Members, err)
+	}
+	five := uint32(5)
+	if _, err := w.Seat(id, bob, gc.TeamSpectator, &slot); !errors.Is(err, ErrBadSlot) {
+		t.Errorf("spectator slot = %v", err)
+	}
+	if _, err := w.Seat(id, bob, gc.TeamRadiant, &five); !errors.Is(err, ErrBadSlot) {
+		t.Errorf("radiant slot 5 = %v", err)
+	}
 	if _, err := w.Seat(id, bob, gc.TeamRadiant, nil); err != nil {
 		t.Fatal(err)
 	}

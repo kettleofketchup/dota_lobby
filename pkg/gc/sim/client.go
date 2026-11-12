@@ -353,7 +353,11 @@ func (c *Client) JoinTeam(team gc.Team, slot uint32) error {
 		if m == nil {
 			return false
 		}
-		return l.seat(m, team, &slot) == nil
+		sp := &slot
+		if team != gc.TeamRadiant && team != gc.TeamDire && team != gc.TeamBroadcaster {
+			sp = nil // the message's slot means nothing there
+		}
+		return l.seat(m, team, sp) == nil
 	})
 }
 

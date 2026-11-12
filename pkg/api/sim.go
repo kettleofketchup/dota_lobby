@@ -162,7 +162,7 @@ type simJoinInput struct {
 
 type simSeatRequest struct {
 	Team string  `json:"team" enum:"radiant,dire,player_pool,spectator,broadcaster" doc:"Where the player moves; player_pool is the unassigned pool"`
-	Slot *uint32 `json:"slot,omitempty" maximum:"4" doc:"The radiant or dire slot, 0-4; default the first free one"`
+	Slot *uint32 `json:"slot,omitempty" doc:"The radiant or dire slot, 0-4, default the first free one; or the broadcaster channel, default 0. Not allowed for other teams"`
 }
 
 type simSeatInput struct {
@@ -348,6 +348,8 @@ func simProblem(err error) error {
 		return coded(http.StatusConflict, "already_member", msg)
 	case errors.Is(err, sim.ErrSeatTaken):
 		return coded(http.StatusConflict, "seat_taken", msg)
+	case errors.Is(err, sim.ErrBadSlot):
+		return invalid("body.slot", msg)
 	case errors.Is(err, sim.ErrWrongState):
 		return coded(http.StatusConflict, "invalid_state", msg)
 	case errors.Is(err, sim.ErrNoReadyCommand):

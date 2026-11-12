@@ -161,7 +161,7 @@ coordinator lobby ID; `{account_id}` is a player's 32-bit account ID.
 | `GET /v1/sim/lobbies` | Every simulated lobby: details, members with their seats, pending invites, chat log |
 | `GET /v1/sim/lobbies/{id}` | One simulated lobby |
 | `POST /v1/sim/lobbies/{id}/players` | `{"account_id": 11111111, "persona_name": "Alice"}`: a player joins the unassigned pool. No invite is needed |
-| `POST /v1/sim/lobbies/{id}/players/{account_id}/seat` | `{"team": "radiant", "slot": 0}`: take a seat. `team` is `radiant`, `dire`, `player_pool`, `spectator` or `broadcaster`; without `slot` the first free one |
+| `POST /v1/sim/lobbies/{id}/players/{account_id}/seat` | `{"team": "radiant", "slot": 0}`: take a seat. `team` is `radiant`, `dire`, `player_pool`, `spectator` or `broadcaster`. `slot` is the Radiant or Dire slot (0-4, default the first free one) or the broadcaster channel (default 0); other teams take none |
 | `POST /v1/sim/lobbies/{id}/players/{account_id}/ready` | The player says the ready command in chat |
 | `DELETE /v1/sim/lobbies/{id}/players/{account_id}` | The player leaves |
 | `POST /v1/sim/lobbies/{id}/chat` | `{"account_id": 11111111, "text": "!start"}`: a chat line from a member, so chat commands can be tested |
@@ -175,7 +175,7 @@ Chat answers say whether the bot saw the line: `"delivered": false` means the bo
 the lobby chat, as with a player typing too early in the real client. The chat log marks
 lines the same way; the bot's own lines are always `"delivered": true`. Errors are problem
 details: `404 not_found` for an unknown lobby, `409 not_member`, `already_member`,
-`seat_taken` or `invalid_state`, `422` for a bad account ID or body.
+`seat_taken` or `invalid_state`, `422` for a bad account ID, slot or body.
 
 ## A whole lobby by hand
 

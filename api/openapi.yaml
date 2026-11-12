@@ -2653,9 +2653,8 @@ components:
       additionalProperties: false
       properties:
         slot:
-          description: The radiant or dire slot, 0-4; default the first free one
+          description: The radiant or dire slot, 0-4, default the first free one; or the broadcaster channel, default 0. Not allowed for other teams
           format: int32
-          maximum: 4
           minimum: 0
           type: integer
         team:

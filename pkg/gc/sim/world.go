@@ -33,6 +33,9 @@ var (
 	// ErrSeatTaken means another member holds the slot, or the team is
 	// full.
 	ErrSeatTaken = errors.New("sim: seat taken")
+	// ErrBadSlot means a slot the team does not have: past 4 on Radiant
+	// or Dire, or any slot on a team without slots.
+	ErrBadSlot = errors.New("sim: no such slot")
 	// ErrWrongState means the lobby is not in a state that allows the
 	// operation, e.g. ending a match that never started.
 	ErrWrongState = errors.New("sim: lobby state does not allow this")
@@ -346,7 +349,8 @@ func (w *World) joinLocked(l *lobby, account uint32, personaName string) {
 }
 
 // Seat moves a member to a team. For Radiant and Dire, slot picks the
-// slot (0-4); nil takes the first free one.
+// slot (0-4); nil takes the first free one. For Broadcaster it picks the
+// channel, 0 by default. Other teams take no slot.
 func (w *World) Seat(id uint64, account uint32, team gc.Team, slot *uint32) (LobbyInfo, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

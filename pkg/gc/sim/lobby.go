@@ -69,9 +69,21 @@ func (l *lobby) remove(account uint32) {
 }
 
 // seat moves m to team. A Radiant or Dire slot must be free; nil takes the
-// first free one. Other teams have no slot limit.
+// first free one. For Broadcaster, slot is the channel, 0 by default, and
+// a channel holds any number of casters. Other teams have no slot.
 func (l *lobby) seat(m *member, team gc.Team, slot *uint32) error {
-	if team != gc.TeamRadiant && team != gc.TeamDire {
+	switch team {
+	case gc.TeamRadiant, gc.TeamDire:
+	case gc.TeamBroadcaster:
+		m.team, m.slot = team, 0
+		if slot != nil {
+			m.slot = *slot
+		}
+		return nil
+	default:
+		if slot != nil {
+			return fmt.Errorf("%w: %s has no slots", ErrBadSlot, team)
+		}
 		m.team, m.slot = team, 0
 		return nil
 	}
@@ -83,7 +95,7 @@ func (l *lobby) seat(m *member, team gc.Team, slot *uint32) error {
 	}
 	if slot != nil {
 		if *slot >= teamSize {
-			return fmt.Errorf("%w: slot %d is not 0-%d", ErrSeatTaken, *slot, teamSize-1)
+			return fmt.Errorf("%w: %s slot %d is not 0-%d", ErrBadSlot, team, *slot, teamSize-1)
 		}
 		if taken[*slot] {
 			return fmt.Errorf("%w: %s slot %d", ErrSeatTaken, team, *slot)
