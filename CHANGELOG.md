@@ -15,6 +15,45 @@ publishes the GitHub Release and `container.yml` the image. See
 
 <!-- Do not edit. Unreleased changes live in changelog.d/; `just release::` assembles them here. -->
 
+## [0.2.0] - 2026-11-12
+
+### Added
+
+- Simulation mode for integration tests of consumers: `serve --simulate`,
+  `simulation.enabled: true` or `DOTA_LOBBY_SIMULATION_ENABLED=true` runs the bots against an
+  in-memory Steam and game coordinator. The bots need no credentials and reach `gc_ready` at
+  once; lobbies are created with the requested details (league read-back included) and
+  reported exactly as live, so the lobby manager, seating enforcement, chat commands, the
+  database and signed webhooks run unchanged. The service refuses to start in simulation mode
+  when any bot has a password, shared secret or refresh token, or a Steam token stored in
+  its state directory, logs a `SIMULATION MODE` warning, marks every webhook delivery with
+  `X-Dota-Lobby-Simulation: true`, and uses its own database
+  (`<state_dir>/dota_lobby-simulation.db`) and backup directory unless `store.path` and
+  `store.backup.dir` are set. The image is unchanged.
+- `/v1/sim` control operations (simulation mode only, API key required, tag Simulation in
+  the OpenAPI document): list and get simulated lobbies; make a player join, take a seat, say
+  the ready command, chat, or leave; start a launched lobby's match; end it with a radiant,
+  dire or not_scored result; make a lobby fail (`lost` or `load_failed`); read and change the
+  auto-mode settings.
+- Auto mode: `simulation.auto_join` and `auto_join_delay` make invited players join and sit on
+  their rostered side, `auto_ready` makes them say the ready command, `auto_start` and
+  `auto_start_delay` start a launched lobby's match; `simulation.bots[]` sets a bot's
+  simulated account ID and leagues.
+- `GET /health` and `GET /v1/bots` report `simulation`.
+
+### Fixed
+
+- Chat commands said in the moment after the bot joined the lobby chat are no longer lost. A
+  line could reach the lobby before the join was applied and was dropped, so a `!ready` sent
+  right away never counted.
+
+### Documentation
+
+- A Simulation mode page under Development: turning it on, what the simulator answers, the
+  `simulation` keys, a Docker Compose example for a consumer's integration tests, and the
+  `/v1/sim` control API with a lobby played through by hand. The `simulation` keys are in the
+  configuration reference and `config.yaml.example`.
+
 ## [0.1.0] - 2026-11-12
 
 ### Upgrading
