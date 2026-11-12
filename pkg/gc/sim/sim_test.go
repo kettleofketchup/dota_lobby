@@ -449,6 +449,58 @@ func TestAutoMode(t *testing.T) {
 	}
 }
 
+// Players invited together join, sit down and say ready in invite order,
+// whatever order their timers fire in.
+func TestAutoJoinOrder(t *testing.T) {
+	invites := []uint32{105, 103, 101, 104, 102}
+	radiant := func(_ uint64, account uint32) (gc.Team, bool) { return gc.TeamRadiant, account > 100 }
+	for run := range 50 {
+		w := New(Options{ReadyCommand: "!ready", Settings: Settings{AutoJoin: true, AutoReady: true}})
+		w.SetRoster(radiant)
+		c := newBot(t, w)
+		ready(t, c)
+		v, err := c.CreateLobby(t.Context(), gc.LobbyDetails{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The host leaves Radiant so all five fit.
+		if err := c.JoinTeam(gc.TeamPlayerPool, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.JoinLobbyChat(t.Context(), v.LobbyID); err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range invites {
+			if err := c.Invite(gc.SteamID64(a)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var info LobbyInfo
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			info, _ = w.Lobby(v.LobbyID)
+			if len(info.Chat) == len(invites) || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		w.Close()
+		var joined, said []uint32
+		for _, m := range info.Members[1:] {
+			joined = append(joined, m.AccountID)
+			if m.Team != gc.TeamRadiant || int(m.Slot) != len(joined)-1 {
+				t.Fatalf("run %d: %d sits %s %d", run, m.AccountID, m.Team, m.Slot)
+			}
+		}
+		for _, l := range info.Chat {
+			said = append(said, l.AccountID)
+		}
+		if !slices.Equal(joined, invites) || !slices.Equal(said, invites) {
+			t.Fatalf("run %d: joined %v, said ready %v, invited %v", run, joined, said, invites)
+		}
+	}
+}
+
 func TestSettingsAndClose(t *testing.T) {
 	w := New(Options{})
 	w.SetSettings(Settings{AutoJoin: true, AutoJoinDelay: time.Hour})

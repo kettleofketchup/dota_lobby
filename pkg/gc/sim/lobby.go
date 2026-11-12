@@ -35,6 +35,16 @@ type lobby struct {
 	// stale.
 	launches  uint64
 	startedAt time.Time
+	// actions are the auto-mode actions not run yet; running is set while
+	// World.runDue runs them.
+	actions []action
+	running bool
+}
+
+// action is one scheduled auto-mode step of a lobby.
+type action struct {
+	due time.Time
+	run func()
 }
 
 type member struct {

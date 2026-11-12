@@ -75,7 +75,9 @@ simulation:
 ```
 
 Auto mode decides the seat from the lobby's roster: a rostered player sits on its side, in the
-first free slot; anyone else stays in the unassigned pool. The ready command is
+first free slot; anyone else stays in the unassigned pool. Players invited together join, sit
+down and say the ready command in invite order, so their slots and the order of their webhooks
+are the same on every run. The ready command is
 `lobby.chat.prefix` plus `ready`. It only counts when `lobby.chat.enabled` is on and the lobby
 was created with `"ready_check": true`; the simulator holds it until the bot has joined the
 lobby chat. Every auto-mode setting can also be changed at runtime with

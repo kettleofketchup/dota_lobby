@@ -500,43 +500,81 @@ func (w *World) dropLocked(l *lobby) {
 
 // --- auto mode ---
 
-// invited schedules the auto-join of an invited account.
-func (w *World) invited(l *lobby, account uint32) {
-	s := w.settings
-	if !s.AutoJoin {
+// schedule queues an auto-mode action on the lobby, to run d from now.
+// A lobby's actions run one at a time, earliest due first and, at the same
+// due time, in the order they were queued: two players invited together
+// always join, sit down and say ready in invite order, whatever order
+// their timers fire in.
+func (w *World) schedule(l *lobby, d time.Duration, fn func()) {
+	d = max(d, 0)
+	l.actions = append(l.actions, action{due: time.Now().Add(d), run: fn})
+	w.after(d, func() { w.runDue(l) })
+}
+
+// runDue runs the lobby's due actions. An action may let go of the lock;
+// a timer that fires meanwhile finds the lobby running and leaves its
+// action to this loop.
+func (w *World) runDue(l *lobby) {
+	if l.running {
 		return
 	}
-	w.after(s.AutoJoinDelay, func() {
-		if w.lobbies[l.id] != l || l.member(account) != nil || !slices.Contains(l.pending, account) {
+	l.running = true
+	defer func() { l.running = false }()
+	for !w.closed && w.lobbies[l.id] == l {
+		now, next := time.Now(), -1
+		for i, a := range l.actions {
+			if !now.Before(a.due) && (next < 0 || a.due.Before(l.actions[next].due)) {
+				next = i
+			}
+		}
+		if next < 0 {
 			return
 		}
-		w.joinLocked(l, account, "")
-		roster := w.roster
-		// The roster lookup may call into the lobby layer, which may be
-		// waiting on this World: look it up without the lock.
-		w.mu.Unlock()
-		team, rostered := gc.TeamPlayerPool, false
-		if roster != nil {
-			team, rostered = rosterTeam(roster, l.id, account)
-		}
-		w.mu.Lock()
-		if !rostered || w.closed || w.lobbies[l.id] != l {
-			return
-		}
-		m := l.member(account)
-		if m == nil || m.team != gc.TeamPlayerPool {
-			return
-		}
-		if err := l.seat(m, team, nil); err != nil {
-			w.log.Info("sim: auto-join could not take a seat", "lobby_id", l.id, "account_id", account, "err", err)
-			return
-		}
-		w.log.Info("sim: player seated", "lobby_id", l.id, "account_id", account, "team", team.String(), "slot", m.slot)
-		l.publish(gc.LobbyUpdated)
-		if w.settings.AutoReady && w.opts.ReadyCommand != "" {
-			w.readyLater(l, account, w.settings.AutoJoinDelay)
-		}
-	})
+		a := l.actions[next]
+		l.actions = slices.Delete(l.actions, next, next+1)
+		a.run()
+	}
+}
+
+// invited schedules the auto-join of an invited account.
+func (w *World) invited(l *lobby, account uint32) {
+	if !w.settings.AutoJoin {
+		return
+	}
+	w.schedule(l, w.settings.AutoJoinDelay, func() { w.autoJoin(l, account) })
+}
+
+// autoJoin joins an invited account and seats it on its rostered side.
+func (w *World) autoJoin(l *lobby, account uint32) {
+	if l.member(account) != nil || !slices.Contains(l.pending, account) {
+		return
+	}
+	w.joinLocked(l, account, "")
+	roster := w.roster
+	// The roster lookup may call into the lobby layer, which may be
+	// waiting on this World: look it up without the lock.
+	w.mu.Unlock()
+	team, rostered := gc.TeamPlayerPool, false
+	if roster != nil {
+		team, rostered = rosterTeam(roster, l.id, account)
+	}
+	w.mu.Lock()
+	if !rostered || w.closed || w.lobbies[l.id] != l {
+		return
+	}
+	m := l.member(account)
+	if m == nil || m.team != gc.TeamPlayerPool {
+		return
+	}
+	if err := l.seat(m, team, nil); err != nil {
+		w.log.Info("sim: auto-join could not take a seat", "lobby_id", l.id, "account_id", account, "err", err)
+		return
+	}
+	w.log.Info("sim: player seated", "lobby_id", l.id, "account_id", account, "team", team.String(), "slot", m.slot)
+	l.publish(gc.LobbyUpdated)
+	if w.settings.AutoReady && w.opts.ReadyCommand != "" {
+		w.readyLater(l, account, w.settings.AutoJoinDelay)
+	}
 }
 
 // rosterTeam asks the roster for a player side; anything else counts as
@@ -556,10 +594,7 @@ const minChatDelay = 50 * time.Millisecond
 // readyLater says the ready command for a seated member after d, or once
 // the host is in the chat.
 func (w *World) readyLater(l *lobby, account uint32, d time.Duration) {
-	w.after(d, func() {
-		if w.lobbies[l.id] != l {
-			return
-		}
+	w.schedule(l, d, func() {
 		m := l.member(account)
 		if m == nil || (m.team != gc.TeamRadiant && m.team != gc.TeamDire) {
 			return
@@ -586,8 +621,8 @@ func (w *World) launched(l *lobby) {
 	if !w.settings.AutoStart {
 		return
 	}
-	w.after(w.settings.AutoStartDelay, func() {
-		if w.lobbies[l.id] != l || l.launches != gen {
+	w.schedule(l, w.settings.AutoStartDelay, func() {
+		if l.launches != gen {
 			return
 		}
 		if err := w.startLocked(l, 0); err != nil {
