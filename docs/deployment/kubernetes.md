@@ -1,9 +1,8 @@
 # Kubernetes
 
-This page runs dota_lobby as a single pod with plain manifests. The examples come from the
-KettleCluster deployment (`apps/dota-lobby` in `kettleofketchup/home`), which ArgoCD syncs and
-which keeps its Secrets encrypted with sops (ksops). Adapt the names, the StorageClass and the
-ingress to your cluster.
+This page runs dota_lobby as a single pod with plain manifests. The examples assume a GitOps
+setup that keeps Secrets encrypted with sops (for example ArgoCD with ksops). Adapt the names,
+the StorageClass and the ingress to your cluster.
 
 The rules from [Docker Compose](docker-compose.md) still apply:
 
@@ -71,11 +70,11 @@ credentials into the manifest as `stringData["<bot>.yaml"]`, still encrypted, ke
 bots already in it:
 
 ```bash
-just secrets k8s-secret draftforge1 ~/KettleCluster/home/apps/dota-lobby/dota-lobby-bots.enc.yaml
+just secrets k8s-secret draftforge1 ../cluster/apps/dota-lobby/dota-lobby-bots.enc.yaml
 ```
 
-The target file must already exist as an encrypted `kind: Secret`; on KettleCluster,
-`just sops::new dota-lobby dota-lobby-bots` creates one. Only `STEAM_USER`, `STEAM_PASS`,
+The target file must already exist as an encrypted `kind: Secret`, created with your
+cluster repository's own sops rules. Only `STEAM_USER`, `STEAM_PASS`,
 `STEAM_SHARED_SECRET` and `STEAM_REFRESH_TOKEN` are copied.
 
 The API key goes in a second Secret, read through the environment:
@@ -90,8 +89,9 @@ Generate it with `openssl rand -hex 32` and give the same value to the client (D
 `DOTA_LOBBY_API_KEY`).
 
 Restart the pod after changing either Secret: `envFrom` and the configuration are read at
-start. KettleCluster restarts the pod through
-Reloader (`secret.reloader.stakater.com/reload: dota-lobby-api,dota-lobby-bots`).
+start. With [Reloader](https://github.com/stakater/Reloader), annotate the Deployment with
+`secret.reloader.stakater.com/reload: dota-lobby-api,dota-lobby-bots` to restart it
+automatically.
 
 ## The pod
 
@@ -149,8 +149,8 @@ readinessProbe:
 `/v1` needs the API key; the health endpoints are open. If the client is outside the cluster,
 put the Service behind your ingress and also restrict who can reach it.
 
-KettleCluster publishes `dota-lobby.home.kettle.sh` through a Cloudflare tunnel without
-forward-auth, and Traefik allows only the DraftForge server's address:
+For example, published through a tunnel with no SSO in front of it, Traefik can allow only
+the client's address:
 
 ```yaml
 apiVersion: traefik.io/v1alpha1
@@ -159,7 +159,7 @@ metadata:
   name: dota-lobby-draftforge-only
 spec:
   ipAllowList:
-    sourceRange: ["134.199.198.70/32"]
+    sourceRange: ["203.0.113.10/32"]   # the client's public address
     ipStrategy:
       depth: 1
 ```
