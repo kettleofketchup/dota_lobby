@@ -38,10 +38,6 @@ type Config struct {
 	Bots []BotConfig `mapstructure:"-"`
 	// Secrets holds the service-wide secrets; bot credentials are on Bots.
 	Secrets Secrets `mapstructure:"-"`
-
-	// storeSet records which store paths were configured, so simulation
-	// mode does not move explicit ones.
-	storeSet storePathsSet
 }
 
 // ServerConfig is the HTTP API listener.
@@ -279,14 +275,6 @@ const (
 	SimulationStoreFile = "dota_lobby-simulation.db"
 	SimulationBackupDir = "backups-simulation"
 )
-
-// EnableSimulation turns simulation mode on after Load, for the serve
-// --simulate flag, and validates the result.
-func (c *Config) EnableSimulation() error {
-	c.Simulation.Enabled = true
-	c.Store.resolvePaths(c.StateDir, c.storeSet, true)
-	return c.Validate()
-}
 
 // Secrets are the service-wide secrets from the secrets file and env.
 type Secrets struct {

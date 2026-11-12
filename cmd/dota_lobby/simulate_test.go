@@ -199,6 +199,9 @@ webhooks:
 	if !strings.Contains(stderr.String(), "SIMULATION MODE") {
 		t.Errorf("no simulation warning:\n%s", stderr)
 	}
+	if strings.Contains(stderr.String(), "no password or refresh token") {
+		t.Errorf("credential warning for a simulated bot:\n%s", stderr)
+	}
 	if b := api.call("GET", "/v1/bots", "", 200); b["simulation"] != true {
 		t.Errorf("bots = %v", b)
 	}

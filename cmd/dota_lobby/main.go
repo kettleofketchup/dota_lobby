@@ -105,6 +105,8 @@ func (c cli) run(ctx context.Context, args []string) int {
 // configFlags are the flags every config-reading command takes.
 type configFlags struct {
 	configFile, secretsFile string
+	// simulate turns simulation mode on; serve sets it from --simulate.
+	simulate bool
 }
 
 func (f *configFlags) register(fs *flag.FlagSet) {
@@ -113,7 +115,7 @@ func (f *configFlags) register(fs *flag.FlagSet) {
 }
 
 func (f configFlags) load(log *slog.Logger) (*config.Config, error) {
-	cfg, err := config.Load(config.Options{ConfigFile: f.configFile, SecretsFile: f.secretsFile, Logger: log})
+	cfg, err := config.Load(config.Options{ConfigFile: f.configFile, SecretsFile: f.secretsFile, Logger: log, Simulate: f.simulate})
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}

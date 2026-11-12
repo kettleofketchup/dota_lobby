@@ -38,7 +38,7 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var cf configFlags
 	cf.register(fs)
-	simulate := fs.Bool("simulate", false, "run against a simulated Steam and game coordinator (same as simulation.enabled)")
+	fs.BoolVar(&cf.simulate, "simulate", false, "run against a simulated Steam and game coordinator (same as simulation.enabled)")
 	if err := c.parse(fs, args); err != nil {
 		return err
 	}
@@ -47,11 +47,6 @@ func (c cli) serve(ctx context.Context, args []string) error {
 	cfg, err := cf.load(boot)
 	if err != nil {
 		return err
-	}
-	if *simulate && !cfg.Simulation.Enabled {
-		if err := cfg.EnableSimulation(); err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
 	}
 	if cfg.Simulation.Enabled {
 		if err := refuseStoredTokens(cfg); err != nil {

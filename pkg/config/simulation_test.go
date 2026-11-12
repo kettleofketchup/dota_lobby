@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -79,24 +81,46 @@ func TestSimulationRefusesCredentials(t *testing.T) {
 	}
 }
 
-// --simulate turns the mode on after Load, with the same checks.
-func TestEnableSimulation(t *testing.T) {
-	cfg := mustLoad(t, files{config: simBots})
-	if err := cfg.EnableSimulation(); err != nil {
+// loadSimulate loads like load, with Options.Simulate set (serve
+// --simulate), and returns what Load logged.
+func loadSimulate(t *testing.T, f files) (*Config, string, error) {
+	t.Helper()
+	isolate(t)
+	dir := t.TempDir()
+	var logs bytes.Buffer
+	opts := Options{SearchPaths: []string{}, Simulate: true, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	if f.config != "" {
+		opts.ConfigFile = write(t, dir, "config.yaml", f.config)
+	}
+	if f.secrets != "" {
+		opts.SecretsFile = write(t, dir, "secrets.yaml", f.secrets)
+	}
+	cfg, err := Load(opts)
+	return cfg, logs.String(), err
+}
+
+// --simulate turns the mode on during Load, with the same checks.
+func TestSimulateOption(t *testing.T) {
+	cfg, logs, err := loadSimulate(t, files{config: simBots})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.Simulation.Enabled || cfg.Store.Path != filepath.Join("/tmp/sim-state", SimulationStoreFile) {
-		t.Errorf("after EnableSimulation: %+v %q", cfg.Simulation, cfg.Store.Path)
+		t.Errorf("with Simulate: %+v %q", cfg.Simulation, cfg.Store.Path)
+	}
+	// Simulated bots need no credentials, so they are not warned about.
+	if strings.Contains(logs, "no password or refresh token") {
+		t.Errorf("credential warning in simulation mode:\n%s", logs)
 	}
 
 	// Explicit store paths stay where they are.
-	cfg = mustLoad(t, files{config: simBots + "store: { path: /data/x.db, backup: { dir: /data/bk } }\n"})
-	if err := cfg.EnableSimulation(); err != nil || cfg.Store.Path != "/data/x.db" || cfg.Store.Backup.Dir != "/data/bk" {
+	cfg, _, err = loadSimulate(t, files{config: simBots + "store: { path: /data/x.db, backup: { dir: /data/bk } }\n"})
+	if err != nil || cfg.Store.Path != "/data/x.db" || cfg.Store.Backup.Dir != "/data/bk" {
 		t.Errorf("explicit paths: %+v %v", cfg.Store, err)
 	}
 
-	cfg = mustLoad(t, files{config: simBots, secrets: "secrets:\n  bots:\n    bot2: { password: \"x\" }\n"})
-	if err := cfg.EnableSimulation(); err == nil || !strings.Contains(err.Error(), "refuses bot bot2") {
+	_, _, err = loadSimulate(t, files{config: simBots, secrets: "secrets:\n  bots:\n    bot2: { password: \"x\" }\n"})
+	if err == nil || !strings.Contains(err.Error(), "refuses bot bot2") {
 		t.Errorf("credentials with --simulate: %v", err)
 	}
 }

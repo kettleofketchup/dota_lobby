@@ -43,6 +43,9 @@ type Options struct {
 	SearchPaths []string
 	// Logger receives deprecation and consistency warnings. Nil discards them.
 	Logger *slog.Logger
+	// Simulate turns simulation mode on, as simulation.enabled does, for
+	// the serve --simulate flag.
+	Simulate bool
 }
 
 // fileConfig is the decode target: Config plus the raw shapes that Load
@@ -162,6 +165,7 @@ func Load(opts Options) (*Config, error) {
 	}
 
 	cfg := fc.Config
+	cfg.Simulation.Enabled = cfg.Simulation.Enabled || opts.Simulate
 	cfg.Secrets = fc.Secrets.Secrets
 	if cfg.Server.APIKey.IsSet() {
 		if !cfg.Secrets.APIKey.IsSet() {
@@ -172,8 +176,8 @@ func Load(opts Options) (*Config, error) {
 		}
 		cfg.Server.APIKey = ""
 	}
-	cfg.storeSet = storePathsSet{path: cfg.Store.Path != "", backupDir: cfg.Store.Backup.Dir != ""}
-	cfg.Store.resolvePaths(cfg.StateDir, cfg.storeSet, cfg.Simulation.Enabled)
+	storeSet := storePathsSet{path: cfg.Store.Path != "", backupDir: cfg.Store.Backup.Dir != ""}
+	cfg.Store.resolvePaths(cfg.StateDir, storeSet, cfg.Simulation.Enabled)
 
 	used := map[string]bool{}
 	for _, p := range bots {
