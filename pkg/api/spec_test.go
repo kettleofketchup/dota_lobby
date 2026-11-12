@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kettleofketchup/dota_lobby/pkg/gc/sim"
 )
 
 var updateSpec = flag.Bool("update", false, "rewrite api/openapi.yaml")
@@ -40,7 +42,7 @@ func TestOpenAPISpecIgnoresOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := New(Options{APIKey: testKey, Version: "v9.9.9", MaxBodyBytes: 1 << 20}).OpenAPI().YAML()
+	b, err := New(Options{APIKey: testKey, Version: "v9.9.9", MaxBodyBytes: 1 << 20, Simulator: sim.New(sim.Options{})}).OpenAPI().YAML()
 	if err != nil {
 		t.Fatal(err)
 	}

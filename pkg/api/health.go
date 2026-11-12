@@ -70,11 +70,13 @@ type healthBody struct {
 	BotsTotal    int    `json:"bots_total"`
 	MinReadyBots int    `json:"min_ready_bots"`
 	// States counts bots per state; names stay behind /v1/bots.
-	States        map[string]int `json:"states"`
-	StalledBots   int            `json:"stalled_bots"`
-	Version       string         `json:"version,omitempty"`
-	UptimeSeconds int64          `json:"uptime_seconds"`
-	Time          time.Time      `json:"time"`
+	States      map[string]int `json:"states"`
+	StalledBots int            `json:"stalled_bots"`
+	// Simulation is true when the bots run against the simulator.
+	Simulation    bool      `json:"simulation"`
+	Version       string    `json:"version,omitempty"`
+	UptimeSeconds int64     `json:"uptime_seconds"`
+	Time          time.Time `json:"time"`
 }
 
 // /health is kept for old monitors: always 200, with the detail in the
@@ -96,6 +98,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		MinReadyBots:  r.MinReadyBots,
 		States:        states,
 		StalledBots:   len(s.opts.Bots.Stalled(s.opts.WatchdogMaxAge)),
+		Simulation:    s.opts.Simulator != nil,
 		Version:       s.opts.Version,
 		UptimeSeconds: int64(now.Sub(s.started) / time.Second),
 		Time:          now.UTC(),

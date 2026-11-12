@@ -45,6 +45,9 @@ func apiConfig() huma.Config {
 		{Name: "Bots", Description: "The Steam bot accounts and their state."},
 		{Name: "Leagues", Description: "The leagues the bots may host."},
 		{Name: "Lobbies", Description: "Create and drive lobbies."},
+		{Name: "Simulation", Description: "Drive the simulated Steam and game coordinator: players join, take seats and chat, " +
+			"and matches start and end on request. Routed only when the service runs in simulation mode " +
+			"(serve --simulate or simulation.enabled); otherwise these paths answer 404."},
 	}
 	return cfg
 }
