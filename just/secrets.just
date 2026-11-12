@@ -85,6 +85,25 @@ list:
 set-stdin name key:
     sops set --value-stdin {{BOTS_DIR}}/{{name}}.sops.yaml '["{{key}}"]'
 
+# Copy a bot's credentials into a sops-encrypted Kubernetes Secret manifest as stringData["<name>.yaml"] (never printed)
+[group('secrets')]
+k8s-secret name file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bot={{BOTS_DIR}}/{{name}}.sops.yaml
+    target={{quote(file)}}
+    [[ "$target" = /* ]] || target={{quote(invocation_directory())}}/"$target"
+    [[ -f "$bot" ]] || { echo "no such bot: $bot (run: just secrets new-bot {{name}})"; exit 1; }
+    [[ -f "$target" ]] || { echo "$target does not exist; create the encrypted Secret first"; exit 1; }
+    [[ "$(sops decrypt --extract '["kind"]' "$target")" == "Secret" ]] \
+        || { echo "$target is not an encrypted Kubernetes Secret"; exit 1; }
+    sops decrypt --output-type json "$bot" \
+        | jq -c '{STEAM_USER, STEAM_PASS, STEAM_SHARED_SECRET, STEAM_REFRESH_TOKEN}
+                 | with_entries(select(.value != null and .value != "") | .value |= tostring)
+                 | tojson' \
+        | sops set --value-stdin "$target" '["stringData"]["{{name}}.yaml"]'
+    echo "set stringData[\"{{name}}.yaml\"] in $target; commit it and let the deployment pick it up"
+
 # Import a steamguard-cli maFile: shared_secret into the bot file, recovery fields into secrets/guard (never printed)
 [group('secrets')]
 import-mafile name mafile:
