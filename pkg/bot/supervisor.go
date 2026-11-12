@@ -264,8 +264,8 @@ func (s *Supervisor) Stalled(maxAge time.Duration) bool {
 	return s.clock.Now().Sub(time.Unix(0, last)) > maxAge
 }
 
-// Start seeds the token store, then starts the run goroutine and the first
-// logon. ctx bounds the supervisor's life; cancelling it is a hard stop that
+// Start seeds the token store (a simulated bot has none), then starts the
+// run goroutine and the first logon. ctx bounds the supervisor's life; cancelling it is a hard stop that
 // skips the graceful Stop sequence. Start is a no-op after the first call.
 func (s *Supervisor) Start(ctx context.Context) {
 	s.startOnce.Do(func() {
@@ -576,8 +576,9 @@ func (s *Supervisor) stopTimer() {
 	}
 }
 
-// connect logs on with the stored token. An unreadable or expired token
-// counts as no token, which sends the machine to Authenticate.
+// connect logs on with the stored token, or without one for a simulated
+// bot. An unreadable or expired token counts as no token, which sends the
+// machine to Authenticate.
 func (s *Supervisor) connect() error {
 	if s.opts.Simulated {
 		return s.client.Connect(s.ctx, gc.Credentials{Username: s.bot.Username, DeviceName: s.bot.Credentials.DeviceName})

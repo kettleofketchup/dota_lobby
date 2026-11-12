@@ -127,7 +127,8 @@ func (l *lobby) say(m *member, text string) bool {
 	return delivered
 }
 
-// publish makes a snapshot the host's current lobby and streams it.
+// publish streams a snapshot of l to the host and makes it the host's
+// current lobby, or clears the host's lobby when l is destroyed.
 func (l *lobby) publish(kind gc.LobbyEventKind) {
 	v := l.view()
 	c := l.host

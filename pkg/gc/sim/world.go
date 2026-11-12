@@ -164,7 +164,7 @@ func (w *World) Client(b Bot) *Client {
 	return c
 }
 
-// SetRoster sets the roster lookup auto-join uses. It is called without
+// SetRoster sets the roster lookup auto-join uses. f is called without
 // the World's lock held, so it may call into the lobby layer.
 func (w *World) SetRoster(f RosterFunc) {
 	w.mu.Lock()
@@ -607,8 +607,8 @@ func rosterTeam(f RosterFunc, lobbyID uint64, account uint32) (gc.Team, bool) {
 // same instant as its chat join, before the join's result is applied.
 const minChatDelay = 50 * time.Millisecond
 
-// readyLater says the ready command for a seated member after d, or once
-// the host is in the chat.
+// readyLater says the ready command for a seated member after d; if the
+// host is not in the chat by then, the line waits for the host's join.
 func (w *World) readyLater(l *lobby, account uint32, d time.Duration) {
 	w.schedule(l, d, func() {
 		m := l.member(account)

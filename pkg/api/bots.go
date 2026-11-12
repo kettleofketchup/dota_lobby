@@ -104,9 +104,8 @@ func nonEmpty(s string) *string {
 }
 
 type botList struct {
-	Bots []botView `json:"bots" doc:"Every bot, in config order"`
-	// Simulation is true in simulation mode.
-	Simulation bool `json:"simulation" doc:"True when the bots run against the simulated Steam and game coordinator (serve --simulate); nothing reaches Steam"`
+	Bots       []botView `json:"bots" doc:"Every bot, in config order"`
+	Simulation bool      `json:"simulation" doc:"True when the bots run against the simulated Steam and game coordinator (serve --simulate); nothing reaches Steam"`
 }
 
 type botsOutput struct{ Body botList }
