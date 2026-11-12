@@ -226,7 +226,9 @@ func (f *Client) UpdateLobby(fn func(v *gc.LobbyView)) {
 
 // OnCall runs fn after every successful call to method, with the call's
 // arguments, outside the fake's lock: fn may call SetLobby or
-// UpdateLobby to play the GC's answer. nil removes it.
+// UpdateLobby to play the GC's answer. JoinLobbyChat's fn gets the lobby
+// ID and the channel the join answers, before the join returns. nil
+// removes it.
 func (f *Client) OnCall(method string, fn func(args []any)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -618,11 +620,19 @@ func (f *Client) JoinLobbyChat(ctx context.Context, gcLobbyID uint64) (uint64, e
 		return 0, err
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.chatChannel != 0 {
-		return f.chatChannel, nil
+	id := f.chatChannel
+	if id == 0 {
+		id = gcLobbyID + 1<<32
 	}
-	return gcLobbyID + 1<<32, nil
+	react := f.reactions["JoinLobbyChat"]
+	f.mu.Unlock()
+	// The reaction runs before the join returns: a message it emits
+	// reaches the subscribers ahead of the join's result, as a GC message
+	// can.
+	if react != nil {
+		react([]any{gcLobbyID, id})
+	}
+	return id, nil
 }
 
 // SendChat implements gc.Client.

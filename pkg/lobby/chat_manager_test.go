@@ -236,6 +236,36 @@ func TestChatJoinDoesNotHoldTheLobby(t *testing.T) {
 	}
 }
 
+// Lines said right after the join succeeded can reach the tracker before
+// the join's result does. They are held and handled once it is applied,
+// not dropped.
+func TestChatLinesBeforeTheJoinIsApplied(t *testing.T) {
+	for i := range 10 {
+		h := newHarness(t, 1, withChat(time.Hour))
+		b := h.bots[0]
+		// The first join fails, so the players are seated before the
+		// retry, and say !ready as soon as it succeeds.
+		b.fc.FailNext("JoinLobbyChat", &gc.ChatJoinError{Channel: "Lobby_1", Result: "TIMEOUT"})
+		s := spec("game-early")
+		s.ReadyCheck = true
+		l, _ := h.toWaiting(s)
+		h.waitCalls(b, "JoinLobbyChat", 1)
+		h.seatAll(b)
+		h.waitFor(l.ID, "seated players", func(l Lobby) bool { return len(h.eventData(l.ID, "lobby.player_seated")) == 3 })
+		h.waitFor(l.ID, "the failed join", func(Lobby) bool { return strings.Contains(h.logs.String(), "could not join the lobby chat") })
+		b.fc.OnCall("JoinLobbyChat", func(args []any) {
+			for _, a := range []uint32{11, 12, 21} {
+				b.fc.EmitChat(gc.ChatMessage{ChannelID: args[1].(uint64), AccountID: a, Text: "!ready"})
+			}
+		})
+		h.clock.advance(chatRetry)
+		h.waitState(l.ID, StateReady)
+		if got := h.eventData(l.ID, "lobby.player_ready"); len(got) != 3 {
+			t.Fatalf("run %d: player_ready events %v", i, got)
+		}
+	}
+}
+
 func TestChatCountdownStopsWhenUnready(t *testing.T) {
 	h := newHarness(t, 1, withChat(time.Hour))
 	l, b := h.chatWaiting(spec("game-unready"))

@@ -18,6 +18,7 @@ const (
 	chatRetry       = 30 * time.Second
 	chatRetryMax    = 5 * time.Minute
 	chatJoinTimeout = 5 * time.Second
+	chatEarlyMax    = 32
 )
 
 // chatSession is one lobby's chat state. It belongs to the tracker
@@ -36,6 +37,11 @@ type chatSession struct {
 	// joining is set while a join runs; its result arrives on joined.
 	joining bool
 	joined  chan chatJoin
+	// early holds messages that arrived while a join ran. The GC delivers
+	// a channel's messages as soon as the join succeeds, which can be
+	// before the tracker has applied the join's result; the tracker
+	// replays them then. At most chatEarlyMax are kept.
+	early   []gc.ChatMessage
 	greeted bool
 
 	names     map[uint32]string
@@ -227,12 +233,20 @@ func (m *Manager) joinChat(ctx context.Context, e *entry, h bot.Handle, cs *chat
 	})
 }
 
+// takeEarly returns the messages held while the join ran and forgets them.
+func (cs *chatSession) takeEarly() []gc.ChatMessage {
+	early := cs.early
+	cs.early = nil
+	return early
+}
+
 // chatJoined applies the result of a join on the tracker goroutine. A join
 // from an older GC session is kept: the next step sees the new session and
 // joins again.
 func (m *Manager) chatJoined(e *entry, cs *chatSession, j chatJoin) {
 	cs.joining = false
 	if j.err != nil {
+		cs.early = nil
 		wait := chatRetry << min(cs.failures, 4)
 		wait = min(wait, chatRetryMax)
 		cs.failures++
@@ -255,7 +269,16 @@ func seconds(d time.Duration) int { return int(d.Round(time.Second) / time.Secon
 // run commands, identified by the account ID the GC put on the message;
 // the bot's own messages are ignored.
 func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMessage) {
-	if cs == nil || cs.channel == 0 || msg.ChannelID != cs.channel {
+	if cs == nil {
+		return
+	}
+	if cs.channel == 0 {
+		if cs.joining && len(cs.early) < chatEarlyMax {
+			cs.early = append(cs.early, msg)
+		}
+		return
+	}
+	if msg.ChannelID != cs.channel {
 		return
 	}
 	st := h.Status()
