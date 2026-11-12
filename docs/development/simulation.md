@@ -50,7 +50,7 @@ coordinator lost them.
 |---|---|
 | Logon, game coordinator hello | At once; the bot gets account ID `4000000000` plus its position in `bots` (1, 2, ...) unless `simulation.bots[].account_id` says otherwise |
 | Admin league list | The bot's `simulation.bots[].leagues`, or its `bots[].leagues` |
-| Create lobby | A lobby with the requested name, password, mode, region, TV delay and league. A league the bot does not administer reads back as `0` with the `NOT_LEAGUE_ADMIN` answer, so the lobby fails as `league_rejected` exactly as it would live |
+| Create lobby | A lobby with the requested name, password, mode, region, TV delay and league. Without a TV delay it reads back 120 s for a league lobby, as live, and 10 s otherwise. A league the bot does not administer reads back as `0` with the `NOT_LEAGUE_ADMIN` answer, so the lobby fails as `league_rejected` exactly as it would live |
 | Host seat (caster, self kick, pool, ...) | Moves the bot as asked |
 | Invite | Adds a pending invite; in auto mode the player joins later |
 | Kick, kick from team, flip, shuffle | As the game coordinator does them; the shuffle deals seated players to the sides by account ID |

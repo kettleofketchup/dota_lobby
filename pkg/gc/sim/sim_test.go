@@ -185,7 +185,7 @@ func TestCreateLobby(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	cur, ok := c.CurrentLobby()
-	if !ok || cur.LeagueID != 0 || cur.LobbyID == v.LobbyID {
+	if !ok || cur.LeagueID != 0 || cur.LobbyID == v.LobbyID || cur.TVDelaySeconds != 10 {
 		t.Errorf("current = %+v", cur)
 	}
 	if _, err := w.Lobby(v.LobbyID); !errors.Is(err, ErrNoLobby) {
@@ -205,6 +205,21 @@ func TestCreateLobby(t *testing.T) {
 	}
 	if _, err := c.CreateLobby(t.Context(), gc.LobbyDetails{TVDelaySeconds: 7}); err == nil {
 		t.Error("unsupported tv delay accepted")
+	}
+
+	// Without a delay, a league lobby reads back 120 s, as live, and any
+	// other 10 s.
+	for _, tc := range []struct {
+		league uint32
+		want   uint32
+	}{{league, 120}, {0, 10}} {
+		v, err := c.CreateLobby(t.Context(), gc.LobbyDetails{LeagueID: tc.league})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.TVDelaySeconds != tc.want {
+			t.Errorf("league %d: tv delay %d, want %d", tc.league, v.TVDelaySeconds, tc.want)
+		}
 	}
 }
 

@@ -229,12 +229,17 @@ func (c *Client) CreateLobby(_ context.Context, d gc.LobbyDetails) (*gc.LobbyVie
 		w.dropLocked(old)
 	}
 	d.LobbyID = 0
-	if d.TVDelaySeconds == 0 {
-		d.TVDelaySeconds = 10 // the CSODOTALobby default
-	}
 	rejected := d.LeagueID != 0 && !c.admin(d.LeagueID)
 	if rejected {
 		d.LeagueID, d.LeagueNodeID = 0, 0
+	}
+	if d.TVDelaySeconds == 0 {
+		// A league lobby created without a delay reads back 120 s live;
+		// any other gets the CSODOTALobby default, 10 s.
+		d.TVDelaySeconds = 10
+		if d.LeagueID != 0 {
+			d.TVDelaySeconds = 120
+		}
 	}
 	w.nextLobby++
 	w.nextChannel++
