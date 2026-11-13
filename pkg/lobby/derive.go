@@ -502,15 +502,13 @@ func hostGate(v *gc.LobbyView, host uint64, hs HostSeat) bool {
 }
 
 // seatSatisfied reports whether the host sits where a strategy puts it.
-// self_kick takes the host out of the broadcaster slot too, so a launch
-// that failed with caster really moves the host when it falls through.
+// No strategy accepts the broadcaster slot: the load waits for a caster
+// to connect, and the headless bot never does.
 func seatSatisfied(strategy string, m gc.Member) bool {
 	if !m.TeamKnown {
 		return false
 	}
 	switch strategy {
-	case SeatCaster:
-		return m.Team == gc.TeamBroadcaster
 	case SeatSelfKick:
 		return m.Team != gc.TeamRadiant && m.Team != gc.TeamDire && m.Team != gc.TeamBroadcaster
 	case SeatPlayerPool:

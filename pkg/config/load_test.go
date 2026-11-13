@@ -74,7 +74,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.GC.HelloInterval != 10*time.Second || cfg.GC.CreateTimeout != 2*time.Minute {
 		t.Errorf("gc defaults: %+v", cfg.GC)
 	}
-	if fmt.Sprint(cfg.League.Sources) != "[gc config]" || fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[caster self_kick]" {
+	if fmt.Sprint(cfg.League.Sources) != "[gc config]" || fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[player_pool self_kick no_team]" {
 		t.Errorf("league %v seats %v", cfg.League.Sources, cfg.Lobby.HostSeatStrategy)
 	}
 	if cfg.Lobby.Regions["europe"] != 3 || cfg.Lobby.GameModes["turbo"] != 23 {
@@ -95,7 +95,7 @@ func TestLoadDefaults(t *testing.T) {
 	if b := cfg.Store.Backup; !b.Enabled || b.Dir != "/var/lib/dota_lobby/backups" || b.Keep != 5 {
 		t.Errorf("store.backup defaults: %+v", b)
 	}
-	if c := l.Chat; c.Enabled || c.Prefix != "!" || c.SendInterval != time.Second || c.StartCountdown != 10*time.Second {
+	if c := l.Chat; !c.Enabled || c.Prefix != "!" || c.SendInterval != time.Second || c.StartCountdown != 10*time.Second {
 		t.Errorf("lobby.chat defaults: %+v", c)
 	}
 	if d := cfg.WebhookDelivery; d.Timeout != 10*time.Second || d.MaxAge != 24*time.Hour || len(cfg.Webhooks) != 0 {
@@ -415,13 +415,14 @@ webhooks: [{ url: "ftp://x", events: [] }]
 		{"totp skew too large", "steam: { totp_skew: 1h }\n", "", []string{"steam.totp_skew"}},
 		{"lobby limits", `
 lobby:
-  host_seat_strategy: [caster, caster, sideways]
+  host_seat_strategy: [no_team, no_team, sideways]
   max_launch_attempts: 11
   pending_timeout: 0s
   host_seat_confirm_timeout: -1s
   admins: [0]
 store: { retention: 0s, backup: { keep: 0 } }
-`, "", []string{"\"caster\" listed twice", "unknown value \"sideways\"", "max_launch_attempts 11", "lobby.pending_timeout", "lobby.host_seat_confirm_timeout", "lobby.admins", "store.retention", "store.backup.keep 0"}},
+`, "", []string{"\"no_team\" listed twice", "unknown value \"sideways\"", "max_launch_attempts 11", "lobby.pending_timeout", "lobby.host_seat_confirm_timeout", "lobby.admins", "store.retention", "store.backup.keep 0"}},
+		{"caster host seat", "lobby: { host_seat_strategy: [caster, self_kick] }\n", "", []string{"caster is not supported"}},
 		{"webhook problems", `
 webhooks:
   - { url: "https://a.example/hook", events: ["lobby.[" ], token_header: "Bad Header" }
@@ -596,7 +597,7 @@ func TestExampleConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.yaml.example: %v", err)
 	}
-	if fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[caster self_kick]" || cfg.Store.Retention != 720*time.Hour || cfg.Lobby.MaxLaunchAttempts != 3 {
+	if fmt.Sprint(cfg.Lobby.HostSeatStrategy) != "[player_pool self_kick no_team]" || cfg.Store.Retention != 720*time.Hour || cfg.Lobby.MaxLaunchAttempts != 3 {
 		t.Errorf("example values: %v %s %d", cfg.Lobby.HostSeatStrategy, cfg.Store.Retention, cfg.Lobby.MaxLaunchAttempts)
 	}
 }

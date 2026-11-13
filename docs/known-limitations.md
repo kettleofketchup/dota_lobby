@@ -12,10 +12,9 @@ coordinator without anyone at a keyboard, reports their state, and hosts lobbies
    [What is still unverified](configuration/bot-accounts.md#what-is-still-unverified).
 2. **Lobby hosting is only tested against fakes.** Creating a league lobby, setting the game
    mode, inviting players and joining and answering in the lobby's chat were checked live with
-   the probe; the lobby manager and its chat commands as a whole were not. In particular nobody
-   has yet seen which host seat strategy (`lobby.host_seat_strategy`) lets a launch reach a
-   running game: the default tries the caster slot first, which several reports say blocks the
-   load, and a failed launch moves on to the next strategy. How a finished match shows in the
+   the probe; the lobby manager and its chat commands as a whole were not. A live launch with
+   the bot in the caster slot failed the first load, so the caster strategy is gone and the
+   bot waits in the unassigned pool (`lobby.host_seat_strategy`). How a finished match shows in the
    lobby (`POSTGAME`, `match_outcome`) is also unconfirmed.
 3. **The match result is provisional.** It comes from the lobby alone (`match.outcome`). For
    league games, the Steam Web API's match data is the final word; the service does not fetch it

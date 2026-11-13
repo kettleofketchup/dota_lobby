@@ -27,7 +27,7 @@ const testPassword = "k3tt1e-secret"
 
 func testConfig() config.LobbyConfig {
 	return config.LobbyConfig{
-		HostSeatStrategy:       []string{SeatCaster, SeatSelfKick},
+		HostSeatStrategy:       []string{SeatPlayerPool, SeatSelfKick},
 		HostSeatConfirmTimeout: 150 * time.Millisecond,
 		MaxLaunchAttempts:      3,
 		PendingTimeout:         time.Minute,
@@ -414,7 +414,7 @@ func TestCreateToWaiting(t *testing.T) {
 	if l.GCLobbyID == 0 || l.Bot != "bot1" || l.LeagueVerified == nil || !*l.LeagueVerified {
 		t.Errorf("waiting lobby = %+v", l)
 	}
-	if l.HostSeat.Strategy != SeatCaster || l.HostSeat.Team != "broadcaster" {
+	if l.HostSeat.Strategy != SeatPlayerPool || l.HostSeat.Team != "player_pool" {
 		t.Errorf("host seat = %+v", l.HostSeat)
 	}
 	create := b.fc.Calls("CreateLobby")[0].Args[0].(gc.LobbyDetails)
@@ -593,14 +593,14 @@ func TestStartDropsALobbyItCannotFail(t *testing.T) {
 func TestHostSeatFallsThrough(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	b := h.bot("bot1")
-	// The GC ignores the caster request.
-	b.fc.OnCall("JoinBroadcastChannel", nil)
+	// The GC ignores the player pool request.
+	b.fc.OnCall("JoinTeam", nil)
 	l, _ := h.toWaiting(spec("game-1"))
 	if l.HostSeat.Strategy != SeatSelfKick || l.HostSeat.Next != 1 || l.HostSeat.Team != "player_pool" {
 		t.Errorf("host seat = %+v", l.HostSeat)
 	}
-	if b.fc.CallCount("JoinBroadcastChannel") != 1 {
-		t.Errorf("caster tried %d times", b.fc.CallCount("JoinBroadcastChannel"))
+	if b.fc.CallCount("JoinTeam") != 1 {
+		t.Errorf("player pool tried %d times", b.fc.CallCount("JoinTeam"))
 	}
 	kick := b.fc.Calls("KickFromTeam")[0].Args[0].(uint32)
 	if kick != gc.AccountID(b.host) {
@@ -619,9 +619,9 @@ func TestHostSeatRestoredAfterAMove(t *testing.T) {
 			}
 		}
 	})
-	h.waitCalls(b, "JoinBroadcastChannel", 2)
-	l = h.waitFor(l.ID, "the seat back", func(l Lobby) bool { return l.HostSeat.Confirmed && l.HostSeat.Team == "broadcaster" })
-	if l.HostSeat.Strategy != SeatCaster {
+	h.waitCalls(b, "JoinTeam", 2)
+	l = h.waitFor(l.ID, "the seat back", func(l Lobby) bool { return l.HostSeat.Confirmed && l.HostSeat.Team == "player_pool" })
+	if l.HostSeat.Strategy != SeatPlayerPool {
 		t.Errorf("host seat %+v", l.HostSeat)
 	}
 }
@@ -629,7 +629,7 @@ func TestHostSeatRestoredAfterAMove(t *testing.T) {
 func TestHostSeatAllFail(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	b := h.bot("bot1")
-	b.fc.OnCall("JoinBroadcastChannel", nil)
+	b.fc.OnCall("JoinTeam", nil)
 	b.fc.OnCall("KickFromTeam", nil)
 	l := h.create(spec("game-1"))
 	l = h.waitFor(l.ID, "both strategies tried", func(Lobby) bool { return b.fc.CallCount("KickFromTeam") >= 1 })
@@ -690,7 +690,7 @@ func TestLaunchToFinished(t *testing.T) {
 	b.setState(gc.LobbyServerAssign, 0, 0)
 	b.setState(gc.LobbyRun, 8123456789, 0)
 	l = h.waitState(l.ID, StateInGame)
-	if l.Match.MatchID != 8123456789 || l.Match.HostSeatStrategy != SeatCaster || l.Match.RadiantTeamRef != "team-7" {
+	if l.Match.MatchID != 8123456789 || l.Match.HostSeatStrategy != SeatPlayerPool || l.Match.RadiantTeamRef != "team-7" {
 		t.Errorf("match = %+v", l.Match)
 	}
 	b.setState(gc.LobbyPostGame, 8123456789, 2)

@@ -189,7 +189,7 @@ logs:
 
 - `"confirmed": false` with every strategy tried means the game coordinator ignored all of
   them. The bot tries again every 30 s while the lobby waits. Add more strategies to
-  `lobby.host_seat_strategy`, for example `[caster, self_kick, player_pool, spectator]`.
+  `lobby.host_seat_strategy`, for example `[player_pool, self_kick, no_team, spectator]`.
 - The strategy is retried automatically before each launch; retry the launch after a few
   seconds.
 - A bot that is moved back onto a team after its seat was confirmed seats itself again
@@ -206,8 +206,10 @@ A `lobby.launch_failed` event with `reason`:
 | `host_not_seated` | The bot could not be moved off its team right before the launch | Back to `waiting` |
 | `server_stall` | No game server within `lobby.server_stall_timeout` (10 min) | The lobby ends as `timed_out` |
 
-Reports say a bot in the caster slot can block the load. If launches with `caster` keep
-failing, put another strategy first: `lobby.host_seat_strategy: [player_pool, self_kick, caster]`.
+A bot in the caster slot blocks the load: the game waits for every caster to connect, and the
+headless bot never does. The service refuses a `caster` strategy for that reason. If the bot
+shows as `broadcaster` in `host_seat.team`, something else moved it there; it seats itself
+again in the pool before the next launch.
 After `lobby.max_launch_attempts` (3) failed launches, `state_reason` is
 `launch_attempts_exhausted` and only `{"force": true}` launches again. A real player on each
 side is reported to be needed for a launch.
@@ -225,7 +227,7 @@ side is reported to be needed for a launch.
 
 ### The bot does not answer in the lobby chat
 
-- Chat is off by default: set `lobby.chat.enabled: true` and restart.
+- Chat is on by default; check that `lobby.chat.enabled` is not set to `false`.
 - Commands start with `lobby.chat.prefix` (`!`). Text that starts with `/` is handled by the
   Dota client and never sent, so `/ready` does nothing.
 - Only members of the lobby are answered. A spectator watching through Dota TV is not a member.

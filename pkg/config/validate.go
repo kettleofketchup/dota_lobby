@@ -24,7 +24,7 @@ var (
 	logLevels          = []string{"debug", "info", "warn", "error"}
 	logFormats         = []string{"json", "text"}
 	leagueSources      = []string{"gc", "config", "web"}
-	hostSeatStrategies = []string{"caster", "self_kick", "player_pool", "spectator", "no_team"}
+	hostSeatStrategies = []string{"player_pool", "self_kick", "no_team", "spectator"}
 )
 
 func validateBotName(name string) error {
@@ -135,7 +135,11 @@ func (c *Config) Validate() error {
 		}
 	}
 	checkSet("league.sources", c.League.Sources, leagueSources, true)
-	checkSet("lobby.host_seat_strategy", c.Lobby.HostSeatStrategy, hostSeatStrategies, true)
+	if slices.Contains(c.Lobby.HostSeatStrategy, "caster") {
+		add("lobby.host_seat_strategy: caster is not supported: the game waits for a caster to load and the headless bot never does; use player_pool, self_kick or no_team")
+	} else {
+		checkSet("lobby.host_seat_strategy", c.Lobby.HostSeatStrategy, hostSeatStrategies, true)
+	}
 
 	if c.Match.OpenDota.Enabled {
 		if err := checkHTTPURL(c.Match.OpenDota.BaseURL); err != nil {

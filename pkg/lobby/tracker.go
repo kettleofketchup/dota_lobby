@@ -616,8 +616,6 @@ func (m *Manager) seatHost(ctx context.Context, h bot.Handle, l Lobby, host uint
 
 func seatOp(c gc.Client, strategy string, account uint32) error {
 	switch strategy {
-	case SeatCaster:
-		return c.JoinBroadcastChannel(0)
 	case SeatSelfKick:
 		return c.KickFromTeam(account)
 	case SeatPlayerPool:

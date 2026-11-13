@@ -381,7 +381,7 @@ func defaults() map[string]any {
 		"league::allow_unverified":  false,
 		"league::webapi_enrichment": true,
 
-		"lobby::host_seat_strategy":        []string{"caster", "self_kick"},
+		"lobby::host_seat_strategy":        []string{"player_pool", "self_kick", "no_team"},
 		"lobby::host_seat_confirm_timeout": "3s",
 		"lobby::max_launch_attempts":       3,
 		"lobby::pending_timeout":           "10m",
@@ -398,7 +398,7 @@ func defaults() map[string]any {
 		"lobby::ingame_backstop":           "3h",
 		"lobby::invite::min_resend":        "30s",
 		"lobby::invite::max_per_player":    5,
-		"lobby::chat::enabled":             false,
+		"lobby::chat::enabled":             true,
 		"lobby::chat::prefix":              "!",
 		"lobby::chat::send_interval":       "1s",
 		"lobby::chat::start_countdown":     "10s",
