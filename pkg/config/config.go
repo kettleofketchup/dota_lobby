@@ -99,7 +99,8 @@ type LeagueConfig struct {
 // name-to-wire tables. Map keys are lowercased by the loader.
 type LobbyConfig struct {
 	// HostSeatStrategy is the ordered list of ways to get the host out of
-	// a player slot: caster, self_kick, player_pool, spectator, no_team.
+	// a player slot: player_pool, self_kick, no_team, spectator. caster is
+	// rejected.
 	HostSeatStrategy []string `mapstructure:"host_seat_strategy"`
 	// HostSeatConfirmTimeout is how long one strategy may take to show in
 	// the lobby before the next is tried.

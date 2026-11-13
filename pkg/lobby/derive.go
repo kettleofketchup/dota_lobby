@@ -491,8 +491,8 @@ func hostMember(v *gc.LobbyView, host uint64) (gc.Member, bool) {
 
 // hostGate is the launch precondition: the host seat is confirmed and the
 // host is in the lobby with a known team that is not Radiant or Dire, where
-// the strategy in effect puts it (the broadcaster slot for caster). An
-// absent team decodes as Radiant, so presence is checked.
+// the strategy in effect puts it. An absent team decodes as Radiant, so
+// presence is checked.
 func hostGate(v *gc.LobbyView, host uint64, hs HostSeat) bool {
 	m, ok := hostMember(v, host)
 	if !hs.Confirmed || !ok || !m.TeamKnown || m.Team == gc.TeamRadiant || m.Team == gc.TeamDire {
