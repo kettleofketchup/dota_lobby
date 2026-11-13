@@ -4,7 +4,7 @@ With `lobby.chat.enabled: true`, the bot that hosts a lobby joins the lobby's ch
 commands typed there. Players can see who is missing, say they are ready and start the match
 themselves; admins can also start a lobby that is not ready and stop a start.
 
-Chat is off by default. Lobbies work the same without it, except that the ready check is skipped
+Chat is on by default; `lobby.chat.enabled: false` turns it off. Lobbies work the same without it, except that the ready check is skipped
 (see [The ready check](#the-ready-check)).
 
 ## Turning it on

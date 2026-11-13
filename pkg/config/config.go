@@ -99,7 +99,8 @@ type LeagueConfig struct {
 // name-to-wire tables. Map keys are lowercased by the loader.
 type LobbyConfig struct {
 	// HostSeatStrategy is the ordered list of ways to get the host out of
-	// a player slot: caster, self_kick, player_pool, spectator, no_team.
+	// a player slot: player_pool, self_kick, no_team, spectator. caster is
+	// rejected.
 	HostSeatStrategy []string `mapstructure:"host_seat_strategy"`
 	// HostSeatConfirmTimeout is how long one strategy may take to show in
 	// the lobby before the next is tried.
@@ -381,7 +382,7 @@ func defaults() map[string]any {
 		"league::allow_unverified":  false,
 		"league::webapi_enrichment": true,
 
-		"lobby::host_seat_strategy":        []string{"caster", "self_kick"},
+		"lobby::host_seat_strategy":        []string{"player_pool", "self_kick", "no_team"},
 		"lobby::host_seat_confirm_timeout": "3s",
 		"lobby::max_launch_attempts":       3,
 		"lobby::pending_timeout":           "10m",
@@ -398,7 +399,7 @@ func defaults() map[string]any {
 		"lobby::ingame_backstop":           "3h",
 		"lobby::invite::min_resend":        "30s",
 		"lobby::invite::max_per_player":    5,
-		"lobby::chat::enabled":             false,
+		"lobby::chat::enabled":             true,
 		"lobby::chat::prefix":              "!",
 		"lobby::chat::send_interval":       "1s",
 		"lobby::chat::start_countdown":     "10s",

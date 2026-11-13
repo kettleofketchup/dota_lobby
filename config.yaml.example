@@ -67,9 +67,10 @@ league:
 
 lobby:
   # How the bot leaves its player slot before a launch, tried in order:
-  # caster, self_kick, player_pool, spectator, no_team. A launch that does
-  # not reach a game moves on to the next one.
-  host_seat_strategy: [caster, self_kick]
+  # player_pool, self_kick, no_team, spectator. A launch that does not reach
+  # a game moves on to the next one. caster is refused: the game waits for
+  # a caster to load, and the headless bot never does.
+  host_seat_strategy: [player_pool, self_kick, no_team]
   host_seat_confirm_timeout: 3s
   max_launch_attempts: 3   # then only a forced launch tries again
   pending_timeout: 10m     # waiting for a free bot
@@ -86,7 +87,7 @@ lobby:
   admins: []               # account IDs allowed admin chat commands in every lobby
   invite: { min_resend: 30s, max_per_player: 5 }
   chat:
-    enabled: false         # true: the bot joins each lobby's chat and answers commands
+    enabled: true          # the bot joins each lobby's chat and answers commands
     prefix: "!"            # not "/": the Dota client never sends those
     send_interval: 1s      # between two bot messages in one lobby
     start_countdown: 10s   # from a start command to the launch

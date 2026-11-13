@@ -599,7 +599,7 @@ used for a new lobby.
   "game_mode": "cm", "region": "us_east", "tv_delay_seconds": 120,
   "visibility": "public", "allow_cheats": false, "launch": "manual", "ready_check": false,
   "allow_short_handed": false, "kick_strangers": false, "admins": [],
-  "host_seat": {"strategy": "caster", "confirmed": true, "team": "broadcaster"},
+  "host_seat": {"strategy": "player_pool", "confirmed": true, "team": "player_pool"},
   "teams": {
     "radiant": {"team_ref": "team-7", "name": "Ravens", "players": [
       {"account_id": 11111111, "steam_id": "76561197971376839", "captain": true,
@@ -786,15 +786,19 @@ lobby shows it where the strategy puts it, within `lobby.host_seat_confirm_timeo
 
 | Strategy | Puts the bot in |
 |---|---|
-| `caster` | The broadcaster (caster) slot |
-| `self_kick` | The unassigned pool, by kicking itself from its team (also out of the caster slot) |
 | `player_pool` | The unassigned pool, by joining it |
+| `self_kick` | The unassigned pool, by kicking itself from its team |
 | `spectator` | The spectator team |
 | `no_team` | No team |
 
 `host_seat.confirmed` is `false` when every strategy failed; launches then answer
-`409 host_not_seated`. Which strategy reaches a running game is not known yet; see
-[Known limitations](../known-limitations.md).
+`409 host_not_seated`.
+
+There is no `caster` strategy, and the service refuses to start with one configured. The
+game counts a caster as someone who must load, so a live launch with the bot in the
+broadcaster slot failed the first load waiting for it. The default,
+`[player_pool, self_kick, no_team]`, keeps the bot in the unassigned pool or outside the
+teams.
 
 ### Events
 

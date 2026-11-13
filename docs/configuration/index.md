@@ -108,7 +108,7 @@ How lobbies run. See [Lobbies](../api/index.md#lobbies) for what each step does.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `lobby.host_seat_strategy` | list | `[caster, self_kick]` | How the bot leaves its player slot, tried in order: `caster`, `self_kick`, `player_pool`, `spectator`, `no_team`. A launch that fails moves on to the next one. See [Host seat](../api/index.md#host-seat) |
+| `lobby.host_seat_strategy` | list | `[player_pool, self_kick, no_team]` | How the bot leaves its player slot, tried in order: `player_pool`, `self_kick`, `no_team`, `spectator`. A launch that fails moves on to the next one. `caster` is refused: the load waits for a caster, and the bot never connects. See [Host seat](../api/index.md#host-seat) |
 | `lobby.host_seat_confirm_timeout` | duration | `3s` | How long one strategy may take to show in the lobby before the next is tried |
 | `lobby.max_launch_attempts` | int | `3` | Launches before only a forced launch tries again, 1-10 |
 | `lobby.pending_timeout` | duration | `10m` | How long a lobby waits for a free bot before it times out |
@@ -123,7 +123,7 @@ How lobbies run. See [Lobbies](../api/index.md#lobbies) for what each step does.
 | `lobby.drain_timeout` | duration | `10s` | Time the lobby step of shutdown may take |
 | `lobby.destroy_on_shutdown` | bool | `false` | Destroy lobbies that have not launched at shutdown, instead of leaving them for the next start |
 | `lobby.admins` | list of int | `[]` | Account IDs allowed admin commands in every lobby's chat. See [Lobby chat](../operations/lobby-chat.md) |
-| `lobby.chat.enabled` | bool | `false` | The bot joins each lobby's chat and answers commands; also turns on the ready check for lobbies that ask for it |
+| `lobby.chat.enabled` | bool | `true` | The bot joins each lobby's chat and answers commands; also turns on the ready check for lobbies that ask for it |
 | `lobby.chat.prefix` | string | `"!"` | What every chat command starts with, 1-4 characters without spaces. Not `/`: the Dota client never sends those |
 | `lobby.chat.send_interval` | duration | `1s` | Least time between two bot messages in one lobby |
 | `lobby.chat.start_countdown` | duration | `10s` | Time from `!start` to the launch, during which an admin can `!cancel` |

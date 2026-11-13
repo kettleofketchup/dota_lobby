@@ -97,8 +97,10 @@ const (
 
 // Host seat strategies. docs/research/11-draftforge-integration.md §5.1
 // gives the evidence for each; the configured list decides the order tried.
+// There is no caster strategy: a live launch with the bot in the
+// broadcaster slot failed the first load, waiting for a caster who never
+// connects.
 const (
-	SeatCaster     = "caster"
 	SeatSelfKick   = "self_kick"
 	SeatPlayerPool = "player_pool"
 	SeatSpectator  = "spectator"

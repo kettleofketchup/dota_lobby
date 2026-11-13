@@ -14,7 +14,7 @@ var (
 	t0      = time.Date(2026, 11, 8, 18, 0, 0, 0, time.UTC)
 	hostID  = gc.SteamID64(900)
 	cfgPure = config.LobbyConfig{
-		HostSeatStrategy:    []string{SeatCaster, SeatSelfKick},
+		HostSeatStrategy:    []string{SeatPlayerPool, SeatSelfKick},
 		MaxLaunchAttempts:   3,
 		PendingTimeout:      10 * time.Minute,
 		AutoLaunchDelay:     10 * time.Second,
@@ -188,7 +188,7 @@ func TestDeriveMatchData(t *testing.T) {
 
 func TestDeriveLaunchFailedMovesHostSeat(t *testing.T) {
 	l := rostered(StateLaunching, t0)
-	l.HostSeat = HostSeat{Strategy: SeatCaster, Confirmed: true, Next: 0}
+	l.HostSeat = HostSeat{Strategy: SeatPlayerPool, Confirmed: true, Next: 0}
 	l.LaunchAttempts = 1
 	res := derive(l, inputs{Now: t0.Add(3 * time.Minute), View: seatedView(gc.LobbyUI), Host: hostID, BotReady: true, Cfg: cfgPure})
 	if res.Lobby.HostSeat.Next != 1 || res.Lobby.HostSeat.Confirmed {
@@ -276,8 +276,8 @@ func TestHostGate(t *testing.T) {
 		{"on dire", new(hostAt(gc.TeamDire)), SeatSelfKick, false},
 		{"in the pool", new(hostAt(gc.TeamPlayerPool)), SeatSelfKick, true},
 		{"spectator", new(hostAt(gc.TeamSpectator)), SeatSpectator, true},
-		{"caster needs the broadcaster slot", new(hostAt(gc.TeamPlayerPool)), SeatCaster, false},
-		{"caster in the broadcaster slot", new(hostAt(gc.TeamBroadcaster)), SeatCaster, true},
+		{"pool strategy refuses the broadcaster slot", new(hostAt(gc.TeamBroadcaster)), SeatPlayerPool, false},
+		{"caster is no strategy", new(hostAt(gc.TeamBroadcaster)), "caster", false},
 		{"self kick leaves the broadcaster slot", new(hostAt(gc.TeamBroadcaster)), SeatSelfKick, false},
 	}
 	for _, tt := range tests {
@@ -299,7 +299,7 @@ func TestHostGate(t *testing.T) {
 func TestSeatSatisfied(t *testing.T) {
 	teams := []gc.Team{gc.TeamRadiant, gc.TeamDire, gc.TeamBroadcaster, gc.TeamSpectator, gc.TeamPlayerPool, gc.TeamNoTeam}
 	want := map[string][]bool{
-		SeatCaster:     {false, false, true, false, false, false},
+		"caster":       {false, false, false, false, false, false},
 		SeatSelfKick:   {false, false, false, true, true, true},
 		SeatPlayerPool: {false, false, false, false, true, false},
 		SeatSpectator:  {false, false, false, true, false, false},
