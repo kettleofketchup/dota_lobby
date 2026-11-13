@@ -1,1 +1,0 @@
-- `lobby.chat.enabled` defaults to `true`, so lobby chat commands work without extra config.

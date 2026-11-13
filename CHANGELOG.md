@@ -15,6 +15,46 @@ publishes the GitHub Release and `container.yml` the image. See
 
 <!-- Do not edit. Unreleased changes live in changelog.d/; `just release::` assembles them here. -->
 
+## [0.3.0] - 2026-11-13
+
+### Upgrading
+
+`caster` is no longer a valid `lobby.host_seat_strategy`, and the service refuses to start with
+it. Remove it from your config, or drop the key to use the new default:
+
+```yaml
+lobby:
+  host_seat_strategy: [player_pool, self_kick, no_team]
+```
+
+Lobby chat is now on by default: the hosting bot joins each lobby's chat and answers commands
+such as `!help`, `!ready` and `!start`. Set `lobby.chat.enabled: false` to keep it off.
+
+### Added
+
+- `just secrets k8s-secret <bot> <file>` copies a bot's credentials from
+  `secrets/bots/<bot>.sops.yaml` into a sops-encrypted Kubernetes Secret manifest as
+  `stringData["<bot>.yaml"]`, ready to mount as `credentials_dir`. Nothing is decrypted to
+  disk or printed, and other keys in the Secret are kept.
+
+### Changed
+
+- `lobby.chat.enabled` defaults to `true`, so lobby chat commands work without extra config.
+
+### Fixed
+
+- The bot no longer takes the caster slot before a launch. The game waits for every caster to
+  load, and the headless bot never connects, so the first load failed. `lobby.host_seat_strategy`
+  now defaults to `[player_pool, self_kick, no_team]`, which keeps the bot in the unassigned
+  pool or outside the teams.
+
+### Documentation
+
+- New [Kubernetes](https://kettleofketchup.github.io/dota_lobby/deployment/kubernetes/)
+  deployment page: one replica with `Recreate`, state on `ReadWriteOnce` block storage, bot
+  credentials as one Secret key per bot mounted as `credentials_dir`, `/livez` for both
+  probes, restricting access behind a tunnel, adding a bot, and backups.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
