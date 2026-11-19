@@ -265,9 +265,9 @@ func (m *Manager) chatJoined(e *entry, cs *chatSession, j chatJoin) {
 
 func seconds(d time.Duration) int { return int(d.Round(time.Second) / time.Second) }
 
-// onChat handles one chat message or member notice. Only current members of the lobby can
-// run commands, identified by the account ID the GC put on the message;
-// the bot's own messages are ignored.
+// onChat handles one chat message or member notice. Only current members
+// of the lobby can run commands, identified by the account ID the GC put on
+// the message; the bot's own messages and notices are ignored.
 func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMessage) {
 	if cs == nil {
 		return
