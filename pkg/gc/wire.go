@@ -119,6 +119,8 @@ type joinChatReply struct {
 	ChannelID   uint64
 	OK          bool
 	Result      string
+	// Members are the channel's members as Joined notices.
+	Members []ChatMessage
 }
 
 // decodeJoinChat decodes a 7010 body.
@@ -127,12 +129,21 @@ func decodeJoinChat(body []byte) (joinChatReply, error) {
 	if err := r.UnmarshalVT(body); err != nil {
 		return joinChatReply{}, fmt.Errorf("decode 7010 CMsgDOTAJoinChatChannelResponse: %w", err)
 	}
-	return joinChatReply{
+	out := joinChatReply{
 		ChannelName: r.GetChannelName(),
 		ChannelID:   r.GetChannelId(),
 		OK:          r.GetResult() == protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS,
 		Result:      r.GetResult().String(),
-	}, nil
+	}
+	for _, m := range r.GetMembers() {
+		out.Members = append(out.Members, chatJoined(out.ChannelID, m.GetSteamId(), m.GetPersonaName()))
+	}
+	return out, nil
+}
+
+// chatJoined is a Joined notice for a channel member.
+func chatJoined(channelID, steamID uint64, persona string) ChatMessage {
+	return ChatMessage{ChannelID: channelID, AccountID: AccountID(steamID), PersonaName: persona, Joined: true}
 }
 
 func chatMessage(m *protocol.CMsgDOTAChatMessage) ChatMessage {

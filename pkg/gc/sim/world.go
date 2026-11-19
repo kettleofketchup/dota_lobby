@@ -343,7 +343,9 @@ func (w *World) joinLocked(l *lobby, account uint32, personaName string) {
 		personaName = fmt.Sprintf("Player %d", account)
 	}
 	l.pending = slices.DeleteFunc(l.pending, func(a uint32) bool { return a == account })
-	l.members = append(l.members, &member{account: account, team: gc.TeamPlayerPool, persona: personaName})
+	m := &member{account: account, team: gc.TeamPlayerPool, persona: personaName}
+	l.members = append(l.members, m)
+	l.announceJoin(m)
 	w.log.Info("sim: player joined", "lobby_id", l.id, "account_id", account)
 	l.publish(gc.LobbyUpdated)
 }

@@ -265,16 +265,21 @@ func (e *ChatJoinError) Error() string { return "join chat " + e.Channel + ": " 
 // ChatMessage is one message in a joined chat channel. AccountID is set by
 // the GC and identifies the sender; PersonaName is free text the sender
 // chose and must never be used to tell who sent a message.
+//
+// Joined marks a member notice rather than a message: Text is empty and
+// PersonaName is the member's name. The GC lists the channel's members
+// when the bot joins and announces each member who joins later.
 type ChatMessage struct {
 	ChannelID   uint64
 	AccountID   uint32
 	PersonaName string
 	Text        string
+	Joined      bool
 }
 
 // LogValue leaves the persona name and text out of logs.
 func (m ChatMessage) LogValue() slog.Value {
-	return slog.GroupValue(slog.Uint64("channel_id", m.ChannelID), slog.Any("account_id", m.AccountID))
+	return slog.GroupValue(slog.Uint64("channel_id", m.ChannelID), slog.Any("account_id", m.AccountID), slog.Bool("joined", m.Joined))
 }
 
 // Event is one normalized Steam or GC event. The concrete types below are

@@ -127,6 +127,14 @@ func (l *lobby) say(m *member, text string) bool {
 	return delivered
 }
 
+// announceJoin tells the host, when it is in the chat, that m is a member
+// of the channel.
+func (l *lobby) announceJoin(m *member) {
+	if l.chatJoined {
+		l.host.chats.publish(gc.ChatMessage{ChannelID: l.channel, AccountID: m.account, PersonaName: m.persona, Joined: true})
+	}
+}
+
 // publish streams a snapshot of l to the host and makes it the host's
 // current lobby, or clears the host's lobby when l is destroyed.
 func (l *lobby) publish(kind gc.LobbyEventKind) {

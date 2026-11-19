@@ -144,7 +144,7 @@ func TestTeamsText(t *testing.T) {
 	l.Spec.Teams.Player(1).Ready = true
 	v := view(gc.LobbyUI, hostAt(gc.TeamPlayerPool), mem(1, gc.TeamRadiant), mem(2, gc.TeamDire))
 	got := teamsText(chatInput{Lobby: l, View: v, Host: hostID, Names: map[uint32]string{2: "Bob"}, Cfg: cfgChat})
-	want := "Radiant Ravens: 1/2 seated, 1 ready, on the wrong side Bob (2). Dire Owls: 0/1 seated, 0 ready, missing 3."
+	want := "Radiant Ravens: 1/2 seated, 1 ready, on the wrong side Bob. Dire Owls: 0/1 seated, 0 ready, missing 3."
 	if got != want {
 		t.Errorf("teams\n got %q\nwant %q", got, want)
 	}
@@ -289,7 +289,7 @@ func TestChatTextHelpers(t *testing.T) {
 	if got := cleanName(" Bob\x00\n" + strings.Repeat("x", 40)); got != "Bob"+strings.Repeat("x", 29) {
 		t.Errorf("cleanName = %q", got)
 	}
-	if got := missingText([]string{"2", "unready:3", "stranger:8", "dire"}, map[uint32]string{3: "Cat"}); got != "2 not seated, Cat (3) not ready, 8 is not rostered, nobody on dire" {
+	if got := missingText([]string{"2", "unready:3", "stranger:8", "dire"}, map[uint32]string{3: "Cat"}); got != "2 not seated, Cat not ready, 8 is not rostered, nobody on dire" {
 		t.Errorf("missingText = %q", got)
 	}
 }

@@ -448,6 +448,9 @@ func (a *Adapter) translate(c *conn, raw any) (Event, bool) {
 		// the supervisor's event stream.
 		a.chats.publish(chatMessage(&e.CMsgDOTAChatMessage))
 		return nil, false
+	case *devents.PlayerJoinedChannel:
+		a.chats.publish(chatJoined(e.GetChannelId(), e.GetSteamId(), e.GetPersonaName()))
+		return nil, false
 	}
 	return nil, false
 }
@@ -971,6 +974,9 @@ func (a *Adapter) JoinLobbyChat(ctx context.Context, gcLobbyID uint64) (uint64, 
 			}
 			if !r.OK {
 				return 0, &ChatJoinError{Channel: name, Result: r.Result}
+			}
+			for _, m := range r.Members {
+				a.chats.publish(m)
 			}
 			return r.ChannelID, nil
 		case <-ctx.Done():

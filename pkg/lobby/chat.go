@@ -288,14 +288,13 @@ func readyCount(l Lobby, account uint32, want bool) (ready, total int) {
 	return ready, total
 }
 
-// displayName is the persona name seen in chat, with the account ID, or the
-// account ID alone. Persona names are only ever shown, never trusted.
+// displayName is the persona name seen in chat, or the account ID when
+// there is none. Persona names are only ever shown, never trusted.
 func displayName(names map[uint32]string, account uint32) string {
-	id := strconv.FormatUint(uint64(account), 10)
 	if n := names[account]; n != "" {
-		return n + " (" + id + ")"
+		return n
 	}
-	return id
+	return strconv.FormatUint(uint64(account), 10)
 }
 
 // missingText turns readiness's missing list into words.

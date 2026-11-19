@@ -300,6 +300,19 @@ func TestChatHelpTeamsAndSeatNotice(t *testing.T) {
 	h.waitChat(b, "21: your seat is Dire.")
 }
 
+// A member who never typed is named from the GC's member notice.
+func TestChatSeatNoticeUsesMemberName(t *testing.T) {
+	h := newHarness(t, 1, withChat(time.Second))
+	l, b := h.chatWaiting(spec("game-names"))
+	b.join(11, gc.TeamRadiant)
+	b.fc.EmitChat(gc.ChatMessage{ChannelID: l.GCLobbyID + 1<<32, AccountID: 21, PersonaName: "Dana", Joined: true})
+	// Chat is handled in order, so the answer means the notice was seen.
+	b.say(l, 11, "!teams")
+	h.waitChat(b, "Radiant Ravens:")
+	b.join(21, gc.TeamRadiant)
+	h.waitChat(b, "Dana: your seat is Dire.")
+}
+
 func TestChatRejoinAndLeave(t *testing.T) {
 	h := newHarness(t, 1, withChat(time.Second))
 	l, b := h.chatWaiting(spec("game-rejoin"))

@@ -163,6 +163,52 @@ func TestSubscribeChat(t *testing.T) {
 	}
 }
 
+func TestChatMemberNotices(t *testing.T) {
+	ft := newFakeTransport()
+	a := newTestAdapter(t, ft)
+	ch, stop := a.SubscribeChat()
+	defer stop()
+	connectWelcomed(t, a, ft)
+	next := func() ChatMessage {
+		t.Helper()
+		select {
+		case m := <-ch:
+			return m
+		case <-time.After(2 * time.Second):
+			t.Fatal("no member notice on the subscription")
+			return ChatMessage{}
+		}
+	}
+
+	// The join reply lists the channel's members.
+	const lobbyID = 27110012345678901
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.JoinLobbyChat(t.Context(), lobbyID)
+		done <- err
+	}()
+	ft.waitWrite(t, msgJoinChatChannel)
+	ft.deliver(packet(t, msgJoinChatResponse, noJob, &protocol.CMsgDOTAJoinChatChannelResponse{
+		ChannelName: new(LobbyChannelName(lobbyID)), ChannelId: new(uint64(555)),
+		Result:  protocol.CMsgDOTAJoinChatChannelResponse_JOIN_SUCCESS.Enum(),
+		Members: []*protocol.CMsgDOTAChatMember{{SteamId: new(SteamID64(11111111)), PersonaName: new("Alice")}},
+	}))
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if m, want := next(), (ChatMessage{ChannelID: 555, AccountID: 11111111, PersonaName: "Alice", Joined: true}); m != want {
+		t.Errorf("member %+v, want %+v", m, want)
+	}
+
+	// So is a member who joins later.
+	ft.deliver(packet(t, uint32(protocol.EDOTAGCMsg_k_EMsgGCOtherJoinedChannel), noJob, &protocol.CMsgDOTAOtherJoinedChatChannel{
+		ChannelId: new(uint64(555)), SteamId: new(SteamID64(22222222)), PersonaName: new("Bob"),
+	}))
+	if m, want := next(), (ChatMessage{ChannelID: 555, AccountID: 22222222, PersonaName: "Bob", Joined: true}); m != want {
+		t.Errorf("joiner %+v, want %+v", m, want)
+	}
+}
+
 func TestLobbyChannelName(t *testing.T) {
 	if got := LobbyChannelName(27110012345678901); got != "Lobby_27110012345678901" {
 		t.Errorf("LobbyChannelName = %q", got)
