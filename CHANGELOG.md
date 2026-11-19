@@ -15,6 +15,16 @@ publishes the GitHub Release and `container.yml` the image. See
 
 <!-- Do not edit. Unreleased changes live in changelog.d/; `just release::` assembles them here. -->
 
+## [0.3.1] - 2026-11-19
+
+### Changed
+
+- Lobby chat names players by their Steam display name instead of their account ID, for
+  example `Alice: your seat is Dire.` rather than `231198709: your seat is Dire.`. The bot
+  learns names from the chat channel's member list when it joins and from each player who
+  joins later, so a player no longer has to type in chat first. The account ID is shown
+  only when no name is known.
+
 ## [0.3.0] - 2026-11-13
 
 ### Upgrading
