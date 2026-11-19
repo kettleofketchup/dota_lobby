@@ -265,7 +265,7 @@ func (m *Manager) chatJoined(e *entry, cs *chatSession, j chatJoin) {
 
 func seconds(d time.Duration) int { return int(d.Round(time.Second) / time.Second) }
 
-// onChat handles one chat message. Only current members of the lobby can
+// onChat handles one chat message or member notice. Only current members of the lobby can
 // run commands, identified by the account ID the GC put on the message;
 // the bot's own messages are ignored.
 func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMessage) {
@@ -285,6 +285,14 @@ func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMes
 	if msg.AccountID == 0 || msg.AccountID == gc.AccountID(st.SteamID) {
 		return
 	}
+	// Names are for display only, so any line or member notice in the
+	// lobby's channel may set one.
+	if n := cleanName(msg.PersonaName); n != "" {
+		cs.names[msg.AccountID] = n
+	}
+	if msg.Joined {
+		return
+	}
 	cfg := m.opts.Lobby
 	cmd, ok := parseCommand(cfg.Chat.Prefix, msg.Text)
 	if !ok {
@@ -299,9 +307,6 @@ func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMes
 	view := lobbyView(h, l.GCLobbyID)
 	if !inLobby(view, msg.AccountID) {
 		return
-	}
-	if n := cleanName(msg.PersonaName); n != "" {
-		cs.names[msg.AccountID] = n
 	}
 	now := m.now()
 	key := cooldownKey{msg.AccountID, cooldownGroup(cmd)}

@@ -444,6 +444,12 @@ func (c *Client) JoinLobbyChat(_ context.Context, gcLobbyID uint64) (uint64, err
 		l.chatJoined = true
 		w.chatJoinedLocked(l)
 	}
+	// The GC lists the channel's members in its join reply.
+	for _, m := range l.members {
+		if m.account != c.bot.AccountID {
+			l.announceJoin(m)
+		}
+	}
 	return l.channel, nil
 }
 

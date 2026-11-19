@@ -302,6 +302,18 @@ func TestManualLifecycle(t *testing.T) {
 	if _, err := c.JoinLobbyChat(t.Context(), id+1); err == nil {
 		t.Error("joined another lobby's chat")
 	}
+	// The join lists the other members, as the GC's join reply does.
+	notices := map[uint32]string{}
+	for len(notices) < 2 {
+		m := <-chats
+		if !m.Joined || m.ChannelID != ch || m.Text != "" {
+			t.Fatalf("member notice = %+v", m)
+		}
+		notices[m.AccountID] = m.PersonaName
+	}
+	if notices[alice] != "Alice" || notices[bob] != "Player 22222222" {
+		t.Errorf("member notices = %v", notices)
+	}
 	if delivered, err := w.Ready(id, alice); err != nil || !delivered {
 		t.Errorf("ready = %v %v", delivered, err)
 	}
@@ -439,6 +451,9 @@ func TestAutoMode(t *testing.T) {
 	for len(got) < 2 {
 		select {
 		case m := <-chats:
+			if m.Joined {
+				continue
+			}
 			if m.ChannelID != ch || m.Text != "!ready" {
 				t.Errorf("chat = %+v", m)
 			}
