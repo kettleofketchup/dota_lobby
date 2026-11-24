@@ -119,6 +119,21 @@ type MatchStartedData struct {
 	HostSeatStrategy string  `json:"host_seat_strategy" doc:"The host seat strategy of the launch"`
 	RadiantTeamRef   *string `json:"radiant_team_ref" nullable:"true" doc:"The Radiant team's reference"`
 	DireTeamRef      *string `json:"dire_team_ref" nullable:"true" doc:"The Dire team's reference"`
+	TeamsUnlocked    bool    `json:"teams_unlocked" doc:"The teams were unlocked: the sides may not match the team references"`
+}
+
+// LobbyTeamsLockData is the data of lobby.teams_unlocked and
+// lobby.teams_locked.
+type LobbyTeamsLockData struct {
+	Trigger     string  `json:"trigger" enum:"api,chat,shuffle" doc:"A PATCH, an admin's chat command, or a shuffle of a rostered lobby"`
+	ByAccountID *uint32 `json:"by_account_id" nullable:"true" doc:"The admin who asked in chat; null otherwise"`
+}
+
+// LobbyTeamsShuffledData is the data of lobby.teams_shuffled.
+type LobbyTeamsShuffledData struct {
+	Times       int     `json:"times" doc:"How many balanced shuffles were sent"`
+	Trigger     string  `json:"trigger" enum:"api,chat" doc:"What asked for the shuffle"`
+	ByAccountID *uint32 `json:"by_account_id" nullable:"true" doc:"The admin who asked in chat; null otherwise"`
 }
 
 // MatchEndedData is the data of match.ended. It is what the lobby
@@ -156,6 +171,8 @@ var eventKinds = []eventKind{
 	{"LobbyCreateFailedEvent", "The lobby could not be created.", []string{"lobby.create_failed"}, reflect.TypeFor[LobbyCreateFailedData]()},
 	{"LobbyUpdatedEvent", "A PATCH changed the lobby's settings.", []string{"lobby.updated"}, reflect.TypeFor[LobbyUpdatedData]()},
 	{"LobbyTeamsEvent", "The roster was replaced or the sides flipped.", []string{"lobby.roster_changed", "lobby.teams_flipped"}, reflect.TypeFor[LobbyTeamsData]()},
+	{"LobbyTeamsLockEvent", "The roster's sides stopped or started being enforced.", []string{"lobby.teams_unlocked", "lobby.teams_locked"}, reflect.TypeFor[LobbyTeamsLockData]()},
+	{"LobbyTeamsShuffledEvent", "The bot ran balanced shuffles.", []string{"lobby.teams_shuffled"}, reflect.TypeFor[LobbyTeamsShuffledData]()},
 	{"LobbyPlayerInvitedEvent", "The bot invited a rostered player.", []string{"lobby.player_invited"}, reflect.TypeFor[LobbyPlayerInvitedData]()},
 	{"LobbyPlayerPresenceEvent", "A member joined or left the lobby.", []string{"lobby.player_joined", "lobby.player_left"}, reflect.TypeFor[LobbyPlayerPresenceData]()},
 	{"LobbyPlayerSeatedEvent", "A member took a team slot.", []string{"lobby.player_seated"}, reflect.TypeFor[LobbyPlayerSeatedData]()},

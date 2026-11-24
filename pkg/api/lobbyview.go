@@ -78,6 +78,7 @@ type LobbyView struct {
 	ReadyCheck     bool              `json:"ready_check"`
 	ShortHanded    bool              `json:"allow_short_handed"`
 	KickStrangers  bool              `json:"kick_strangers"`
+	TeamsUnlocked  bool              `json:"teams_unlocked" doc:"The roster's sides are not enforced"`
 	Admins         []uint32          `json:"admins"`
 	HostSeat       hostSeatView      `json:"host_seat"`
 	Teams          teamsView         `json:"teams"`
@@ -147,7 +148,7 @@ func (s *Server) lobbyView(l lobby.Lobby) LobbyView {
 		LeagueNodeID: nonZero(sp.LeagueNodeID), LeagueVerified: l.LeagueVerified, Name: sp.Name,
 		GameMode: nameValue(sp.GameMode), Region: nameValue(sp.Region), TVDelaySeconds: nonZero(sp.TVDelaySeconds),
 		Visibility: sp.Visibility, AllowCheats: sp.AllowCheats, Launch: sp.Launch, ReadyCheck: sp.ReadyCheck,
-		ShortHanded: sp.AllowShortHanded, KickStrangers: sp.KickStrangers, Admins: sp.Admins,
+		ShortHanded: sp.AllowShortHanded, KickStrangers: sp.KickStrangers, TeamsUnlocked: sp.TeamsUnlocked, Admins: sp.Admins,
 		HostSeat:       hostSeatView{Strategy: nonEmpty(l.HostSeat.Strategy), Confirmed: l.HostSeat.Confirmed, Team: nonEmpty(l.HostSeat.Team)},
 		Strangers:      []memberView{},
 		PendingInvites: []string{},

@@ -24,6 +24,7 @@ type specDoc struct {
 	ReadyCheck       bool              `json:"ready_check,omitempty"`
 	AllowShortHanded bool              `json:"allow_short_handed,omitempty"`
 	KickStrangers    bool              `json:"kick_strangers,omitempty"`
+	TeamsUnlocked    bool              `json:"teams_unlocked,omitempty"`
 	Admins           []uint32          `json:"admins,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	Radiant          teamDoc           `json:"radiant"`
@@ -55,7 +56,7 @@ func toRow(l Lobby) (store.LobbyRow, []store.PlayerRow, error) {
 		ExternalRef: s.ExternalRef, Name: s.Name, LeagueID: s.LeagueID, LeagueNodeID: s.LeagueNodeID,
 		GameMode: s.GameMode, Region: s.Region, TVDelaySeconds: s.TVDelaySeconds, AllowCheats: s.AllowCheats,
 		Visibility: s.Visibility, Launch: s.Launch, ReadyCheck: s.ReadyCheck, AllowShortHanded: s.AllowShortHanded,
-		KickStrangers: s.KickStrangers, Admins: s.Admins, Metadata: s.Metadata,
+		KickStrangers: s.KickStrangers, TeamsUnlocked: s.TeamsUnlocked, Admins: s.Admins, Metadata: s.Metadata,
 		Radiant: teamDoc{TeamRef: s.Teams.Radiant.TeamRef, Name: s.Teams.Radiant.Name},
 		Dire:    teamDoc{TeamRef: s.Teams.Dire.TeamRef, Name: s.Teams.Dire.Name},
 	})
@@ -118,7 +119,7 @@ func fromRow(row store.LobbyRow, players []store.PlayerRow) (Lobby, error) {
 			LeagueID: doc.LeagueID, LeagueNodeID: doc.LeagueNodeID, GameMode: doc.GameMode, Region: doc.Region,
 			TVDelaySeconds: doc.TVDelaySeconds, AllowCheats: doc.AllowCheats, Visibility: doc.Visibility,
 			Launch: doc.Launch, ReadyCheck: doc.ReadyCheck, AllowShortHanded: doc.AllowShortHanded,
-			KickStrangers: doc.KickStrangers, Admins: doc.Admins, Metadata: doc.Metadata,
+			KickStrangers: doc.KickStrangers, TeamsUnlocked: doc.TeamsUnlocked, Admins: doc.Admins, Metadata: doc.Metadata,
 			Teams: Roster{
 				Radiant: Team{TeamRef: doc.Radiant.TeamRef, Name: doc.Radiant.Name},
 				Dire:    Team{TeamRef: doc.Dire.TeamRef, Name: doc.Dire.Name},

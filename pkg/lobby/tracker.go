@@ -67,11 +67,11 @@ func (m *Manager) track(ctx context.Context, e *entry) {
 		case inv := <-invites:
 			m.confirmInvite(e, inv)
 		case msg := <-chats:
-			m.onChat(e, cs, h, msg)
+			m.onChat(ctx, e, cs, h, msg)
 		case j := <-cs.joinedC():
 			m.chatJoined(e, cs, j)
 			for _, msg := range cs.takeEarly() {
-				m.onChat(e, cs, h, msg)
+				m.onChat(ctx, e, cs, h, msg)
 			}
 		case <-cs.countdownC():
 		}
@@ -482,7 +482,7 @@ func (m *Manager) observeMembers(e *entry, l Lobby, v *gc.LobbyView, host uint64
 		onSide := now.TeamKnown && !now.Coach() && (now.Team == gc.TeamRadiant || now.Team == gc.TeamDire)
 		moved := !inBefore || was.Team != now.Team || was.TeamKnown != now.TeamKnown
 		if onSide && moved {
-			correct := l.Spec.Teams.Empty() || (rostered && side.team() == now.Team)
+			correct := l.Spec.Teams.Empty() || l.Spec.TeamsUnlocked || (rostered && side.team() == now.Team)
 			evs = append(evs, newEvent{Type: "lobby.player_seated", Data: map[string]any{"account_id": a, "seat": now.Team.String(), "correct": correct}})
 		}
 	}

@@ -390,3 +390,38 @@ func TestChatRequeuedLobby(t *testing.T) {
 	h.waitState(l.ID, StateWaiting)
 	h.waitChat(b, "Type !help for commands.")
 }
+
+// An admin's !shuffle 3 unlocks the roster's teams and sends three
+// balanced shuffles; !lock and !unlock toggle the teams.
+func TestChatShuffleAndLock(t *testing.T) {
+	gap := shuffleGap
+	shuffleGap = 0
+	t.Cleanup(func() { shuffleGap = gap })
+	h := newHarness(t, 1, withChat(10*time.Minute))
+	l, b := h.chatWaiting(spec("game-staff"))
+	b.join(chatAdmin, gc.TeamSpectator)
+	b.join(11, gc.TeamRadiant)
+	time.Sleep(30 * time.Millisecond)
+
+	b.say(l, 11, "!shuffle")
+	h.waitChat(b, "Only an admin can !shuffle.")
+	b.say(l, chatAdmin, "!shuffle 3")
+	h.waitChat(b, "Shuffled the teams 3 times. Teams are unlocked.")
+	if n := b.fc.CallCount("BalancedShuffle"); n != 3 {
+		t.Errorf("BalancedShuffle sent %d times, want 3", n)
+	}
+	h.waitFor(l.ID, "unlocked teams", func(l Lobby) bool { return l.Spec.TeamsUnlocked })
+	if d := h.eventData(l.ID, "lobby.teams_shuffled"); len(d) != 1 || d[0]["by_account_id"] != uint32(chatAdmin) || d[0]["trigger"] != TriggerChat {
+		t.Errorf("teams_shuffled events %v", d)
+	}
+
+	b.say(l, chatAdmin, "!lock")
+	h.waitChat(b, "Teams locked")
+	h.waitFor(l.ID, "locked teams", func(l Lobby) bool { return !l.Spec.TeamsUnlocked })
+	b.say(l, chatAdmin, "!unlock")
+	h.waitChat(b, "Teams unlocked: players may take either side.")
+	h.waitFor(l.ID, "unlocked again", func(l Lobby) bool { return l.Spec.TeamsUnlocked })
+	if d := h.eventData(l.ID, "lobby.teams_locked"); len(d) != 1 || d[0]["trigger"] != LockTriggerChat {
+		t.Errorf("teams_locked events %v", d)
+	}
+}

@@ -28,7 +28,7 @@ type Lobbies interface {
 	SetRoster(ctx context.Context, id string, r lobby.Roster) (lobby.Lobby, error)
 	Launch(ctx context.Context, id string, req lobby.LaunchRequest) (lobby.Lobby, error)
 	FlipTeams(ctx context.Context, id string) (lobby.Lobby, error)
-	Shuffle(ctx context.Context, id string) (lobby.Lobby, error)
+	Shuffle(ctx context.Context, id string, req lobby.ShuffleRequest) (lobby.Lobby, error)
 	Events(ctx context.Context, id string, after int64, limit int) ([]lobby.Envelope, error)
 }
 
@@ -66,6 +66,7 @@ type createLobbyRequest struct {
 	ReadyCheck       bool              `json:"ready_check,omitempty"`
 	AllowShortHanded bool              `json:"allow_short_handed,omitempty"`
 	KickStrangers    bool              `json:"kick_strangers,omitempty"`
+	TeamsUnlocked    bool              `json:"teams_unlocked,omitempty" doc:"Keep the roster but do not enforce its sides: rostered players may sit on either side and strangers may take a slot"`
 	Admins           []uint32          `json:"admins,omitempty" doc:"Account IDs allowed admin commands in this lobby's chat"`
 	Teams            teamsReq          `json:"teams"`
 	Metadata         map[string]string `json:"metadata,omitempty" doc:"Up to 16 string pairs, returned in every response"`
@@ -83,6 +84,7 @@ type updateLobbyRequest struct {
 	ReadyCheck       *bool              `json:"ready_check,omitempty"`
 	AllowShortHanded *bool              `json:"allow_short_handed,omitempty"`
 	KickStrangers    *bool              `json:"kick_strangers,omitempty"`
+	TeamsUnlocked    *bool              `json:"teams_unlocked,omitempty" doc:"false locks the teams again: the bot moves rostered players back to their side"`
 	Admins           *[]uint32          `json:"admins,omitempty"`
 	Metadata         *map[string]string `json:"metadata,omitempty"`
 }
@@ -99,6 +101,10 @@ type kickRequest struct {
 
 type rosterRequest struct {
 	Teams teamsReq `json:"teams"`
+}
+
+type shuffleRequest struct {
+	Times int `json:"times,omitempty" minimum:"1" maximum:"5" doc:"How many balanced shuffles to run in a row; default 1"`
 }
 
 type launchRequest struct {
@@ -155,7 +161,7 @@ func (c createLobbyRequest) spec() (lobby.Spec, error) {
 		LeagueID: c.LeagueID, LeagueNodeID: c.LeagueNodeID, GameMode: string(c.GameMode), Region: string(c.Region),
 		TVDelaySeconds: c.TVDelaySeconds, AllowCheats: c.AllowCheats, Visibility: c.Visibility, Launch: c.Launch,
 		ReadyCheck: c.ReadyCheck, AllowShortHanded: c.AllowShortHanded, KickStrangers: c.KickStrangers,
-		Admins: c.Admins, Metadata: c.Metadata, Teams: roster,
+		TeamsUnlocked: c.TeamsUnlocked, Admins: c.Admins, Metadata: c.Metadata, Teams: roster,
 	}, nil
 }
 
@@ -163,7 +169,7 @@ func (p updateLobbyRequest) patch() lobby.Patch {
 	out := lobby.Patch{
 		Name: p.Name, TVDelaySeconds: p.TVDelaySeconds, Visibility: p.Visibility, AllowCheats: p.AllowCheats,
 		Launch: p.Launch, ReadyCheck: p.ReadyCheck, AllowShortHanded: p.AllowShortHanded,
-		KickStrangers: p.KickStrangers, Admins: p.Admins, Metadata: p.Metadata,
+		KickStrangers: p.KickStrangers, TeamsUnlocked: p.TeamsUnlocked, Admins: p.Admins, Metadata: p.Metadata,
 	}
 	if p.Password != nil {
 		pk := lobby.PassKey(*p.Password)
@@ -257,6 +263,11 @@ type launchInput struct {
 	Body *launchRequest
 }
 
+type shuffleInput struct {
+	ID   string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
+	Body *shuffleRequest
+}
+
 type eventsInput struct {
 	ID    string `path:"id" doc:"The lobby ID" example:"lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V"`
 	After int64  `query:"after" minimum:"0" doc:"Only events with a higher seq"`
@@ -324,8 +335,9 @@ func (s *Server) registerLobbies(r *router) {
 		"Allowed in ready, and in waiting with force. The body is optional.", http.StatusAccepted, lobbyErrors, bodyErrors), s.launchLobby)
 	register(s, r, lobbyOp("flip-lobby-teams", http.MethodPost, "/v1/lobbies/{id}/teams/flip", "Swap the sides",
 		"Swaps Radiant and Dire in the lobby and in the rosters, in waiting and ready.", http.StatusAccepted), s.flipLobbyTeams)
-	register(s, r, lobbyOp("shuffle-lobby-teams", http.MethodPost, "/v1/lobbies/{id}/teams/shuffle", "Balanced shuffle of an open lobby",
-		"Only when both rosters are empty.", http.StatusAccepted), s.shuffleLobbyTeams)
+	register(s, r, lobbyOp("shuffle-lobby-teams", http.MethodPost, "/v1/lobbies/{id}/teams/shuffle", "Balanced shuffle",
+		"In waiting and ready. A lobby with a roster has its teams unlocked first (teams_unlocked), so the bot "+
+			"stops moving players back to their rostered side. The body is optional.", http.StatusAccepted, lobbyErrors, bodyErrors), s.shuffleLobbyTeams)
 	register(s, r, lobbyOp("list-lobby-events", http.MethodGet, "/v1/lobbies/{id}/events", "List a lobby's events",
 		"Events with a seq above after, oldest first, in the envelope webhooks deliver.", http.StatusOK), s.listLobbyEvents)
 }
@@ -505,10 +517,14 @@ func (s *Server) flipLobbyTeams(ctx context.Context, in *lobbyIDInput) (*lobbyOu
 	return &lobbyOutput{Body: s.lobbyView(l)}, nil
 }
 
-func (s *Server) shuffleLobbyTeams(ctx context.Context, in *lobbyIDInput) (*lobbyOutput, error) {
+func (s *Server) shuffleLobbyTeams(ctx context.Context, in *shuffleInput) (*lobbyOutput, error) {
+	req := lobby.ShuffleRequest{Times: 1, Trigger: lobby.TriggerAPI}
+	if in.Body != nil && in.Body.Times != 0 {
+		req.Times = in.Body.Times
+	}
 	ctx, cancel := s.gcContext(ctx)
 	defer cancel()
-	l, err := s.opts.Lobbies.Shuffle(ctx, in.ID)
+	l, err := s.opts.Lobbies.Shuffle(ctx, in.ID, req)
 	if err != nil {
 		return nil, s.lobbyProblem(ctx, "shuffle-lobby-teams", err)
 	}
@@ -606,7 +622,7 @@ func (noLobbies) Launch(context.Context, string, lobby.LaunchRequest) (lobby.Lob
 func (noLobbies) FlipTeams(context.Context, string) (lobby.Lobby, error) {
 	return lobby.Lobby{}, errNoLobbies
 }
-func (noLobbies) Shuffle(context.Context, string) (lobby.Lobby, error) {
+func (noLobbies) Shuffle(context.Context, string, lobby.ShuffleRequest) (lobby.Lobby, error) {
 	return lobby.Lobby{}, errNoLobbies
 }
 func (noLobbies) Events(context.Context, string, int64, int) ([]lobby.Envelope, error) {

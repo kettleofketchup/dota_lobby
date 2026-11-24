@@ -20,6 +20,9 @@ const (
 	cmdUnready = "unready"
 	cmdStart   = "start"
 	cmdCancel  = "cancel"
+	cmdShuffle = "shuffle"
+	cmdUnlock  = "unlock"
+	cmdLock    = "lock"
 )
 
 // Per-player reply cooldowns. A cooldown silences the same command from
@@ -49,18 +52,18 @@ func cooldownGroup(cmd string) string {
 // maxChatText bounds one message the bot sends.
 const maxChatText = 300
 
-// parseCommand returns the lowercased command of a chat line, or false when
-// the line does not start with prefix. Arguments are ignored.
-func parseCommand(prefix, text string) (string, bool) {
+// parseCommand returns the lowercased command of a chat line and the words
+// after it, or false when the line does not start with prefix.
+func parseCommand(prefix, text string) (string, []string, bool) {
 	text = strings.TrimSpace(text)
 	if prefix == "" || !strings.HasPrefix(text, prefix) {
-		return "", false
+		return "", nil, false
 	}
 	f := strings.Fields(text[len(prefix):])
 	if len(f) == 0 || strings.HasPrefix(text[len(prefix):], " ") {
-		return "", false
+		return "", nil, false
 	}
-	return strings.ToLower(f[0]), true
+	return strings.ToLower(f[0]), f[1:], true
 }
 
 // isAdmin reports whether an account may run admin commands: the
@@ -78,6 +81,9 @@ const (
 	effUnready
 	effStart
 	effCancel
+	effShuffle
+	effUnlock
+	effLock
 )
 
 // chatInput is everything a command looks at.
@@ -86,7 +92,9 @@ type chatInput struct {
 	View    *gc.LobbyView
 	Host    uint64
 	Account uint32
-	Admin   bool
+	// Args are the words after the command.
+	Args  []string
+	Admin bool
 	// Countdown is true while a start countdown runs.
 	Countdown bool
 	// Names are persona names seen in chat, for display only.
@@ -100,6 +108,8 @@ type chatOutcome struct {
 	// Force is set for an admin start: it may launch from waiting, but
 	// not past lobby.max_launch_attempts.
 	Force bool
+	// Times is how many shuffles an effShuffle asks for.
+	Times int
 	Reply string
 	// Cooldown, when set, silences the same command from the same player
 	// for that long.
@@ -175,8 +185,66 @@ func runCommand(cmd string, in chatInput) chatOutcome {
 			return deny("No start to cancel.")
 		}
 		return chatOutcome{Effect: effCancel, Reply: "Start cancelled."}
+	case cmdShuffle, cmdUnlock, cmdLock:
+		return staffCommand(cmd, in)
 	}
 	return chatOutcome{}
+}
+
+// staffCommand answers the admin-only team commands: shuffle, unlock and
+// lock. The reply for an applied effect is sent once it has worked.
+func staffCommand(cmd string, in chatInput) chatOutcome {
+	l := in.Lobby
+	p := in.Cfg.Chat.Prefix
+	switch {
+	case !in.Admin:
+		return deny("Only an admin can " + p + cmd + ".")
+	case l.State != StateWaiting && l.State != StateReady:
+		return deny("Too late to change the teams now.")
+	case in.Countdown:
+		return deny("A start is counting down; " + p + "cancel it first.")
+	}
+	rostered := !l.Spec.Teams.Empty()
+	switch cmd {
+	case cmdShuffle:
+		times := 1
+		if len(in.Args) > 0 {
+			n, err := strconv.Atoi(in.Args[0])
+			if err != nil || n < 1 || n > MaxShuffles {
+				return deny(fmt.Sprintf("Usage: %sshuffle [1-%d].", p, MaxShuffles))
+			}
+			times = n
+		}
+		return chatOutcome{Effect: effShuffle, Times: times, Cooldown: denyCooldown}
+	case cmdUnlock:
+		switch {
+		case !rostered:
+			return deny("This lobby has no roster; the teams are not locked.")
+		case l.Spec.TeamsUnlocked:
+			return deny("The teams are already unlocked.")
+		}
+		return chatOutcome{Effect: effUnlock, Reply: "Teams unlocked: players may take either side."}
+	default:
+		switch {
+		case !rostered:
+			return deny("This lobby has no roster to lock the teams to.")
+		case !l.Spec.TeamsUnlocked:
+			return deny("The teams are already locked.")
+		}
+		return chatOutcome{Effect: effLock, Reply: "Teams locked: players go back to their rostered side."}
+	}
+}
+
+// shuffleReply is the chat answer to a shuffle that was sent.
+func shuffleReply(times int, rostered bool) string {
+	s := "Shuffled the teams."
+	if times > 1 {
+		s = fmt.Sprintf("Shuffled the teams %d times.", times)
+	}
+	if rostered {
+		s += " Teams are unlocked."
+	}
+	return s
 }
 
 func helpText(in chatInput) string {
@@ -187,7 +255,10 @@ func helpText(in chatInput) string {
 	}
 	cmds = append(cmds, p+cmdStart)
 	if in.Admin {
-		cmds = append(cmds, p+cmdCancel)
+		cmds = append(cmds, p+cmdCancel, p+cmdShuffle)
+		if !in.Lobby.Spec.Teams.Empty() {
+			cmds = append(cmds, p+cmdUnlock, p+cmdLock)
+		}
 	}
 	return "Commands: " + strings.Join(cmds, ", ") + "."
 }
@@ -208,6 +279,9 @@ func teamsText(in chatInput) string {
 		return fmt.Sprintf("Open lobby: Radiant %d, Dire %d.", counts[gc.TeamRadiant], counts[gc.TeamDire])
 	}
 	rc := readyCheckOn(l, in.Cfg)
+	if l.Spec.TeamsUnlocked {
+		return unlockedTeamsText(in, rc)
+	}
 	parts := make([]string, 0, 2)
 	for _, s := range []Side{Radiant, Dire} {
 		t := l.Spec.Teams.Team(s)
@@ -241,6 +315,48 @@ func teamsText(in chatInput) string {
 			b += ", on the wrong side " + strings.Join(wrong, " ")
 		}
 		parts = append(parts, b)
+	}
+	return strings.Join(parts, ". ") + "."
+}
+
+// unlockedTeamsText is the !teams answer with unlocked teams: who sits on
+// each side, rostered or not, and the rostered players not on a side.
+func unlockedTeamsText(in chatInput, rc bool) string {
+	l := in.Lobby
+	seated := map[gc.Team][]string{}
+	ready := map[gc.Team]int{}
+	if in.View != nil {
+		for _, m := range in.View.Members {
+			if !player(m, in.Host) || !onTeam(m) {
+				continue
+			}
+			a := gc.AccountID(m.SteamID)
+			seated[m.Team] = append(seated[m.Team], displayName(in.Names, a))
+			if p := l.Spec.Teams.Player(a); p != nil && p.Ready {
+				ready[m.Team]++
+			}
+		}
+	}
+	parts := []string{"Teams unlocked"}
+	for _, s := range []Side{Radiant, Dire} {
+		names := seated[s.team()]
+		b := fmt.Sprintf("%s %d", sideName(s), len(names))
+		if rc {
+			b += fmt.Sprintf(" (%d ready)", ready[s.team()])
+		}
+		if len(names) > 0 {
+			b += ": " + strings.Join(names, " ")
+		}
+		parts = append(parts, b)
+	}
+	var missing []string
+	for _, e := range l.Spec.Teams.All() {
+		if !seatedOn(in.View, in.Host, e.AccountID, Radiant) && !seatedOn(in.View, in.Host, e.AccountID, Dire) {
+			missing = append(missing, displayName(in.Names, e.AccountID))
+		}
+	}
+	if len(missing) > 0 {
+		parts = append(parts, "missing "+strings.Join(missing, " "))
 	}
 	return strings.Join(parts, ". ") + "."
 }

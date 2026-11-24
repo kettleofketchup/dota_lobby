@@ -823,9 +823,15 @@ func (m *Manager) Update(ctx context.Context, id string, p Patch) (Lobby, error)
 		cur.Spec.Name, cur.Spec.Password, cur.Spec.GameMode, cur.Spec.Region = spec.Name, spec.Password, spec.GameMode, spec.Region
 		cur.Spec.TVDelaySeconds, cur.Spec.Visibility, cur.Spec.AllowCheats, cur.Spec.Launch = spec.TVDelaySeconds, spec.Visibility, spec.AllowCheats, spec.Launch
 		cur.Spec.ReadyCheck, cur.Spec.AllowShortHanded, cur.Spec.KickStrangers = spec.ReadyCheck, spec.AllowShortHanded, spec.KickStrangers
+		was := cur.Spec.TeamsUnlocked
+		cur.Spec.TeamsUnlocked = spec.TeamsUnlocked
 		cur.Spec.Admins, cur.Spec.Metadata = spec.Admins, spec.Metadata
 		cur.Details = details
-		return []newEvent{{Type: "lobby.updated", Data: map[string]any{"fields": p.fields()}}}, nil
+		evs := []newEvent{{Type: "lobby.updated", Data: map[string]any{"fields": p.fields()}}}
+		if was != spec.TeamsUnlocked {
+			evs = append(evs, lockEvent(spec.TeamsUnlocked, LockTriggerAPI, 0))
+		}
+		return evs, nil
 	})
 }
 
@@ -861,6 +867,7 @@ func (p Patch) fields() []string {
 	add("ready_check", p.ReadyCheck != nil)
 	add("allow_short_handed", p.AllowShortHanded != nil)
 	add("kick_strangers", p.KickStrangers != nil)
+	add("teams_unlocked", p.TeamsUnlocked != nil)
 	add("admins", p.Admins != nil)
 	add("metadata", p.Metadata != nil)
 	return out
@@ -1322,31 +1329,121 @@ func (m *Manager) applyFlip(e *entry) (Lobby, error) {
 	return out, nil
 }
 
-// Shuffle asks the GC for a balanced shuffle. Only an open lobby (both
-// rosters empty) may shuffle: a shuffle would undo a roster.
-func (m *Manager) Shuffle(ctx context.Context, id string) (Lobby, error) {
+// Lock and shuffle triggers, as reported in lobby.teams_unlocked,
+// lobby.teams_locked and lobby.teams_shuffled.
+const (
+	LockTriggerAPI     = "api"
+	LockTriggerChat    = "chat"
+	LockTriggerShuffle = "shuffle"
+)
+
+// MaxShuffles bounds the balanced shuffles of one request.
+const MaxShuffles = 5
+
+// shuffleGap is the pause between the shuffles of one request, so each
+// one starts from the teams the last one dealt.
+var shuffleGap = 500 * time.Millisecond
+
+// ShuffleRequest is a balanced shuffle: Times shuffles (0 means 1), asked
+// for by Trigger (TriggerAPI or TriggerChat) and, in chat, By.
+type ShuffleRequest struct {
+	Times   int
+	Trigger string
+	By      uint32
+}
+
+// lockEvent is the event of teams becoming unlocked or locked.
+func lockEvent(unlocked bool, trigger string, by uint32) newEvent {
+	typ, data := "lobby.teams_locked", map[string]any{"trigger": trigger, "by_account_id": nil}
+	if unlocked {
+		typ, data = "lobby.teams_unlocked", map[string]any{"trigger": trigger, "by_account_id": nil}
+	}
+	if by != 0 {
+		data["by_account_id"] = by
+	}
+	return newEvent{Type: typ, Data: data}
+}
+
+// setUnlocked stores whether the lobby's teams are unlocked, with its
+// event; changed is false when they already were. The caller holds op.
+func (m *Manager) setUnlocked(e *entry, unlocked bool, trigger string, by uint32) (Lobby, bool, error) {
+	if e.snapshot().Spec.TeamsUnlocked == unlocked {
+		return e.snapshot(), false, nil
+	}
+	l, err := m.commit(e, func(cur *Lobby) ([]newEvent, error) {
+		cur.Spec.TeamsUnlocked = unlocked
+		return []newEvent{lockEvent(unlocked, trigger, by)}, nil
+	})
+	if err != nil {
+		return Lobby{}, false, err
+	}
+	e.wakeUp()
+	return l, true, nil
+}
+
+// Shuffle asks the GC for balanced shuffles. A lobby with a roster has its
+// teams unlocked first, or the bot would move everyone back to the side
+// the roster gives them.
+func (m *Manager) Shuffle(ctx context.Context, id string, req ShuffleRequest) (Lobby, error) {
 	e, err := m.activeEntry(ctx, id)
 	if err != nil {
 		return Lobby{}, err
 	}
 	e.op.Lock()
 	defer e.op.Unlock()
+	return m.shuffleHeld(ctx, e, req)
+}
+
+// shuffleHeld is Shuffle with op held.
+func (m *Manager) shuffleHeld(ctx context.Context, e *entry, req ShuffleRequest) (Lobby, error) {
+	if req.Times == 0 {
+		req.Times = 1
+	}
+	if req.Times < 1 || req.Times > MaxShuffles {
+		return Lobby{}, invalid("times must be 1-%d", MaxShuffles)
+	}
 	l := e.snapshot()
 	if err := stateErr(l, StateWaiting, StateReady); err != nil {
 		return Lobby{}, err
 	}
-	if !l.Spec.Teams.Empty() {
-		return Lobby{}, fmt.Errorf("%w: the lobby has a roster; shuffle only works for an open lobby", ErrInvalidState)
+	if e.flip != nil {
+		return Lobby{}, fmt.Errorf("%w: the last flip has not shown in the lobby yet", ErrInvalidState)
 	}
 	h, _, err := m.handle(l)
 	if err != nil {
 		return Lobby{}, err
 	}
-	if err := m.do(ctx, h, "balanced shuffle", func(c gc.Client) error { return c.BalancedShuffle() }); err != nil {
+	if !l.Spec.Teams.Empty() {
+		if _, _, err := m.setUnlocked(e, true, LockTriggerShuffle, req.By); err != nil {
+			return Lobby{}, err
+		}
+	}
+	for i := range req.Times {
+		if i > 0 && shuffleGap > 0 {
+			t := time.NewTimer(shuffleGap)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return Lobby{}, gcErr("balanced shuffle", ctx.Err())
+			case <-t.C:
+			}
+		}
+		if err := m.do(ctx, h, "balanced shuffle", func(c gc.Client) error { return c.BalancedShuffle() }); err != nil {
+			return Lobby{}, err
+		}
+	}
+	data := map[string]any{"times": req.Times, "trigger": req.Trigger, "by_account_id": nil}
+	if req.By != 0 {
+		data["by_account_id"] = req.By
+	}
+	out, err := m.commit(e, func(*Lobby) ([]newEvent, error) {
+		return []newEvent{{Type: "lobby.teams_shuffled", Data: data}}, nil
+	})
+	if err != nil {
 		return Lobby{}, err
 	}
 	e.wakeUp()
-	return e.snapshot(), nil
+	return out, nil
 }
 
 // Drain is the lobby step of shutdown. It stops the pending queue and

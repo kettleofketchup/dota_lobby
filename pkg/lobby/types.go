@@ -250,9 +250,12 @@ type Spec struct {
 	ReadyCheck       bool
 	AllowShortHanded bool
 	KickStrangers    bool
-	Admins           []uint32
-	Metadata         map[string]string
-	Teams            Roster
+	// TeamsUnlocked keeps the roster but stops enforcing its sides: a
+	// rostered player may sit on either side and strangers may take a slot.
+	TeamsUnlocked bool
+	Admins        []uint32
+	Metadata      map[string]string
+	Teams         Roster
 }
 
 func (s Spec) clone() Spec {
@@ -486,7 +489,7 @@ const (
 // PlayerStatus is a rostered player's status and seat ("" for none).
 func (l Lobby) PlayerStatus(e RosterEntry) (status, seat string) {
 	if m, ok := l.Member(e.AccountID); ok {
-		if m.Seat == string(e.Side) {
+		if m.Seat == string(e.Side) || (l.Spec.TeamsUnlocked && (m.Seat == string(Radiant) || m.Seat == string(Dire))) {
 			return StatusSeated, m.Seat
 		}
 		return StatusJoined, m.Seat

@@ -39,7 +39,7 @@ the API.
 | `POST` | `/v1/lobbies/{id}/roster` | When an API key is set | Replace both rosters |
 | `POST` | `/v1/lobbies/{id}/launch` | When an API key is set | Start the match |
 | `POST` | `/v1/lobbies/{id}/teams/flip` | When an API key is set | Swap the sides |
-| `POST` | `/v1/lobbies/{id}/teams/shuffle` | When an API key is set | Balanced shuffle of an open lobby |
+| `POST` | `/v1/lobbies/{id}/teams/shuffle` | When an API key is set | Balanced shuffle; unlocks a rostered lobby's teams |
 | `GET` | `/v1/lobbies/{id}/events` | When an API key is set | A lobby's events, oldest first |
 | various | `/v1/sim/...` | When an API key is set | Drive the simulator; only in [simulation mode](../development/simulation.md#control-api), `404` otherwise |
 | any | `/bots`, `/lobby/create`, `/lobby/info` | When an API key is set | `410`, the old endpoints are gone |
@@ -558,6 +558,7 @@ background; follow it with `GET /v1/lobbies/{id}`.
 | `launch` | no | `manual` (default): launch through the API. `auto`: launch `lobby.auto_launch_delay` (10 s) after the lobby is `ready` |
 | `allow_short_handed` | no | `ready` without every rostered player, as long as each side has one and nobody sits wrong |
 | `kick_strangers` | no | Remove members who are not rostered from the lobby, not only from the teams, when they sit on a side or in the pool. The caster and spectator slots are left alone |
+| `teams_unlocked` | no | Keep the roster but do not enforce its sides: rostered players may sit on either side and strangers may take a slot. See [Shuffling and unlocked teams](../operations/lobby-chat.md#shuffling-and-unlocked-teams) |
 | `ready_check` | no | With lobby chat on and a roster, the lobby is only `ready` once every seated player typed `!ready`; see [Lobby chat](../operations/lobby-chat.md#the-ready-check). Default `false` |
 | `admins` | no | Account IDs allowed admin commands in this lobby's chat, on top of `lobby.admins` |
 | `metadata` | no | Up to 16 string pairs, returned in every response |
@@ -598,7 +599,7 @@ used for a new lobby.
   "password": "k3tt1e",
   "game_mode": "cm", "region": "us_east", "tv_delay_seconds": 120,
   "visibility": "public", "allow_cheats": false, "launch": "manual", "ready_check": false,
-  "allow_short_handed": false, "kick_strangers": false, "admins": [],
+  "allow_short_handed": false, "kick_strangers": false, "teams_unlocked": false, "admins": [],
   "host_seat": {"strategy": "player_pool", "confirmed": true, "team": "player_pool"},
   "teams": {
     "radiant": {"team_ref": "team-7", "name": "Ravens", "players": [
@@ -671,7 +672,7 @@ The lobby object, `404` for an unknown ID. Ended lobbies stay available for `sto
 ```
 
 Any of `name`, `password`, `game_mode`, `region`, `tv_delay_seconds`, `visibility`,
-`allow_cheats`, `launch`, `ready_check`, `allow_short_handed`, `kick_strangers`, `admins` and
+`allow_cheats`, `launch`, `ready_check`, `allow_short_handed`, `kick_strangers`, `teams_unlocked`, `admins` and
 `metadata`. Allowed in `pending`, `waiting` and `ready`; `409 invalid_state` otherwise. In
 `waiting` and `ready` the whole detail set is sent to the game coordinator again, because it
 replaces every detail with what it gets. `200` with the lobby.
@@ -760,19 +761,25 @@ flip, so seated players are not moved in between. The response waits for that up
 
 ### `POST /v1/lobbies/{id}/teams/shuffle`
 
-A balanced shuffle by the game coordinator. Only for an open lobby (both rosters empty);
-`409 invalid_state` otherwise.
+Balanced shuffles by the game coordinator, in `waiting` and `ready`. The body is optional:
+`{"times": 3}` runs three in a row (1-5, default 1). A lobby with a roster has its teams unlocked
+first (`teams_unlocked: true`, `lobby.teams_unlocked` with `trigger` `shuffle`), or the bot would
+move everyone back to their rostered side; see
+[Shuffling and unlocked teams](../operations/lobby-chat.md#shuffling-and-unlocked-teams).
+`lobby.teams_shuffled` reports the shuffles. While a flip has not shown, it answers
+`409 invalid_state`.
 
 ### Ready
 
 A lobby is `ready` when every rostered player is in the lobby on their own side and nobody who
 is not rostered sits on Radiant or Dire. For an open lobby, one player on each side is enough.
-The bot itself and coaches are never counted. With lobby chat on and `ready_check: true`, every
+The bot itself and coaches are never counted. A lobby with unlocked teams follows
+[other rules](../operations/lobby-chat.md#shuffling-and-unlocked-teams). With lobby chat on and `ready_check: true`, every
 seated rostered player must also have typed `!ready`; see
 [Lobby chat](../operations/lobby-chat.md#the-ready-check).
 
 While a lobby is `waiting` or `ready`, the bot moves rostered players who sit on the wrong side,
-and strangers on a side, back to the pool. With `kick_strangers`, strangers on a side or in the
+and strangers on a side, back to the pool, unless its teams are unlocked. With `kick_strangers`, strangers on a side or in the
 pool are removed from the lobby; casters and spectators stay. It acts on a
 member at most once per `lobby.enforce_cooldown` (10 s) and stops after five tries. A member
 whose team the game coordinator does not send is never moved.
@@ -815,6 +822,8 @@ with the change. Events are kept with the lobby, listed by
 | `lobby.enforcement_stopped` | A member was moved five times; the bot leaves them alone |
 | `lobby.ready`, `lobby.unready` | The lobby became ready, or stopped being ready (`missing`) |
 | `lobby.updated`, `lobby.roster_changed`, `lobby.teams_flipped` | Settings, rosters or sides changed |
+| `lobby.teams_unlocked`, `lobby.teams_locked` | The roster's sides stopped or started being enforced (`trigger`: `api`, `chat` or `shuffle`) |
+| `lobby.teams_shuffled` | Balanced shuffles were sent (`times`, `trigger`, `by_account_id`) |
 | `lobby.player_ready`, `lobby.player_unready` | A player typed `!ready` or `!unready`, or lost the ready mark by leaving their side (`reason`: `chat`, `moved`, `left`) |
 | `lobby.launching`, `lobby.launch_failed` | A launch started (`trigger`: `api`, `chat` or `auto`; `by_account_id` for a chat start), or did not reach a game |
 | `match.started`, `match.ended` | Match ID assigned; outcome reported (`provisional: true`) |
