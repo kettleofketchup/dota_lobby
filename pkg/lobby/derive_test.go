@@ -231,6 +231,7 @@ func TestReadiness(t *testing.T) {
 	coach.CoachTeam = &dire
 	unknown := gc.Member{SteamID: gc.SteamID64(1)} // team absent: decodes as Radiant
 	open := func() Lobby { l := rostered(StateWaiting, t0); l.Spec.Teams = Roster{}; return l }
+	unlocked := func() Lobby { l := rostered(StateWaiting, t0); l.Spec.TeamsUnlocked = true; return l }
 	short := func() Lobby { l := rostered(StateWaiting, t0); l.Spec.AllowShortHanded = true; return l }
 
 	tests := []struct {
@@ -251,6 +252,10 @@ func TestReadiness(t *testing.T) {
 		{"open lobby, host does not count", open(), []gc.Member{hostAt(gc.TeamRadiant), mem(9, gc.TeamDire)}, false, []string{"radiant"}},
 		{"short-handed allows absent", short(), []gc.Member{mem(1, gc.TeamRadiant), mem(3, gc.TeamDire)}, true, []string{}},
 		{"short-handed still needs a side", short(), []gc.Member{mem(1, gc.TeamRadiant)}, false, []string{"dire"}},
+		{"unlocked: either side", unlocked(), []gc.Member{mem(1, gc.TeamDire), mem(2, gc.TeamRadiant), mem(3, gc.TeamRadiant)}, true, []string{}},
+		{"unlocked: stranger on a side does not block", unlocked(), append(seatedView(gc.LobbyUI).Members, mem(8, gc.TeamDire)), true, []string{}},
+		{"unlocked: the pool is not seated", unlocked(), []gc.Member{mem(1, gc.TeamRadiant), mem(2, gc.TeamPlayerPool), mem(3, gc.TeamDire)}, false, []string{"2"}},
+		{"unlocked: each side needs someone", unlocked(), []gc.Member{mem(1, gc.TeamRadiant), mem(2, gc.TeamRadiant), mem(3, gc.TeamRadiant)}, false, []string{"dire"}},
 		{"short-handed present but unseated", short(), []gc.Member{mem(1, gc.TeamRadiant), mem(2, gc.TeamPlayerPool), mem(3, gc.TeamDire)}, false, []string{"2"}},
 	}
 	for _, tt := range tests {
@@ -326,6 +331,10 @@ func TestPlanEnforcement(t *testing.T) {
 	kickStrangers.Spec.KickStrangers = true
 	open := rostered(StateWaiting, t0)
 	open.Spec.Teams = Roster{}
+	unlocked := rostered(StateWaiting, t0)
+	unlocked.Spec.TeamsUnlocked = true
+	unlockedKick := unlocked
+	unlockedKick.Spec.KickStrangers = true
 	now := t0.Add(time.Minute)
 
 	tests := []struct {
@@ -343,6 +352,9 @@ func TestPlanEnforcement(t *testing.T) {
 		{"stranger on a side", rostered(StateWaiting, t0), []gc.Member{mem(8, gc.TeamDire), mem(9, gc.TeamPlayerPool)}, nil, []string{"kick_from_team:8"}},
 		{"kick_strangers removes them", kickStrangers, []gc.Member{mem(8, gc.TeamDire), mem(9, gc.TeamPlayerPool)}, nil, []string{"kick:8", "kick:9"}},
 		{"kick_strangers spares casters and spectators", kickStrangers, []gc.Member{mem(8, gc.TeamBroadcaster), mem(9, gc.TeamSpectator), mem(10, gc.TeamNoTeam)}, nil, []string{}},
+		{"unlocked: wrong side left alone", unlocked, []gc.Member{mem(1, gc.TeamDire), mem(3, gc.TeamRadiant)}, nil, []string{}},
+		{"unlocked: stranger on a side left alone", unlocked, []gc.Member{mem(8, gc.TeamDire)}, nil, []string{}},
+		{"unlocked: kick_strangers still kicks", unlockedKick, []gc.Member{mem(8, gc.TeamDire)}, nil, []string{"kick:8"}},
 		{"open lobby has no strangers", open, []gc.Member{mem(8, gc.TeamDire)}, nil, []string{}},
 		{"cooldown", rostered(StateWaiting, t0), []gc.Member{mem(1, gc.TeamDire)}, map[uint32]enforceState{1: {Last: now.Add(-5 * time.Second), Count: 1}}, []string{}},
 		{"after the cooldown", rostered(StateWaiting, t0), []gc.Member{mem(1, gc.TeamDire)}, map[uint32]enforceState{1: {Last: now.Add(-11 * time.Second), Count: 1}}, []string{"kick_from_team:1"}},

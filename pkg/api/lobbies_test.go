@@ -37,6 +37,7 @@ type fakeLobbies struct {
 	invited lobby.InviteRequest
 	kicked  [2]any
 	roster  lobby.Roster
+	shuffle lobby.ShuffleRequest
 	launch  lobby.LaunchRequest
 	calls   []string
 
@@ -98,8 +99,9 @@ func (f *fakeLobbies) FlipTeams(context.Context, string) (lobby.Lobby, error) {
 	f.call("flip")
 	return f.lobby, f.err
 }
-func (f *fakeLobbies) Shuffle(context.Context, string) (lobby.Lobby, error) {
+func (f *fakeLobbies) Shuffle(_ context.Context, _ string, req lobby.ShuffleRequest) (lobby.Lobby, error) {
 	f.call("shuffle")
+	f.shuffle = req
 	return f.lobby, f.err
 }
 func (f *fakeLobbies) Events(_ context.Context, _ string, after int64, limit int) ([]lobby.Envelope, error) {
@@ -428,6 +430,11 @@ func TestLobbyActions(t *testing.T) {
 				t.Errorf("patch %+v", p)
 			}
 		}},
+		{"patch teams_unlocked", "PATCH", "/v1/lobbies/lob_x", `{"teams_unlocked":true}`, 200, func(t *testing.T, f *fakeLobbies) {
+			if f.patch.TeamsUnlocked == nil || !*f.patch.TeamsUnlocked {
+				t.Errorf("patch %+v", f.patch)
+			}
+		}},
 		{"delete", "DELETE", "/v1/lobbies/lob_x", "", 202, nil},
 		{"invite players", "POST", "/v1/lobbies/lob_x/invite", `{"players":[11111111]}`, 200, func(t *testing.T, f *fakeLobbies) {
 			if len(f.invited.Players) != 1 || f.invited.Missing {
@@ -460,7 +467,17 @@ func TestLobbyActions(t *testing.T) {
 			}
 		}},
 		{"flip", "POST", "/v1/lobbies/lob_x/teams/flip", "", 202, nil},
-		{"shuffle", "POST", "/v1/lobbies/lob_x/teams/shuffle", "", 202, nil},
+		{"shuffle", "POST", "/v1/lobbies/lob_x/teams/shuffle", "", 202, func(t *testing.T, f *fakeLobbies) {
+			if f.shuffle.Times != 1 || f.shuffle.Trigger != lobby.TriggerAPI {
+				t.Errorf("shuffle %+v", f.shuffle)
+			}
+		}},
+		{"shuffle three times", "POST", "/v1/lobbies/lob_x/teams/shuffle", `{"times":3}`, 202, func(t *testing.T, f *fakeLobbies) {
+			if f.shuffle.Times != 3 {
+				t.Errorf("shuffle %+v", f.shuffle)
+			}
+		}},
+		{"shuffle too many", "POST", "/v1/lobbies/lob_x/teams/shuffle", `{"times":6}`, 422, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

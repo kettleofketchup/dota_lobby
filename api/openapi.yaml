@@ -244,6 +244,9 @@ components:
               type: integer
         teams:
           $ref: "#/components/schemas/TeamsReq"
+        teams_unlocked:
+          description: "Keep the roster but do not enforce its sides: rostered players may sit on either side and strangers may take a slot"
+          type: boolean
         tv_delay_seconds:
           description: 10, 60, 120, 300 or 900
           format: int32
@@ -842,6 +845,9 @@ components:
           lobby.roster_changed: "#/components/schemas/LobbyTeamsEvent"
           lobby.state_changed: "#/components/schemas/LobbyStateChangedEvent"
           lobby.teams_flipped: "#/components/schemas/LobbyTeamsEvent"
+          lobby.teams_locked: "#/components/schemas/LobbyTeamsLockEvent"
+          lobby.teams_shuffled: "#/components/schemas/LobbyTeamsShuffledEvent"
+          lobby.teams_unlocked: "#/components/schemas/LobbyTeamsLockEvent"
           lobby.timed_out: "#/components/schemas/LobbyEndedEvent"
           lobby.unready: "#/components/schemas/LobbyUnreadyEvent"
           lobby.updated: "#/components/schemas/LobbyUpdatedEvent"
@@ -854,6 +860,8 @@ components:
         - $ref: "#/components/schemas/LobbyCreateFailedEvent"
         - $ref: "#/components/schemas/LobbyUpdatedEvent"
         - $ref: "#/components/schemas/LobbyTeamsEvent"
+        - $ref: "#/components/schemas/LobbyTeamsLockEvent"
+        - $ref: "#/components/schemas/LobbyTeamsShuffledEvent"
         - $ref: "#/components/schemas/LobbyPlayerInvitedEvent"
         - $ref: "#/components/schemas/LobbyPlayerPresenceEvent"
         - $ref: "#/components/schemas/LobbyPlayerSeatedEvent"
@@ -1556,6 +1564,127 @@ components:
         - lobby
         - data
       type: object
+    LobbyTeamsLockData:
+      additionalProperties: false
+      properties:
+        by_account_id:
+          description: The admin who asked in chat; null otherwise
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        trigger:
+          description: A PATCH, an admin's chat command, or a shuffle of a rostered lobby
+          enum:
+            - api
+            - chat
+            - shuffle
+          type: string
+      required:
+        - trigger
+        - by_account_id
+      type: object
+    LobbyTeamsLockEvent:
+      additionalProperties: false
+      description: The roster's sides stopped or started being enforced.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyTeamsLockData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.teams_unlocked
+            - lobby.teams_locked
+          examples:
+            - lobby.teams_unlocked
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
+    LobbyTeamsShuffledData:
+      additionalProperties: false
+      properties:
+        by_account_id:
+          description: The admin who asked in chat; null otherwise
+          format: int32
+          minimum: 0
+          type:
+            - integer
+            - "null"
+        times:
+          description: How many balanced shuffles were sent
+          format: int64
+          type: integer
+        trigger:
+          description: What asked for the shuffle
+          enum:
+            - api
+            - chat
+          type: string
+      required:
+        - times
+        - trigger
+        - by_account_id
+      type: object
+    LobbyTeamsShuffledEvent:
+      additionalProperties: false
+      description: The bot ran balanced shuffles.
+      properties:
+        data:
+          $ref: "#/components/schemas/LobbyTeamsShuffledData"
+        id:
+          description: Unique per event; the same on every delivery attempt
+          examples:
+            - evt_01JC9ZB2J4K6M8N0P2Q4R6S8T0
+          type: string
+        lobby:
+          $ref: "#/components/schemas/LobbySummary"
+          description: The lobby right after the change
+        occurred_at:
+          description: When the change happened (UTC)
+          format: date-time
+          type: string
+        seq:
+          description: "The event's number within its lobby: starts at 1, grows by one, no gaps"
+          format: int64
+          type: integer
+        type:
+          description: The event type; it decides the shape of data
+          enum:
+            - lobby.teams_shuffled
+          examples:
+            - lobby.teams_shuffled
+          type: string
+      required:
+        - id
+        - type
+        - seq
+        - occurred_at
+        - lobby
+        - data
+      type: object
     LobbyUnreadyData:
       additionalProperties: false
       properties:
@@ -1775,6 +1904,9 @@ components:
             - "null"
         teams:
           $ref: "#/components/schemas/TeamsView"
+        teams_unlocked:
+          description: The roster's sides are not enforced
+          type: boolean
         tv_delay_seconds:
           format: int32
           minimum: 0
@@ -1807,6 +1939,7 @@ components:
         - ready_check
         - allow_short_handed
         - kick_strangers
+        - teams_unlocked
         - admins
         - host_seat
         - teams
@@ -1944,6 +2077,9 @@ components:
             - "null"
         teams:
           $ref: "#/components/schemas/TeamsView"
+        teams_unlocked:
+          description: The roster's sides are not enforced
+          type: boolean
         tv_delay_seconds:
           format: int32
           minimum: 0
@@ -1977,6 +2113,7 @@ components:
         - ready_check
         - allow_short_handed
         - kick_strangers
+        - teams_unlocked
         - admins
         - host_seat
         - teams
@@ -2102,11 +2239,15 @@ components:
           type:
             - string
             - "null"
+        teams_unlocked:
+          description: "The teams were unlocked: the sides may not match the team references"
+          type: boolean
       required:
         - match_id
         - host_seat_strategy
         - radiant_team_ref
         - dire_team_ref
+        - teams_unlocked
       type: object
     MatchStartedEvent:
       additionalProperties: false
@@ -2391,6 +2532,16 @@ components:
           $ref: "#/components/schemas/TeamsReq"
       required:
         - teams
+      type: object
+    ShuffleRequest:
+      additionalProperties: false
+      properties:
+        times:
+          description: How many balanced shuffles to run in a row; default 1
+          format: int64
+          maximum: 5
+          minimum: 1
+          type: integer
       type: object
     SimChatResult:
       additionalProperties: false
@@ -2827,6 +2978,9 @@ components:
             - maximum: 4294967295
               minimum: 0
               type: integer
+        teams_unlocked:
+          description: "false locks the teams again: the bot moves rostered players back to their side"
+          type: boolean
         tv_delay_seconds:
           format: int32
           minimum: 0
@@ -4243,7 +4397,7 @@ paths:
         - Lobbies
   /v1/lobbies/{id}/teams/shuffle:
     post:
-      description: Only when both rosters are empty.
+      description: In waiting and ready. A lobby with a roster has its teams unlocked first (teams_unlocked), so the bot stops moving players back to their rostered side. The body is optional.
       operationId: shuffle-lobby-teams
       parameters:
         - description: The lobby ID
@@ -4255,6 +4409,11 @@ paths:
             examples:
               - lob_01JC9Z7Q8W5X2M3N4P5R6S7T8V
             type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShuffleRequest"
       responses:
         "202":
           content:
@@ -4262,6 +4421,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/LobbyView"
           description: Accepted
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
         "401":
           content:
             application/problem+json:
@@ -4280,6 +4445,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
           description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unsupported Media Type
         "422":
           content:
             application/problem+json:
@@ -4307,7 +4484,7 @@ paths:
       security:
         - apiKey: []
         - bearer: []
-      summary: Balanced shuffle of an open lobby
+      summary: Balanced shuffle
       tags:
         - Lobbies
   /v1/sim/lobbies:

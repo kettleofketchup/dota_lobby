@@ -194,6 +194,7 @@ type Patch struct {
 	ReadyCheck       *bool
 	AllowShortHanded *bool
 	KickStrangers    *bool
+	TeamsUnlocked    *bool
 	Admins           *[]uint32
 	Metadata         *map[string]string
 }
@@ -219,7 +220,7 @@ func (p Patch) apply(s Spec) Spec {
 	for _, b := range []struct {
 		dst *bool
 		v   *bool
-	}{{&s.AllowCheats, p.AllowCheats}, {&s.ReadyCheck, p.ReadyCheck}, {&s.AllowShortHanded, p.AllowShortHanded}, {&s.KickStrangers, p.KickStrangers}} {
+	}{{&s.AllowCheats, p.AllowCheats}, {&s.ReadyCheck, p.ReadyCheck}, {&s.AllowShortHanded, p.AllowShortHanded}, {&s.KickStrangers, p.KickStrangers}, {&s.TeamsUnlocked, p.TeamsUnlocked}} {
 		if b.v != nil {
 			*b.dst = *b.v
 		}
@@ -242,9 +243,9 @@ func (p Patch) apply(s Spec) Spec {
 // without per-player progress.
 func (s Spec) requestKey() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%q|%d|%d|%q|%q|%d|%t|%q|%q|%t|%t|%t|%v|", s.Name, s.LeagueID, s.LeagueNodeID,
+	fmt.Fprintf(&b, "%q|%d|%d|%q|%q|%d|%t|%q|%q|%t|%t|%t|%t|%v|", s.Name, s.LeagueID, s.LeagueNodeID,
 		s.GameMode, s.Region, s.TVDelaySeconds, s.AllowCheats, s.Visibility, s.Launch, s.ReadyCheck,
-		s.AllowShortHanded, s.KickStrangers, s.Admins)
+		s.AllowShortHanded, s.KickStrangers, s.TeamsUnlocked, s.Admins)
 	keys := make([]string, 0, len(s.Metadata))
 	for k := range s.Metadata {
 		keys = append(keys, k)

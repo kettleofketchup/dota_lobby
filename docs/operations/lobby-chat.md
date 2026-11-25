@@ -2,7 +2,8 @@
 
 With `lobby.chat.enabled: true`, the bot that hosts a lobby joins the lobby's chat and answers
 commands typed there. Players can see who is missing, say they are ready and start the match
-themselves; admins can also start a lobby that is not ready and stop a start.
+themselves; admins can also start a lobby that is not ready, stop a start, shuffle the teams
+and unlock them.
 
 Chat is on by default; `lobby.chat.enabled: false` turns it off. Lobbies work the same without it, except that the ready check is skipped
 (see [The ready check](#the-ready-check)).
@@ -43,7 +44,8 @@ the oldest are dropped.
 
 ## Commands
 
-Commands are case-insensitive, and anything after the command is ignored. Only members of the
+Commands are case-insensitive. Only `!shuffle` reads what follows the command; for the others
+it is ignored. Only members of the
 lobby can use them. Who sent a command is decided by the account ID the game coordinator puts on
 the message, never by the name shown in the chat, which anyone can change.
 
@@ -55,6 +57,9 @@ the message, never by the name shown in the chat, which anyone can change.
 | `!unready` | A rostered player | Takes their ready mark back. Only with the ready check |
 | `!start` | A rostered player while the lobby is `ready`; an admin while it is `waiting` or `ready` | Announces the start, waits `lobby.chat.start_countdown` (10 s), then launches |
 | `!cancel` | An admin, during the countdown | Stops the start |
+| `!shuffle [N]` | An admin while the lobby is `waiting` or `ready` | Unlocks the teams of a rostered lobby, then runs N balanced shuffles (1-5, default 1) |
+| `!unlock` | An admin, in a lobby with a roster | Unlocks the teams: the bot stops moving players back to their rostered side |
+| `!lock` | An admin, in a lobby with unlocked teams | Locks the teams again: the bot moves rostered players back to their side |
 
 A start by an admin is a forced launch: it does not wait for the roster or the ready check. No
 chat start, not even an admin's, launches once `lobby.max_launch_attempts` launches have been
@@ -66,6 +71,28 @@ stops being ready before the countdown ends.
 To keep the chat readable, the bot answers `!help` once per player every 30 s, `!teams` every
 10 s, and a refused command once every 10 s. `!ready` and `!unready` share a 3 s cooldown: a
 player can change their mark once every 3 s, and commands inside that window get no answer.
+
+## Shuffling and unlocked teams
+
+A lobby with a roster has locked teams: the bot moves rostered players on the wrong side, and
+strangers on a side, back to the pool. A shuffle would be undone at once, so `!shuffle` unlocks
+the teams first, like `!unlock`, the API's `teams_unlocked` and
+[`POST /v1/lobbies/{id}/teams/shuffle`](../api/index.md#post-v1lobbiesidteamsshuffle).
+
+With unlocked teams the roster is kept (team names and references, invites, ready marks), but:
+
+- A rostered player may sit on either side, and strangers may take a slot. `kick_strangers`
+  still removes strangers from the lobby.
+- The lobby is `ready` once every rostered player sits on a side (absent ones are fine with
+  `allow_short_handed`), each side has someone on it, and, with the ready check, every seated
+  rostered player typed `!ready`. A ready mark is lost only by leaving the lobby or the teams.
+- `!teams` lists who sits on each side and the rostered players who are not seated.
+- `match.started` carries `teams_unlocked: true`, and its `radiant_team_ref` and `dire_team_ref`
+  are the roster's: the players on a side may not be that team's.
+
+`!shuffle` and the team commands are refused during a start countdown (`!cancel` it first) and
+while a flip has not shown yet. Every change is a `lobby.teams_unlocked`, `lobby.teams_locked` or
+`lobby.teams_shuffled` event with the admin's account ID.
 
 ## The ready check
 

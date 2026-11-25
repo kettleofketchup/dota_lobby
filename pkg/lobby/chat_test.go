@@ -37,10 +37,70 @@ func TestParseCommand(t *testing.T) {
 		{"", "!ready", "", false},
 	}
 	for _, tt := range tests {
-		cmd, ok := parseCommand(tt.prefix, tt.text)
+		cmd, _, ok := parseCommand(tt.prefix, tt.text)
 		if cmd != tt.cmd || ok != tt.ok {
 			t.Errorf("parseCommand(%q, %q) = %q, %v; want %q, %v", tt.prefix, tt.text, cmd, ok, tt.cmd, tt.ok)
 		}
+	}
+}
+
+func TestParseCommandArgs(t *testing.T) {
+	cmd, args, ok := parseCommand("!", "  !Shuffle 3  extra")
+	if cmd != "shuffle" || !slices.Equal(args, []string{"3", "extra"}) || !ok {
+		t.Errorf("parseCommand = %q %q %v", cmd, args, ok)
+	}
+}
+
+func TestStaffCommands(t *testing.T) {
+	unlocked := func(l Lobby) Lobby { l.Spec.TeamsUnlocked = true; return l }
+	open := func(l Lobby) Lobby { l.Spec.Teams = Roster{}; return l }
+	tests := []struct {
+		name      string
+		cmd       string
+		args      []string
+		lobby     Lobby
+		account   uint32
+		countdown bool
+		effect    chatEffect
+		times     int
+		reply     string
+	}{
+		{"shuffle once", cmdShuffle, nil, rostered(StateWaiting, t0), 50, false, effShuffle, 1, ""},
+		{"shuffle three times", cmdShuffle, []string{"3"}, rostered(StateReady, t0), 50, false, effShuffle, 3, ""},
+		{"shuffle an open lobby", cmdShuffle, nil, open(rostered(StateWaiting, t0)), 50, false, effShuffle, 1, ""},
+		{"shuffle zero", cmdShuffle, []string{"0"}, rostered(StateWaiting, t0), 50, false, effNone, 0, "Usage: !shuffle [1-5]."},
+		{"shuffle too many", cmdShuffle, []string{"9"}, rostered(StateWaiting, t0), 50, false, effNone, 0, "Usage: !shuffle [1-5]."},
+		{"shuffle not a number", cmdShuffle, []string{"abc"}, rostered(StateWaiting, t0), 50, false, effNone, 0, "Usage"},
+		{"shuffle by a player", cmdShuffle, nil, rostered(StateWaiting, t0), 1, false, effNone, 0, "Only an admin can !shuffle."},
+		{"shuffle during a countdown", cmdShuffle, nil, rostered(StateReady, t0), 50, true, effNone, 0, "!cancel it first"},
+		{"shuffle in game", cmdShuffle, nil, rostered(StateInGame, t0), 50, false, effNone, 0, "Too late"},
+		{"unlock", cmdUnlock, nil, rostered(StateWaiting, t0), 50, false, effUnlock, 0, "Teams unlocked"},
+		{"unlock again", cmdUnlock, nil, unlocked(rostered(StateWaiting, t0)), 50, false, effNone, 0, "already unlocked"},
+		{"unlock an open lobby", cmdUnlock, nil, open(rostered(StateWaiting, t0)), 50, false, effNone, 0, "no roster"},
+		{"unlock by a player", cmdUnlock, nil, rostered(StateWaiting, t0), 3, false, effNone, 0, "Only an admin"},
+		{"lock", cmdLock, nil, unlocked(rostered(StateWaiting, t0)), 50, false, effLock, 0, "Teams locked"},
+		{"lock when locked", cmdLock, nil, rostered(StateWaiting, t0), 50, false, effNone, 0, "already locked"},
+		{"lock an open lobby", cmdLock, nil, open(rostered(StateWaiting, t0)), 50, false, effNone, 0, "no roster"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := runCommand(tt.cmd, chatInput{
+				Lobby: tt.lobby, View: seatedView(gc.LobbyUI), Host: hostID, Account: tt.account, Args: tt.args,
+				Admin: isAdmin(tt.lobby, cfgChat, tt.account), Countdown: tt.countdown, Cfg: cfgChat,
+			})
+			if out.Effect != tt.effect || out.Times != tt.times {
+				t.Errorf("outcome %+v, want effect %d times %d", out, tt.effect, tt.times)
+			}
+			if !strings.Contains(out.Reply, tt.reply) {
+				t.Errorf("reply %q, want it to contain %q", out.Reply, tt.reply)
+			}
+		})
+	}
+	if got := shuffleReply(3, true); got != "Shuffled the teams 3 times. Teams are unlocked." {
+		t.Errorf("shuffleReply = %q", got)
+	}
+	if got := shuffleReply(1, false); got != "Shuffled the teams." {
+		t.Errorf("shuffleReply open = %q", got)
 	}
 }
 
@@ -72,7 +132,7 @@ func TestRunCommand(t *testing.T) {
 	}{
 		{"help", cmdHelp, rostered(StateWaiting, t0), seatedView(gc.LobbyUI), 99, false, false, effNone, false, "Commands: !teams, !start.", helpCooldown},
 		{"help with ready check", cmdHelp, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 1, false, false, effNone, false, "!teams, !ready, !unready, !start.", helpCooldown},
-		{"help for an admin", cmdHelp, rostered(StateWaiting, t0), seatedView(gc.LobbyUI), 50, false, false, effNone, false, "!start, !cancel.", helpCooldown},
+		{"help for an admin", cmdHelp, rostered(StateWaiting, t0), seatedView(gc.LobbyUI), 50, false, false, effNone, false, "!start, !cancel, !shuffle, !unlock, !lock.", helpCooldown},
 		{"teams", cmdTeams, rostered(StateWaiting, t0), oneOff, 3, false, false, effNone, false, "Radiant: 1/2 seated, missing 2. Dire: 1/1 seated.", teamsCooldown},
 
 		{"ready", cmdReady, readyCheck(rostered(StateWaiting, t0)), seatedView(gc.LobbyUI), 1, false, false, effReady, false, "1 is ready (1/3 ready).", readyCooldown},
@@ -147,6 +207,12 @@ func TestTeamsText(t *testing.T) {
 	want := "Radiant Ravens: 1/2 seated, 1 ready, on the wrong side Bob. Dire Owls: 0/1 seated, 0 ready, missing 3."
 	if got != want {
 		t.Errorf("teams\n got %q\nwant %q", got, want)
+	}
+	l.Spec.TeamsUnlocked = true
+	got = teamsText(chatInput{Lobby: l, View: v, Host: hostID, Names: map[uint32]string{2: "Bob"}, Cfg: cfgChat})
+	want = "Teams unlocked. Radiant 1 (1 ready): 1. Dire 1 (0 ready): Bob. missing 3."
+	if got != want {
+		t.Errorf("unlocked teams\n got %q\nwant %q", got, want)
 	}
 	open := rostered(StateWaiting, t0)
 	open.Spec.Teams = Roster{}

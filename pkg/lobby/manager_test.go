@@ -994,9 +994,6 @@ func TestCloseAndKickAndFlip(t *testing.T) {
 	if err != nil || flipped.Spec.Teams.Radiant.TeamRef != "team-9" || flipped.Spec.Teams.Dire.Players[0].AccountID != 11 {
 		t.Fatalf("flip = %+v, %v", flipped.Spec.Teams, err)
 	}
-	if _, err := h.m.Shuffle(context.Background(), l.ID); !errors.Is(err, ErrInvalidState) {
-		t.Errorf("shuffle with a roster = %v", err)
-	}
 	closed, changed, err := h.m.Close(context.Background(), l.ID)
 	if err != nil || !changed || closed.State != StateClosing {
 		t.Fatalf("Close = %s %v %v", closed.State, changed, err)
@@ -1368,4 +1365,51 @@ func TestRosterTeam(t *testing.T) {
 			t.Errorf("RosterTeam(%d, %d) = %v %v, want %v %v", tt.lobbyID, tt.account, team, ok, tt.team, tt.ok)
 		}
 	}
+}
+
+// A shuffle of a rostered lobby unlocks its teams first, so the bot stops
+// moving players back; locking them again restarts the moves.
+func TestShuffleUnlocksTeams(t *testing.T) {
+	gap := shuffleGap
+	shuffleGap = 0
+	t.Cleanup(func() { shuffleGap = gap })
+	h := newHarness(t, 1, nil)
+	l, b := h.toWaiting(spec("game-shuffle"))
+	ctx := context.Background()
+
+	if _, err := h.m.Shuffle(ctx, l.ID, ShuffleRequest{Times: MaxShuffles + 1, Trigger: TriggerAPI}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("too many shuffles = %v", err)
+	}
+	if n := b.fc.CallCount("BalancedShuffle"); n != 0 {
+		t.Fatalf("a refused shuffle sent %d", n)
+	}
+	out, err := h.m.Shuffle(ctx, l.ID, ShuffleRequest{Times: 3, Trigger: TriggerAPI})
+	if err != nil || !out.Spec.TeamsUnlocked {
+		t.Fatalf("Shuffle = unlocked %v, %v", out.Spec.TeamsUnlocked, err)
+	}
+	if n := b.fc.CallCount("BalancedShuffle"); n != 3 {
+		t.Errorf("BalancedShuffle sent %d times, want 3", n)
+	}
+	if d := h.eventData(l.ID, "lobby.teams_unlocked"); len(d) != 1 || d[0]["trigger"] != LockTriggerShuffle {
+		t.Errorf("teams_unlocked events %v", d)
+	}
+	if d := h.eventData(l.ID, "lobby.teams_shuffled"); len(d) != 1 || d[0]["times"] != 3 || d[0]["trigger"] != TriggerAPI {
+		t.Errorf("teams_shuffled events %v", d)
+	}
+
+	// Rostered Radiant player 11 on Dire is left alone while unlocked.
+	b.join(11, gc.TeamDire)
+	time.Sleep(100 * time.Millisecond)
+	if n := b.fc.CallCount("KickFromTeam"); n != 0 {
+		t.Fatalf("unlocked teams still moved %d players", n)
+	}
+
+	locked := false
+	if _, err := h.m.Update(ctx, l.ID, Patch{TeamsUnlocked: &locked}); err != nil {
+		t.Fatal(err)
+	}
+	if d := h.eventData(l.ID, "lobby.teams_locked"); len(d) != 1 || d[0]["trigger"] != LockTriggerAPI {
+		t.Errorf("teams_locked events %v", d)
+	}
+	h.waitCalls(b, "KickFromTeam", 1)
 }

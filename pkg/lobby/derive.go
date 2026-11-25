@@ -205,7 +205,7 @@ func deriveSeating(r *result, v *gc.LobbyView, in inputs) {
 		return
 	}
 	if !in.Flipping {
-		resetReady(r, v, in.Host)
+		resetReady(r, v, in.Host, l.Spec.TeamsUnlocked)
 	}
 	ready, missing := readiness(*l, v, in.Host, readyCheckOn(*l, in.Cfg))
 	switch {
@@ -288,6 +288,7 @@ func startMatch(r *result, v *gc.LobbyView, now time.Time) {
 		"host_seat_strategy": l.HostSeat.Strategy,
 		"radiant_team_ref":   nullable(l.Match.RadiantTeamRef),
 		"dire_team_ref":      nullable(l.Match.DireTeamRef),
+		"teams_unlocked":     l.Spec.TeamsUnlocked,
 	})
 }
 
@@ -388,9 +389,9 @@ func readyCheckOn(l Lobby, cfg config.LobbyConfig) bool {
 }
 
 // resetReady clears the ready flag of rostered players who left or are
-// no longer on their side. A member whose team the snapshot omits keeps
-// the flag: that is not a move.
-func resetReady(r *result, v *gc.LobbyView, host uint64) {
+// no longer on their side, or with unlocked teams on any side. A member
+// whose team the snapshot omits keeps the flag: that is not a move.
+func resetReady(r *result, v *gc.LobbyView, host uint64, unlocked bool) {
 	byAccount := map[uint32]gc.Member{}
 	for _, m := range v.Members {
 		byAccount[gc.AccountID(m.SteamID)] = m
@@ -406,7 +407,7 @@ func resetReady(r *result, v *gc.LobbyView, host uint64) {
 			reason = "left"
 		case !m.TeamKnown:
 			continue
-		case !player(m, host) || m.Team != e.Side.team():
+		case !player(m, host) || (unlocked && !onTeam(m)) || (!unlocked && m.Team != e.Side.team()):
 			reason = "moved"
 		default:
 			continue
@@ -420,10 +421,15 @@ func resetReady(r *result, v *gc.LobbyView, host uint64) {
 // missing: account IDs of rostered players not seated on their side,
 // "unready:<id>" for seated players who have not said they are ready
 // (with readyCheck), "stranger:<id>" for others on a side, or
-// "radiant"/"dire" for an open lobby's empty side.
+// "radiant"/"dire" for an open lobby's empty side. With unlocked teams a
+// rostered player may sit on either side, strangers on a side do not
+// block, and each side needs someone on it.
 func readiness(l Lobby, v *gc.LobbyView, host uint64, readyCheck bool) (bool, []string) {
 	missing := []string{}
 	roster := l.Spec.Teams
+	if !roster.Empty() && l.Spec.TeamsUnlocked {
+		return unlockedReadiness(l, v, host, readyCheck)
+	}
 	if roster.Empty() {
 		counts := map[gc.Team]int{}
 		for _, m := range v.Members {
@@ -471,6 +477,41 @@ func readiness(l Lobby, v *gc.LobbyView, host uint64, readyCheck bool) (bool, []
 			if seated[s] == 0 && len(roster.Team(s).Players) > 0 {
 				missing = append(missing, string(s))
 			}
+		}
+	}
+	return len(missing) == 0, missing
+}
+
+// onTeam reports whether a member sits on Radiant or Dire.
+func onTeam(m gc.Member) bool { return m.Team == gc.TeamRadiant || m.Team == gc.TeamDire }
+
+// unlockedReadiness is readiness for a rostered lobby with unlocked teams.
+func unlockedReadiness(l Lobby, v *gc.LobbyView, host uint64, readyCheck bool) (bool, []string) {
+	missing := []string{}
+	byAccount := map[uint32]gc.Member{}
+	counts := map[gc.Team]int{}
+	for _, m := range v.Members {
+		byAccount[gc.AccountID(m.SteamID)] = m
+		if player(m, host) && onTeam(m) {
+			counts[m.Team]++
+		}
+	}
+	for _, e := range l.Spec.Teams.All() {
+		m, ok := byAccount[e.AccountID]
+		switch {
+		case ok && player(m, host) && onTeam(m):
+			if readyCheck && !e.Ready {
+				missing = append(missing, "unready:"+strconv.FormatUint(uint64(e.AccountID), 10))
+			}
+		case !ok && l.Spec.AllowShortHanded:
+			// Absent players do not block a short-handed lobby.
+		default:
+			missing = append(missing, strconv.FormatUint(uint64(e.AccountID), 10))
+		}
+	}
+	for _, s := range []Side{Radiant, Dire} {
+		if counts[s.team()] == 0 {
+			missing = append(missing, string(s))
 		}
 	}
 	return len(missing) == 0, missing
@@ -533,7 +574,8 @@ type enforceState struct {
 // kicked out of the lobby; the caster and spectator slots are left alone.
 // The host, members without a known team and coaches are never touched, and
 // each member gets at most one action per lobby.enforce_cooldown and
-// maxEnforcements in all.
+// maxEnforcements in all. With unlocked teams nobody is moved for their
+// side; kick_strangers still removes strangers from the lobby.
 func planEnforcement(l Lobby, v *gc.LobbyView, host uint64, now time.Time, history map[uint32]enforceState, cfg config.LobbyConfig) []action {
 	roster := l.Spec.Teams
 	if v == nil || v.State != gc.LobbyUI {
@@ -548,7 +590,7 @@ func planEnforcement(l Lobby, v *gc.LobbyView, host uint64, now time.Time, histo
 		onSide := m.Team == gc.TeamRadiant || m.Team == gc.TeamDire
 		var a action
 		if side, ok := roster.Side(account); ok {
-			if !onSide || m.Team == side.team() {
+			if !onSide || m.Team == side.team() || l.Spec.TeamsUnlocked {
 				continue
 			}
 			a = action{Kind: actKickFromTeam, Account: account, Reason: "wrong_side"}
@@ -558,7 +600,7 @@ func planEnforcement(l Lobby, v *gc.LobbyView, host uint64, now time.Time, histo
 				continue
 			case l.Spec.KickStrangers && (onSide || m.Team == gc.TeamPlayerPool):
 				a = action{Kind: actKick, Account: account, Reason: "stranger"}
-			case onSide:
+			case onSide && !l.Spec.TeamsUnlocked:
 				a = action{Kind: actKickFromTeam, Account: account, Reason: "stranger"}
 			default:
 				continue

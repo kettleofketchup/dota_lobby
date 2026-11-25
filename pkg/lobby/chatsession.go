@@ -268,7 +268,7 @@ func seconds(d time.Duration) int { return int(d.Round(time.Second) / time.Secon
 // onChat handles one chat message or member notice. Only current members
 // of the lobby can run commands, identified by the account ID the GC put on
 // the message; the bot's own messages and notices are ignored.
-func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMessage) {
+func (m *Manager) onChat(ctx context.Context, e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMessage) {
 	if cs == nil {
 		return
 	}
@@ -294,7 +294,7 @@ func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMes
 		return
 	}
 	cfg := m.opts.Lobby
-	cmd, ok := parseCommand(cfg.Chat.Prefix, msg.Text)
+	cmd, args, ok := parseCommand(cfg.Chat.Prefix, msg.Text)
 	if !ok {
 		return
 	}
@@ -314,7 +314,7 @@ func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMes
 		return
 	}
 	out := runCommand(cmd, chatInput{
-		Lobby: l, View: view, Host: st.SteamID, Account: msg.AccountID,
+		Lobby: l, View: view, Host: st.SteamID, Account: msg.AccountID, Args: args,
 		Admin: isAdmin(l, cfg, msg.AccountID), Countdown: cs.countdown != nil, Names: cs.names, Cfg: cfg,
 	})
 	if out.Reply == "" && out.Effect == effNone {
@@ -337,6 +337,20 @@ func (m *Manager) onChat(e *entry, cs *chatSession, h bot.Handle, msg gc.ChatMes
 		}
 	case effCancel:
 		cs.stopCountdown()
+	case effShuffle:
+		actx, cancel := m.actionCtx(ctx)
+		defer cancel()
+		if _, err := m.shuffleHeld(actx, e, ShuffleRequest{Times: out.Times, Trigger: TriggerChat, By: msg.AccountID}); err != nil {
+			m.log.Warn("chat shuffle failed", "lobby", l.ID, "account_id", msg.AccountID, "err", err)
+			e.say("Shuffle failed: " + shuffleFailure(err) + ".")
+			return
+		}
+		out.Reply = shuffleReply(out.Times, !l.Spec.Teams.Empty())
+	case effUnlock, effLock:
+		if _, _, err := m.setUnlocked(e, out.Effect == effUnlock, LockTriggerChat, msg.AccountID); err != nil {
+			m.log.Warn("teams lock not saved", "lobby", l.ID, "account_id", msg.AccountID, "err", err)
+			return
+		}
 	}
 	e.say(out.Reply)
 }
@@ -395,6 +409,17 @@ func startFailure(err error) string {
 		return "the bot cannot see the lobby right now"
 	case errors.Is(err, ErrInvalidState):
 		return "the lobby cannot start now"
+	}
+	return "an internal error"
+}
+
+// shuffleFailure words a failed shuffle for the lobby chat.
+func shuffleFailure(err error) string {
+	switch {
+	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrGCTimeout):
+		return "the bot cannot reach the game coordinator right now"
+	case errors.Is(err, ErrInvalidState):
+		return "the teams cannot change right now"
 	}
 	return "an internal error"
 }
