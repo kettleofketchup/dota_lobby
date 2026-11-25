@@ -1329,8 +1329,7 @@ func (m *Manager) applyFlip(e *entry) (Lobby, error) {
 	return out, nil
 }
 
-// Lock and shuffle triggers, as reported in lobby.teams_unlocked,
-// lobby.teams_locked and lobby.teams_shuffled.
+// Triggers reported in lobby.teams_unlocked and lobby.teams_locked.
 const (
 	LockTriggerAPI     = "api"
 	LockTriggerChat    = "chat"
